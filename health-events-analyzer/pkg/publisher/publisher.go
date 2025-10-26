@@ -23,6 +23,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -95,21 +96,14 @@ func NewPublisher(platformConnectorClient pb.PlatformConnectorClient) *Publisher
 
 func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
 	recommendedAction pb.RecommenedAction, ruleName string) error {
-	newEvent := &pb.HealthEvent{
-		Version:            event.Version,
-		Agent:              "health-events-analyzer",
-		CheckName:          ruleName, // change the check name to HealthEventsAnalyzer
-		ComponentClass:     event.ComponentClass,
-		Message:            event.Message,
-		RecommendedAction:  recommendedAction, // set the rule's recommended action
-		ErrorCode:          event.ErrorCode,
-		IsHealthy:          false, // mark event as unhealthy
-		IsFatal:            true,  // mark event as fatal
-		EntitiesImpacted:   event.EntitiesImpacted,
-		Metadata:           event.Metadata,
-		GeneratedTimestamp: event.GeneratedTimestamp,
-		NodeName:           event.NodeName,
-	}
+	newEvent := proto.Clone(event).(*pb.HealthEvent)
+
+	// Override fields with new values
+	newEvent.Agent = "health-events-analyzer"
+	newEvent.CheckName = ruleName                  // change the check name to HealthEventsAnalyzer
+	newEvent.RecommendedAction = recommendedAction // set the rule's recommended action
+	newEvent.IsHealthy = false                     // mark event as unhealthy
+	newEvent.IsFatal = true                        // mark event as fatal
 
 	req := &pb.HealthEvents{
 		Version: 1,

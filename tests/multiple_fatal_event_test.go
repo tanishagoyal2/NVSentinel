@@ -22,19 +22,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
 func TestMultipleFatalEventRule(t *testing.T) {
 	type contextKey int
-	var GpuNodeName string
 
 	const (
-		keyGpuNodes  contextKey = iota
-		ERRORCODE_13            = "13"
-		ERRORCODE_48            = "48"
+		keyGpuNodes contextKey = iota
+		keyGpuNodeName
+		ERRORCODE_13 = "13"
+		ERRORCODE_48 = "48"
 	)
 
 	feature := features.New("TestMultipleFatalEventRule").
@@ -55,53 +54,54 @@ func TestMultipleFatalEventRule(t *testing.T) {
 	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		gpuNodes := ctx.Value(keyGpuNodes).([]string)
 		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-		GpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))]
-		t.Logf("Injecting fatal events to node %s", GpuNodeName)
+		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
+		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
+		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
 		// inject 5 fatal errors and let the remediation cycle finish
 
 		// inject XID 13 error
-		err := helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 		time.Sleep(5 * time.Second)
 
 		// inject XID 48 error
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_48, "data/fatal-health-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_48, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_48, "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_48, "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 		time.Sleep(5 * time.Second)
 
 		// inject XID 13 error
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 		time.Sleep(5 * time.Second)
 
 		// inject XID 48 error
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_48, "data/fatal-health-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_48, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_48, "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_48, "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 		time.Sleep(5 * time.Second)
 
 		// inject XID 13 error
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 		time.Sleep(5 * time.Second)
 
@@ -109,17 +109,23 @@ func TestMultipleFatalEventRule(t *testing.T) {
 	})
 
 	feature.Assess("Check if health event analyzer published a new fatal event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		// Get GPU node name from context
+		gpuNodeName, ok := ctx.Value(keyGpuNodeName).(string)
+		if !ok || gpuNodeName == "" {
+			t.Fatal("GPU node name not found in context - previous assess step may have failed")
+		}
+
 		// Ensure cleanup at the end of the test
 		defer func() {
-			t.Logf("Starting cleanup for node %s", GpuNodeName)
+			t.Logf("Starting cleanup for node %s", gpuNodeName)
 
-			err := helpers.TestCleanUp(ctx, GpuNodeName, "MultipleFatalError", "31", c)
-			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", GpuNodeName)
-			t.Logf("Successfully cleaned up node condition and uncordoned node %s", GpuNodeName)
+			err := helpers.TestCleanUp(ctx, gpuNodeName, "MultipleFatalError", "31", c)
+			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
+			t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 		}()
 
-		// inject XID 48 error to trigger the rule
-		err := helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "31", "data/fatal-health-event.json")
+		// inject XID 31 error to trigger the rule
+		err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "31", "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
@@ -127,10 +133,10 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		assert.NoError(t, err, "failed to create client")
 
 		// Check node condition for matched ruleset
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, GpuNodeName, "MultipleFatalError")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleFatalError")
 		// Check MongoDB for health event with checkName = "MultipleFatalError"
 		filter := bson.M{
-			"healthevent.nodename":  GpuNodeName,
+			"healthevent.nodename":  gpuNodeName,
 			"healthevent.checkname": "MultipleFatalError",
 		}
 
@@ -142,7 +148,7 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		if healthEvent, ok := event["healthevent"].(map[string]interface{}); ok {
 			nodeName, ok := healthEvent["nodename"].(string)
 			assert.True(t, ok, "nodename should be a string")
-			assert.Equal(t, GpuNodeName, nodeName, "nodeName should be the same as the node name")
+			assert.Equal(t, gpuNodeName, nodeName, "nodeName should be the same as the node name")
 
 			checkName, ok := healthEvent["checkname"].(string)
 			assert.True(t, ok, "checkname should be a string")

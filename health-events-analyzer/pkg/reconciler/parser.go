@@ -136,7 +136,7 @@ func getValueFromErrorCode(event *platform_connectors.HealthEvent, parts []strin
 	}
 
 	idx, err := strconv.Atoi(parts[0])
-	if err != nil || idx >= len(event.ErrorCode) {
+	if err != nil || idx >= len(event.ErrorCode) || idx < 0 {
 		return nil
 	}
 
@@ -162,7 +162,7 @@ func getValueFromEntitiesImpacted(event *platform_connectors.HealthEvent, parts 
 		return nil
 	}
 
-	if idx, err := strconv.Atoi(parts[0]); err == nil && idx < len(event.EntitiesImpacted) {
+	if idx, err := strconv.Atoi(parts[0]); err == nil && idx >= 0 && idx < len(event.EntitiesImpacted) {
 		entity := event.EntitiesImpacted[idx]
 		subField := strings.ToLower(parts[1])
 
@@ -193,6 +193,10 @@ func getValueFromGeneratedTimestamp(event *platform_connectors.HealthEvent, part
 }
 
 func getValueFromHealthEventStatus(event storeconnector.HealthEventStatus, parts []string) any {
+	if len(parts) == 0 {
+		return nil
+	}
+
 	rootField := strings.ToLower(parts[0])
 
 	if len(parts) == 1 {

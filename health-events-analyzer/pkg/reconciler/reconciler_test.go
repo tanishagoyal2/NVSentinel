@@ -96,7 +96,7 @@ var (
 			TimeWindow:  "2m",
 			Sequence: []config.SequenceStep{{
 				Criteria: map[string]interface{}{
-					"healthevent.entitiesimpacted.0.entitytype":  "GPU	",
+					"healthevent.entitiesimpacted.0.entitytype":  "GPU",
 					"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted[0].entityvalue",
 					"healthevent.errorcode.0":                    "13",
 					"healthevent.nodename":                       "this.healthevent.nodename",

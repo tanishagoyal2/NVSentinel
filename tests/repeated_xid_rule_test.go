@@ -22,7 +22,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
@@ -30,9 +29,9 @@ import (
 func TestRepeatedXIDRule(t *testing.T) {
 	type contextKey int
 
-	var GpuNodeName string
 	const (
 		keyGpuNodes contextKey = iota
+		keyGpuNodeName
 	)
 
 	feature := features.New("TestRepeatedXIDRule").
@@ -44,49 +43,42 @@ func TestRepeatedXIDRule(t *testing.T) {
 
 		gpuNodes, err := helpers.GetAllNodesNames(ctx, client)
 		assert.NoError(t, err, "failed to get nodes")
-
-		ctx = context.WithValue(ctx, keyGpuNodes, gpuNodes)
+		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
+		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
+		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
 
 		return ctx
 	})
 
 	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		gpuNodes := ctx.Value(keyGpuNodes).([]string)
-		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-		GpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))]
-		t.Logf("Injecting fatal events to node %s", GpuNodeName)
+		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
+		if gpuNodeName == "" {
+			t.Fatal("GPU node name not found in context - previous assess step may have failed")
+		}
+		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
-		err := helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/fatal-health-event.json")
-		assert.NoError(t, err, "failed to send fatal events")
-
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/fatal-health-event.json")
-		assert.NoError(t, err, "failed to send fatal events")
-
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/fatal-health-event.json")
-		assert.NoError(t, err, "failed to send fatal events")
-
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/fatal-health-event.json")
-		assert.NoError(t, err, "failed to send fatal events")
-
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/fatal-health-event.json")
-		assert.NoError(t, err, "failed to send fatal events")
-
-		// Store the node name in context for the next assessment
-		ctx = context.WithValue(ctx, GpuNodeName, GpuNodeName)
+		for i := 0; i < 5; i++ {
+			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "13", "data/fatal-health-event.json")
+			assert.NoError(t, err, "failed to send fatal events")
+		}
 
 		return ctx
 	})
 
 	feature.Assess("Check if health event analyzer published a new fatal event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		defer func() {
-			t.Logf("Starting cleanup for node %s", GpuNodeName)
+		gpuNodeName, ok := ctx.Value(keyGpuNodeName).(string)
+		if !ok || gpuNodeName == "" {
+			t.Fatal("GPU node name not found in context - previous assess step may have failed")
+		}
 
-			err := helpers.TestCleanUp(ctx, GpuNodeName, "RepeatedXid13", "13", c)
-			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", GpuNodeName)
-			t.Logf("Successfully cleaned up node condition and uncordoned node %s", GpuNodeName)
+		defer func() {
+			t.Logf("Starting cleanup for node %s", gpuNodeName)
+
+			err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXid13", "13", c)
+			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
+			t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 		}()
 
-		gpuNodeName := ctx.Value(GpuNodeName).(string)
 		t.Logf("Checking node conditions and MongoDB for node %s", gpuNodeName)
 
 		client, err := c.NewClient()
@@ -119,7 +111,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 			t.Fatal("failed to extract healthevent from MongoDB document")
 		}
 
-		err = helpers.SendHealthEventsToNodes([]string{GpuNodeName}, "13", "data/healthy-event.json")
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "13", "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send healthy events")
 
 		time.Sleep(5 * time.Second)

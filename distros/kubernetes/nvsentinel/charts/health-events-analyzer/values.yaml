@@ -51,7 +51,7 @@ config: |
   errorCount = 5
 
   [[rules]]
-  name = "RepeatedXid13"
+  name = "RepeatedXidError"
   description = "Detect occurrence of fatal XIDs 5 times within 24 hours"
   time_window = "24h"
   recommended_action = "REPORT_ISSUE"

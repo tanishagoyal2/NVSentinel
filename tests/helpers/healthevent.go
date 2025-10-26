@@ -198,12 +198,13 @@ func TestCleanUp(ctx context.Context, GpuNodeName string, nodeCondition string, 
 	client, err := c.NewClient()
 	if err != nil {
 		klog.Errorf("failed to create client during cleanup: %v", err)
-		return err
+		return fmt.Errorf("failed to create client during cleanup: %w", err)
 	}
 
 	err = CleanupNodeConditionAndUncordon(ctx, client, GpuNodeName, nodeCondition)
 	if err != nil {
 		klog.Errorf("failed to cleanup node condition and uncordon node %s: %v", GpuNodeName, err)
+		return fmt.Errorf("failed to cleanup node condition and uncordon node %s: %w", GpuNodeName, err)
 	}
 
 	klog.Infof("Successfully cleaned up node condition and uncordoned node %s", GpuNodeName)

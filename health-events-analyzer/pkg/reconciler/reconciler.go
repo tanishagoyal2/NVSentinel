@@ -32,11 +32,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const (
-	maxRetries int           = 5
-	delay      time.Duration = 10 * time.Second
-)
-
 type CollectionInterface interface {
 	Aggregate(ctx context.Context, pipeline interface{}, opts ...*options.AggregateOptions) (*mongo.Cursor, error)
 }
@@ -128,32 +123,20 @@ func (r *Reconciler) processEvent(ctx context.Context, event bson.M) error {
 
 	var publishedNewEvent bool
 
-	for i := 1; i <= maxRetries; i++ {
-		slog.Debug("Handling event", "attempt", i, "event", healthEventWithStatus)
-
-		publishedNewEvent, err = r.handleEvent(ctx, &healthEventWithStatus)
-		if err == nil {
-			totalEventsSuccessfullyProcessed.Inc()
-
-			if publishedNewEvent {
-				slog.Info("New event successfully published.")
-				newEventsPublishedTotal.WithLabelValues(healthEventWithStatus.HealthEvent.NodeName).Inc()
-			} else {
-				slog.Info("New event is not published, rule set criteria didn't match.")
-			}
-
-			break
-		}
-
+	publishedNewEvent, err = r.handleEvent(ctx, &healthEventWithStatus)
+	if err != nil {
 		slog.Error("Error in handling the event", "event", healthEventWithStatus, "error", err)
 
 		totalEventProcessingError.WithLabelValues("handle_event_error").Inc()
+	} else {
+		totalEventsSuccessfullyProcessed.Inc()
 
-		time.Sleep(delay)
-	}
-
-	if err != nil {
-		slog.Error("Max attempt reached, error in handling the event", "event", healthEventWithStatus, "error", err)
+		if publishedNewEvent {
+			slog.Info("New event successfully published.")
+			newEventsPublishedTotal.WithLabelValues(healthEventWithStatus.HealthEvent.NodeName).Inc()
+		} else {
+			slog.Info("New event is not published, rule set criteria didn't match.")
+		}
 	}
 
 	duration := time.Since(startTime).Seconds()
