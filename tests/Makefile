@@ -13,7 +13,7 @@ all: test
 test-ci:
 	nohup kubectl port-forward -n monitoring svc/prometheus-operator-kube-p-prometheus 9090:9090 > /dev/null 2>&1 &
 	nohup kubectl port-forward -n nvsentinel svc/simple-health-client 8080:8080 > /dev/null 2>&1 &
-	nohup kubectl port-forward -n nvsentinel pod/nvsentinel-mongodb-0 27017:27017 > /dev/null 2>&1 &
+	nohup kubectl port-forward -n nvsentinel svc/nvsentinel-mongodb-headless 27017:27017 > /dev/null 2>&1 &
 	@echo "Extracting MongoDB client certificates..."
 	@mkdir -p /tmp/mongo-certs
 	@kubectl get secret -n nvsentinel mongo-app-client-cert-secret -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/mongo-certs/tls.crt
@@ -25,6 +25,8 @@ test-ci:
 	kubectl get no -o wide
 	kubectl rollout restart deploy -l app.kubernetes.io/name=fault-quarantine -n nvsentinel
 	$(MAKE) test
+	@echo "Cleaning up certificates..."
+	@rm -rf /tmp/mongo-certs
 
 # Run end-to-end tests
 .PHONY: test

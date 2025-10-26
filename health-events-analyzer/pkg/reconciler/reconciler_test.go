@@ -276,7 +276,7 @@ func TestHandleEvent(t *testing.T) {
 		mockPublisher.AssertExpectations(t)
 	})
 
-	t.Run("recieved event with different XID", func(t *testing.T) {
+	t.Run("received event with different XID", func(t *testing.T) {
 		mockClient := new(mockCollectionClient)
 		mockPublisher := &mockPublisher{}
 		cfg := HealthEventsAnalyzerReconcilerConfig{
@@ -332,26 +332,4 @@ func TestHandleEvent(t *testing.T) {
 		mockClient.AssertNotCalled(t, "Aggregate")
 		mockPublisher.AssertNotCalled(t, "HealthEventOccurredV1")
 	})
-}
-
-func TestShouldEvaluateRuleForEvent(t *testing.T) {
-	reconciler := NewReconciler(HealthEventsAnalyzerReconcilerConfig{
-		HealthEventsAnalyzerRules: &config.TomlConfig{Rules: rules},
-	})
-	shouldEvaluate := reconciler.shouldEvaluateRuleForEvent(rules[1], healthEvent_13)
-	assert.True(t, shouldEvaluate)
-
-	shouldEvaluate = reconciler.shouldEvaluateRuleForEvent(rules[1], healthEvent_48)
-	assert.False(t, shouldEvaluate)
-}
-
-func TestShouldEvaluateRuleForEvent(t *testing.T) {
-	reconciler := NewReconciler(HealthEventsAnalyzerReconcilerConfig{
-		HealthEventsAnalyzerRules: &config.TomlConfig{Rules: rules},
-	})
-	shouldEvaluate := reconciler.shouldEvaluateRuleForEvent(rules[1], healthEvent_13)
-	assert.True(t, shouldEvaluate)
-
-	shouldEvaluate = reconciler.shouldEvaluateRuleForEvent(rules[1], healthEvent_48)
-	assert.False(t, shouldEvaluate)
 }

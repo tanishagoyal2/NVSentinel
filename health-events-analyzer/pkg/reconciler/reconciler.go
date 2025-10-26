@@ -175,11 +175,6 @@ func (r *Reconciler) handleEvent(ctx context.Context, event *storeconnector.Heal
 func (r *Reconciler) processRule(ctx context.Context,
 	rule config.HealthEventsAnalyzerRule,
 	event *storeconnector.HealthEventWithStatus) (bool, error) {
-	// Check if this rule should be evaluated for the current event's XID
-	if !r.shouldEvaluateRuleForEvent(rule, *event) {
-		slog.Debug("Rule skipped - XID mismatch for event", "rule_name", rule.Name)
-		return false, nil
-	}
 
 	// Validate all sequences from DB docs
 	matchedSequences, err := r.validateAllSequenceCriteria(ctx, rule, *event)
@@ -229,20 +224,6 @@ func (r *Reconciler) getRecommendedActionValue(recommendedAction, ruleName strin
 	}
 
 	return actionVal
-}
-
-// shouldEvaluateRuleForEvent checks if a rule should be evaluated for the given event based on XID
-func (r *Reconciler) shouldEvaluateRuleForEvent(rule config.HealthEventsAnalyzerRule,
-	healthEventWithStatus storeconnector.HealthEventWithStatus) bool {
-	// If no target XIDs specified, evaluate for all events
-	for _, seq := range rule.Sequence {
-		eventXID := healthEventWithStatus.HealthEvent.ErrorCode[0]
-		if seq.Criteria["healthevent.errorcode.0"] == nil || seq.Criteria["healthevent.errorcode.0"] == eventXID {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule config.HealthEventsAnalyzerRule,

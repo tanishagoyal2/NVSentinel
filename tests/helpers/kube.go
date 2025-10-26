@@ -39,8 +39,8 @@ import (
 )
 
 const (
-	WaitTimeout  = 10 * time.Minute
-	WaitInterval = 30 * time.Second
+	WaitTimeout  = 1 * time.Minute
+	WaitInterval = 10 * time.Second
 )
 
 // WaitForNodesCordonState waits for nodes with names specified in `nodeNames` to be either cordoned or uncrodoned based on `shouldCordon`. If `shouldCordon` is

@@ -186,9 +186,9 @@ func QueryHealthEventByFilter(ctx context.Context, filter bson.M) (map[string]in
 
 // NOTE: this functionality is added specifically to remove node conditions added by health event analyzer
 // because currently health event analyzer doesn't send healthy event for the corresponding fatal event.
-func TestCleanUp(ctx context.Context, GpuNodeName string, nodeCondition string, errorCode string, c *envconf.Config) error {
+func TestCleanUp(ctx context.Context, gpuNodeName string, nodeCondition string, errorCode string, c *envconf.Config) error {
 	// Send healthy event to clear the error
-	err := SendHealthEventsToNodes([]string{GpuNodeName}, errorCode, "data/healthy-event.json")
+	err := SendHealthEventsToNodes([]string{gpuNodeName}, errorCode, "data/healthy-event.json")
 	if err != nil {
 		klog.Errorf("failed to send healthy events during cleanup: %v", err)
 	}
@@ -201,13 +201,13 @@ func TestCleanUp(ctx context.Context, GpuNodeName string, nodeCondition string, 
 		return fmt.Errorf("failed to create client during cleanup: %w", err)
 	}
 
-	err = CleanupNodeConditionAndUncordon(ctx, client, GpuNodeName, nodeCondition)
+	err = CleanupNodeConditionAndUncordon(ctx, client, gpuNodeName, nodeCondition)
 	if err != nil {
-		klog.Errorf("failed to cleanup node condition and uncordon node %s: %v", GpuNodeName, err)
-		return fmt.Errorf("failed to cleanup node condition and uncordon node %s: %w", GpuNodeName, err)
+		klog.Errorf("failed to cleanup node condition and uncordon node %s: %v", gpuNodeName, err)
+		return fmt.Errorf("failed to cleanup node condition and uncordon node %s: %w", gpuNodeName, err)
 	}
 
-	klog.Infof("Successfully cleaned up node condition and uncordoned node %s", GpuNodeName)
+	klog.Infof("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 
 	return nil
 }
