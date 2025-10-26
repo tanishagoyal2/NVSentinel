@@ -5,7 +5,7 @@ go 1.25
 toolchain go1.25.3
 
 require (
-	github.com/BurntSushi/toml v1.5.0
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/nvidia/nvsentinel/commons v0.0.0
 	github.com/nvidia/nvsentinel/data-models v0.0.0
 	github.com/nvidia/nvsentinel/store-client-sdk v0.0.0
@@ -16,9 +16,22 @@ require (
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.10
 	k8s.io/apimachinery v0.34.1
+	k8s.io/klog v1.0.0
 )
 
 require (
+<<<<<<< HEAD
+=======
+	github.com/hashicorp/errwrap v1.0.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
+>>>>>>> dcc55c6 (feat: detect multiple fatal error)
+	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
+)
+
+require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

@@ -8,11 +8,11 @@
     "message": "XID error occurred",
     "recommendedAction": 15,
     "errorCode": [
-        "79"
+        "ERROR_CODE"
     ],
     "entitiesImpacted": [
         {
-            "entityType": "gpu",
+            "entityType": "GPU",
             "entityValue": "0"
         }
     ],

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,13 +32,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 )
 
 const (
 	WaitTimeout  = 10 * time.Minute
-	WaitInterval = 10 * time.Second
+	WaitInterval = 30 * time.Second
 )
 
 // WaitForNodesCordonState waits for nodes with names specified in `nodeNames` to be either cordoned or uncrodoned based on `shouldCordon`. If `shouldCordon` is
@@ -609,4 +612,115 @@ func CreateRebootNodeCR(
 	}
 
 	return rebootNode, nil
+}
+
+// WaitForNodeConditionWithCheckName waits for the node to have a condition with the reason containing the specified checkName.
+func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klient.Client, nodeName, checkName string) {
+	require.Eventually(t, func() bool {
+		node, err := GetNodeByName(ctx, c, nodeName)
+		if err != nil {
+			t.Logf("failed to get node %s: %v", nodeName, err)
+			return false
+		}
+
+		// Look for a condition where the reason contains the check name
+		for _, condition := range node.Status.Conditions {
+			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) {
+				t.Logf("Found node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
+					condition.Type, condition.Reason, condition.Status, condition.Message)
+				return true
+			}
+		}
+
+		t.Logf("Node %s does not have a condition with check name '%s'", nodeName, checkName)
+		return false
+	}, WaitTimeout, WaitInterval, "node %s should have a condition with check name %s", nodeName, checkName)
+}
+
+// CleanupNodeConditionAndUncordon clears node conditions with the specified checkName by setting them to healthy state and uncordons the node.
+// NOTE: this function was added specifically to clean up node conditions added by health event analyzer.
+func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeName, checkName string) error {
+	clientset, err := kubernetes.NewForConfig(c.RESTConfig())
+	if err != nil {
+		return fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	// Try to update the node condition with retries (platform connector may be racing with us)
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Get the current node
+		node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		}
+
+		// Set node conditions that match the checkName to healthy state (Status=False)
+		// This mimics what the platform connector does when it receives a healthy event
+		conditionFound := false
+		conditionUpdated := false
+
+		for i, condition := range node.Status.Conditions {
+			if strings.Contains(string(condition.Type), checkName) || strings.Contains(condition.Reason, checkName) {
+				klog.Infof("Found condition to clean up: Type=%s, Reason=%s, Status=%s, Message=%s",
+					condition.Type, condition.Reason, condition.Status, condition.Message)
+				conditionFound = true
+				// Only update if currently unhealthy
+				if condition.Status == v1.ConditionTrue {
+					node.Status.Conditions[i].Status = v1.ConditionFalse
+					node.Status.Conditions[i].Message = "No Health Failures"
+					node.Status.Conditions[i].Reason = fmt.Sprintf("%sIsHealthy", checkName)
+					node.Status.Conditions[i].LastHeartbeatTime = metav1.Now()
+					node.Status.Conditions[i].LastTransitionTime = metav1.Now()
+					conditionUpdated = true
+				}
+			}
+		}
+
+		if !conditionFound {
+			// No condition to clean up
+			break
+		}
+
+		// Update node status only if we found and updated conditions
+		if conditionUpdated {
+			_, err = clientset.CoreV1().Nodes().UpdateStatus(ctx, node, metav1.UpdateOptions{})
+			if err != nil {
+				lastErr = fmt.Errorf("failed to update node status for %s (attempt %d/%d): %w", nodeName, attempt, maxRetries, err)
+				time.Sleep(time.Second * time.Duration(attempt))
+				continue
+			}
+			// Successfully updated
+			break
+		} else {
+			// Condition already healthy
+			break
+		}
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	// Uncordon the node
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get node %s for uncordoning: %w", nodeName, err)
+		}
+
+		if node.Spec.Unschedulable {
+			node.Spec.Unschedulable = false
+			_, err = clientset.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
+			if err != nil {
+				lastErr = fmt.Errorf("failed to uncordon node %s (attempt %d/%d): %w", nodeName, attempt, maxRetries, err)
+				time.Sleep(time.Second * time.Duration(attempt))
+				continue
+			}
+		}
+		break
+	}
+
+	return lastErr
 }

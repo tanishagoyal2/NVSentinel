@@ -110,7 +110,7 @@ func TestFatalHealthEvent(t *testing.T) {
 	feature.Assess("Can send fatal health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "data/fatal-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -143,7 +143,7 @@ func TestFatalHealthEvent(t *testing.T) {
 		assert.Equal(t, "GpuXidError", string(nodeCondition.Type))
 		assert.Equal(t, "True", string(nodeCondition.Status))
 		assert.Equal(t, "GpuXidErrorIsNotHealthy", nodeCondition.Reason)
-		assert.Equal(t, "ErrorCode:79 gpu:0 XID error occurred Recommended Action=RESTART_VM;", nodeCondition.Message)
+		assert.Equal(t, "ErrorCode:79 GPU:0 XID error occured Recommended Action=RESTART_VM;", nodeCondition.Message)
 
 		return ctx
 	})
@@ -185,7 +185,7 @@ func TestFatalHealthEvent(t *testing.T) {
 	feature.Assess("Can send healthy event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -301,7 +301,7 @@ func TestFatalUnsupportedHealthEvent(t *testing.T) {
 	feature.Assess("Can send fatal health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "data/unsupported-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/unsupported-health-event.json")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -373,7 +373,7 @@ func TestFatalUnsupportedHealthEvent(t *testing.T) {
 	feature.Assess("Can send healthy event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/healthy-event.json")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx

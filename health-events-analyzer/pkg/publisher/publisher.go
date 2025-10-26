@@ -16,7 +16,6 @@ package publisher
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -69,20 +68,22 @@ func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEv
 
 		if isRetryableError(err) {
 			slog.Error("Retryable error occurred", "error", err)
-			FatalEventPublishingError.WithLabelValues("retryable_error").Inc()
+			fatalEventPublishingError.WithLabelValues("retryable_error").Inc()
 
 			return false, nil
 		}
 
 		slog.Error("Non-retryable error occurred", "error", err)
-		FatalEventPublishingError.WithLabelValues("non_retryable_error").Inc()
+		fatalEventPublishingError.WithLabelValues("non_retryable_error").Inc()
 
-		return false, fmt.Errorf("non-retryable error publishing health event: %w", err)
+		return false, err
 	})
 
 	if err != nil {
 		slog.Error("All retry attempts to send health event failed", "error", err)
-		return fmt.Errorf("failed to publish health event after retries: %w", err)
+		fatalEventPublishingError.WithLabelValues("event_publishing_to_UDS_error").Inc()
+
+		return err
 	}
 
 	return nil
@@ -93,13 +94,26 @@ func NewPublisher(platformConnectorClient pb.PlatformConnectorClient) *Publisher
 }
 
 func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
-	recommendedAction pb.RecommendedAction) error {
-	// Create the health events request
-	event.IsFatal = true
-	event.RecommendedAction = recommendedAction
+	recommendedAction pb.RecommenedAction, ruleName string) error {
+	newEvent := &pb.HealthEvent{
+		Version:            event.Version,
+		Agent:              "health-events-analyzer",
+		CheckName:          ruleName, // change the check name to HealthEventsAnalyzer
+		ComponentClass:     event.ComponentClass,
+		Message:            event.Message,
+		RecommendedAction:  recommendedAction, // set the rule's recommended action
+		ErrorCode:          event.ErrorCode,
+		IsHealthy:          false, // mark event as unhealthy
+		IsFatal:            true,  // mark event as fatal
+		EntitiesImpacted:   event.EntitiesImpacted,
+		Metadata:           event.Metadata,
+		GeneratedTimestamp: event.GeneratedTimestamp,
+		NodeName:           event.NodeName,
+	}
+
 	req := &pb.HealthEvents{
-		Version: 1, // Set appropriate version
-		Events:  []*pb.HealthEvent{event},
+		Version: 1,
+		Events:  []*pb.HealthEvent{newEvent},
 	}
 
 	return p.sendHealthEventWithRetry(ctx, req)

@@ -18,20 +18,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/nvidia/nvsentinel/data-models/pkg/model"
+	multierror "github.com/hashicorp/go-multierror"
 	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
 	"github.com/nvidia/nvsentinel/health-events-analyzer/pkg/publisher"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/nvidia/nvsentinel/store-client-sdk/pkg/storewatcher"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -57,7 +55,9 @@ type Reconciler struct {
 }
 
 func NewReconciler(cfg HealthEventsAnalyzerReconcilerConfig) *Reconciler {
-	return &Reconciler{config: cfg}
+	return &Reconciler{
+		config: cfg,
+	}
 }
 
 // Start begins the reconciliation process by listening to change stream events
@@ -90,106 +90,171 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	slog.Info("Listening for events on the channel...")
 
 	for event := range watcher.Events() {
-		startTime := time.Now()
+		slog.Info("Processing event", "event", event)
 
-		document := event["fullDocument"].(bson.M)
-
-		healthEventWithStatus := model.HealthEventWithStatus{}
-		if err := storewatcher.UnmarshalFullDocumentFromEvent(
-			event,
-			&healthEventWithStatus,
-		); err != nil {
-			slog.Error("Failed to unmarshal event", "error", err)
-			totalEventProcessingError.WithLabelValues("unamrshal_doc_error").Inc()
+		go func(ctx context.Context, event bson.M) {
+			err := r.processEvent(ctx, event)
+			if err != nil {
+				slog.Error("Error processing event", "error", err)
+			}
 
 			if err := watcher.MarkProcessed(ctx); err != nil {
 				slog.Error("Error updating resume token", "error", err)
 			}
+		}(ctx, event)
+	}
+}
 
+func (r *Reconciler) processEvent(ctx context.Context, event bson.M) error {
+	startTime := time.Now()
+
+	healthEventWithStatus := storeconnector.HealthEventWithStatus{}
+	if err := storewatcher.UnmarshalFullDocumentFromEvent(
+		event,
+		&healthEventWithStatus,
+	); err != nil {
+		slog.Error("Failed to unmarshal event", "error", err)
+
+		totalEventProcessingError.WithLabelValues("unamrshal_doc_error").Inc()
+
+		return fmt.Errorf("failed to unmarshal event: %w", err)
+	}
+
+	slog.Debug("Received event", "event", healthEventWithStatus)
+
+	totalEventsReceived.WithLabelValues(healthEventWithStatus.HealthEvent.NodeName).Inc()
+
+	var err error
+
+	var publishedNewEvent bool
+
+	for i := 1; i <= maxRetries; i++ {
+		slog.Debug("Handling event", "attempt", i, "event", healthEventWithStatus)
+
+		publishedNewEvent, err = r.handleEvent(ctx, &healthEventWithStatus)
+		if err == nil {
+			totalEventsSuccessfullyProcessed.Inc()
+
+			if publishedNewEvent {
+				slog.Info("New event successfully published.")
+				newEventsPublishedTotal.WithLabelValues(healthEventWithStatus.HealthEvent.NodeName).Inc()
+			} else {
+				slog.Info("New event is not published, rule set criteria didn't match.")
+			}
+
+			break
+		}
+
+		slog.Error("Error in handling the event", "event", healthEventWithStatus, "error", err)
+
+		totalEventProcessingError.WithLabelValues("handle_event_error").Inc()
+
+		time.Sleep(delay)
+	}
+
+	if err != nil {
+		slog.Error("Max attempt reached, error in handling the event", "event", healthEventWithStatus, "error", err)
+	}
+
+	duration := time.Since(startTime).Seconds()
+
+	eventHandlingDuration.Observe(duration)
+
+	return err
+}
+
+func (r *Reconciler) handleEvent(ctx context.Context, event *storeconnector.HealthEventWithStatus) (bool, error) {
+	var multiErr *multierror.Error
+
+	publishedNewEvent := false
+
+	for _, rule := range r.config.HealthEventsAnalyzerRules.Rules {
+		published, err := r.processRule(ctx, rule, event)
+		if err != nil {
+			multiErr = multierror.Append(multiErr, err)
 			continue
 		}
 
-		slog.Debug("Received event", "event", healthEventWithStatus)
-
-		totalEventsReceived.WithLabelValues(healthEventWithStatus.HealthEvent.EntitiesImpacted[0].EntityValue).Inc()
-
-		var err error
-
-		var publishedNewEvent bool
-
-		for i := 1; i <= maxRetries; i++ {
-			slog.Debug("Handling event", "attempt", i, "eventID", document["_id"])
-
-			publishedNewEvent, err = r.handleEvent(ctx, &healthEventWithStatus)
-			if err == nil {
-				totalEventsSuccessfullyProcessed.Inc()
-
-				if publishedNewEvent {
-					slog.Info("New fatal event published.")
-					fatalEventsPublishedTotal.WithLabelValues(healthEventWithStatus.HealthEvent.EntitiesImpacted[0].EntityValue).Inc()
-				} else {
-					slog.Info("Fatal event is not published, rule set criteria didn't match.")
-				}
-
-				break
-			}
-
-			slog.Error("Error in handling the event", "eventID", document["_id"], "error", err)
-
-			totalEventProcessingError.WithLabelValues("handle_event_error").Inc()
-
-			time.Sleep(delay)
+		if published {
+			publishedNewEvent = true
 		}
-
-		if err != nil {
-			slog.Error("Max attempt reached, error in handling the event", "eventID", document["_id"], "error", err)
-		}
-
-		duration := time.Since(startTime).Seconds()
-
-		eventHandlingDuration.Observe(duration)
 	}
 
-	return nil
-}
-
-func (r *Reconciler) handleEvent(ctx context.Context, event *model.HealthEventWithStatus) (bool, error) {
-	for _, rule := range r.config.HealthEventsAnalyzerRules.Rules {
-		// Check if current event matches any sequence criteria in the rule
-		if matchesAnySequenceCriteria(rule, *event) && r.evaluateRule(ctx, rule, *event) {
-			slog.Debug("Rule matched for event", "rule", rule.Name, "event", event)
-
-			actionVal, ok := platform_connectors.RecommendedAction_value[rule.RecommendedAction]
-			if !ok {
-				slog.Warn("Invalid recommended_action '%s' in rule '%s'; defaulting to NONE", rule.RecommendedAction, rule.Name)
-
-				actionVal = int32(platform_connectors.RecommendedAction_NONE)
-			}
-
-			err := r.config.Publisher.Publish(ctx, event.HealthEvent, platform_connectors.RecommendedAction(actionVal))
-			if err != nil {
-				slog.Error("Error in publishing the new fatal event", "error", err)
-				publisher.FatalEventPublishingError.WithLabelValues("event_publishing_to_UDS_error").Inc()
-
-				return false, fmt.Errorf("failed to publish fatal event: %w", err)
-			}
-
-			return true, nil
-		}
-
-		slog.Debug("Rule didn't meet criteria", "rule", rule.Name)
+	if multiErr.ErrorOrNil() != nil {
+		slog.Error("Error in handling the event", "error", multiErr)
+		return publishedNewEvent, fmt.Errorf("error in handling the event: %w", multiErr)
 	}
 
-	slog.Info("No rule matched for event", "event", event)
-
-	return false, nil
+	return publishedNewEvent, nil
 }
 
-// matchesAnySequenceCriteria checks if the current event matches any sequence criteria in the rule
-func matchesAnySequenceCriteria(rule config.HealthEventsAnalyzerRule,
-	healthEventWithStatus model.HealthEventWithStatus) bool {
+// processRule handles the processing of a single rule against an event
+func (r *Reconciler) processRule(ctx context.Context,
+	rule config.HealthEventsAnalyzerRule,
+	event *storeconnector.HealthEventWithStatus) (bool, error) {
+	// Check if this rule should be evaluated for the current event's XID
+	if !r.shouldEvaluateRuleForEvent(rule, *event) {
+		slog.Debug("Rule skipped - XID mismatch for event", "rule_name", rule.Name)
+		return false, nil
+	}
+
+	// Validate all sequences from DB docs
+	matchedSequences, err := r.validateAllSequenceCriteria(ctx, rule, *event)
+	if err != nil {
+		slog.Error("Error in validating all sequence criteria", "error", err)
+		return false, err
+	}
+
+	if !matchedSequences {
+		return false, nil
+	}
+
+	return r.publishMatchedEvent(ctx, rule, event)
+}
+
+// publishMatchedEvent publishes an event when a rule matches
+func (r *Reconciler) publishMatchedEvent(ctx context.Context,
+	rule config.HealthEventsAnalyzerRule,
+	event *storeconnector.HealthEventWithStatus) (bool, error) {
+	slog.Info("Rule matched for event", "rule_name", rule.Name, "event", event)
+	ruleMatchedTotal.WithLabelValues(rule.Name, event.HealthEvent.NodeName).Inc()
+
+	actionVal := r.getRecommendedActionValue(rule.RecommendedAction, rule.Name)
+
+	err := r.config.Publisher.Publish(ctx, event.HealthEvent, platform_connectors.RecommenedAction(actionVal), rule.Name)
+	if err != nil {
+		slog.Error("Error in publishing the new fatal event", "error", err)
+		return false, err
+	}
+
+	slog.Info("New event successfully published for matching rule", "rule_name", rule.Name)
+
+	return true, nil
+}
+
+// getRecommendedActionValue returns the action value, with fallback to RecommenedAction_CONTACT_SUPPORT if invalid
+func (r *Reconciler) getRecommendedActionValue(recommendedAction, ruleName string) int32 {
+	actionVal, ok := platform_connectors.RecommenedAction_value[recommendedAction]
+	if !ok {
+		defaultAction := int32(platform_connectors.RecommenedAction_CONTACT_SUPPORT)
+		slog.Warn("Invalid recommended_action in rule; defaulting to CONTACT_SUPPORT",
+			"recommended_action", recommendedAction,
+			"rule_name", ruleName,
+			"default_action", platform_connectors.RecommenedAction_name[defaultAction])
+
+		return defaultAction
+	}
+
+	return actionVal
+}
+
+// shouldEvaluateRuleForEvent checks if a rule should be evaluated for the given event based on XID
+func (r *Reconciler) shouldEvaluateRuleForEvent(rule config.HealthEventsAnalyzerRule,
+	healthEventWithStatus storeconnector.HealthEventWithStatus) bool {
+	// If no target XIDs specified, evaluate for all events
 	for _, seq := range rule.Sequence {
-		if matchesSequenceCriteria(seq.Criteria, healthEventWithStatus.HealthEvent) {
+		eventXID := healthEventWithStatus.HealthEvent.ErrorCode[0]
+		if seq.Criteria["healthevent.errorcode.0"] == nil || seq.Criteria["healthevent.errorcode.0"] == eventXID {
 			return true
 		}
 	}
@@ -197,120 +262,30 @@ func matchesAnySequenceCriteria(rule config.HealthEventsAnalyzerRule,
 	return false
 }
 
-// matchesSequenceCriteria checks if the current event matches a specific sequence criteria
-func matchesSequenceCriteria(criteria map[string]interface{}, event *platform_connectors.HealthEvent) bool {
-	for key, value := range criteria {
-		strValue, ok := value.(string)
-		if ok && len(strValue) > 5 && strValue[:5] == "this." {
-			continue
-		}
-
-		actualValue := getValueFromPath(key, event)
-		if actualValue == nil || actualValue != value {
-			return false
-		}
-	}
-
-	return true
-}
-
-// getValueFromPath extracts a value from the event using a dot-notation path
-//
-//nolint:cyclop, gocognit // todo
-func getValueFromPath(path string, event *platform_connectors.HealthEvent) interface{} {
-	parts := strings.Split(path, ".")
-
-	if len(parts) > 0 && parts[0] == "healthevent" {
-		parts = parts[1:]
-	}
-
-	if len(parts) == 0 {
-		return nil
-	}
-
-	rootField := strings.ToLower(parts[0])
-
-	if len(parts) == 1 {
-		val := reflect.ValueOf(event).Elem()
-
-		// Find the field by name case-insensitive
-		for i := 0; i < val.NumField(); i++ {
-			field := val.Type().Field(i)
-			if strings.EqualFold(field.Name, rootField) {
-				return val.Field(i).Interface()
-			}
-		}
-	}
-
-	if strings.EqualFold(rootField, "errorcode") && len(parts) > 1 {
-		if idx, err := strconv.Atoi(parts[1]); err == nil && idx < len(event.ErrorCode) {
-			return event.ErrorCode[idx]
-		}
-
-		return nil
-	}
-
-	if strings.EqualFold(rootField, "entitiesimpacted") && len(parts) > 2 {
-		if idx, err := strconv.Atoi(parts[1]); err == nil && idx < len(event.EntitiesImpacted) {
-			entity := event.EntitiesImpacted[idx]
-			subField := strings.ToLower(parts[2])
-
-			entityVal := reflect.ValueOf(entity).Elem()
-			for i := 0; i < entityVal.NumField(); i++ {
-				field := entityVal.Type().Field(i)
-				if strings.EqualFold(field.Name, subField) {
-					return entityVal.Field(i).Interface()
-				}
-			}
-		}
-
-		return nil
-	}
-
-	// Handle metadata map
-	if strings.EqualFold(rootField, "metadata") && len(parts) > 1 {
-		metadataKey := parts[1]
-		if value, exists := event.Metadata[metadataKey]; exists {
-			return value
-		}
-	}
-
-	if strings.EqualFold(rootField, "generatedtimestamp") && len(parts) > 1 && event.GeneratedTimestamp != nil {
-		subField := strings.ToLower(parts[1])
-
-		timestampVal := reflect.ValueOf(event.GeneratedTimestamp).Elem()
-		for i := 0; i < timestampVal.NumField(); i++ {
-			field := timestampVal.Type().Field(i)
-			if strings.EqualFold(field.Name, subField) {
-				return timestampVal.Field(i).Interface()
-			}
-		}
-	}
-
-	return nil
-}
-
-func (r *Reconciler) evaluateRule(ctx context.Context, rule config.HealthEventsAnalyzerRule,
-	healthEventWithStatus model.HealthEventWithStatus) bool {
-	slog.Debug("Evaluating rule for event", "rule", rule.Name, "event", healthEventWithStatus)
+func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule config.HealthEventsAnalyzerRule,
+	healthEventWithStatus storeconnector.HealthEventWithStatus) (bool, error) {
+	slog.Debug("Evaluating rule for event", "rule_name", rule.Name, "event", healthEventWithStatus)
 
 	timeWindow, err := time.ParseDuration(rule.TimeWindow)
 	if err != nil {
 		slog.Error("Failed to parse time window", "error", err)
 		totalEventProcessingError.WithLabelValues("parse_time_window_error").Inc()
 
-		return false
+		return false, fmt.Errorf("failed to parse time window: %w", err)
 	}
 
 	// Create facets for each sequence
 	facets := bson.D{}
+	parser := Parser{
+		event: healthEventWithStatus,
+	}
 
 	for i, seq := range rule.Sequence {
 		slog.Debug("Evaluating sequence", "sequence", seq)
 
 		facetName := "sequence_" + strconv.Itoa(i)
 
-		matchCriteria, err := parseSequenceString(seq.Criteria, healthEventWithStatus.HealthEvent)
+		matchCriteria, err := parser.parseSequenceString(seq.Criteria)
 		if err != nil {
 			slog.Error("Failed to parse sequence criteria", "error", err)
 
@@ -319,21 +294,72 @@ func (r *Reconciler) evaluateRule(ctx context.Context, rule config.HealthEventsA
 			continue
 		}
 
-		facets = append(facets, bson.E{
-			Key: facetName,
-			Value: bson.A{
-				bson.D{{Key: "$match", Value: bson.D{
-					{Key: "healthevent.generatedtimestamp.seconds", Value: bson.D{
-						{Key: "$gte", Value: time.Now().UTC().Add(-timeWindow).Unix()},
-					}},
-				}}},
-				bson.D{{Key: "$match", Value: matchCriteria}},
-				bson.D{{Key: "$count", Value: "count"}},
-			},
-		})
+		facets = append(facets, getFacet(facetName, timeWindow, matchCriteria))
 	}
 
-	pipeline := mongo.Pipeline{
+	if len(facets) == 0 {
+		slog.Debug("No facets created for rule", "rule_name", rule.Name)
+		totalEventProcessingError.WithLabelValues("no_facets_found_error").Inc()
+
+		return false, nil
+	}
+
+	pipeline := getPipeline(facets, rule)
+
+	var result []bson.M
+
+	startTime := time.Now()
+	cursor, err := r.config.CollectionClient.Aggregate(ctx, pipeline)
+
+	if err != nil {
+		slog.Error("Failed to execute aggregation pipeline", "error", err)
+		totalEventProcessingError.WithLabelValues("execute_pipeline_error").Inc()
+
+		return false, fmt.Errorf("failed to execute aggregation pipeline: %w", err)
+	}
+
+	duration := time.Since(startTime).Seconds()
+	databaseQueryDuration.Observe(duration)
+
+	defer cursor.Close(ctx)
+
+	if err = cursor.All(ctx, &result); err != nil {
+		slog.Error("Failed to decode cursor", "error", err)
+		totalEventProcessingError.WithLabelValues("decode_cursor_error").Inc()
+
+		return false, fmt.Errorf("failed to decode cursor: %w", err)
+	}
+
+	if len(result) > 0 {
+		// Check if all criteria are met
+		slog.Debug("Query result", "result", result)
+
+		if matched, ok := result[0]["ruleMatched"].(bool); ok && matched {
+			slog.Debug("All sequence conditions met for rule", "rule_name", rule.Name)
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func getFacet(facetName string, timeWindow time.Duration, matchCriteria bson.D) bson.E {
+	return bson.E{
+		Key: facetName,
+		Value: bson.A{
+			bson.D{{Key: "$match", Value: bson.D{
+				{Key: "healthevent.generatedtimestamp.seconds", Value: bson.D{
+					{Key: "$gte", Value: time.Now().UTC().Add(-timeWindow).Unix()},
+				}},
+			}}},
+			bson.D{{Key: "$match", Value: matchCriteria}},
+			bson.D{{Key: "$count", Value: "count"}},
+		},
+	}
+}
+
+func getPipeline(facets bson.D, rule config.HealthEventsAnalyzerRule) mongo.Pipeline {
+	return mongo.Pipeline{
 		{{Key: "$facet", Value: facets}},
 		{{Key: "$project", Value: bson.D{
 			{Key: "ruleMatched", Value: bson.D{
@@ -353,49 +379,4 @@ func (r *Reconciler) evaluateRule(ctx context.Context, rule config.HealthEventsA
 			}},
 		}}},
 	}
-
-	var result []bson.M
-
-	cursor, err := r.config.CollectionClient.Aggregate(ctx, pipeline)
-	if err != nil {
-		slog.Error("Failed to execute aggregation pipeline", "error", err)
-		totalEventProcessingError.WithLabelValues("execute_pipeline_error").Inc()
-
-		return false
-	}
-	defer cursor.Close(ctx)
-
-	if err = cursor.All(ctx, &result); err != nil {
-		slog.Error("Failed to decode cursor", "error", err)
-		totalEventProcessingError.WithLabelValues("decode_cursor_error").Inc()
-
-		return false
-	}
-
-	if len(result) > 0 {
-		// Check if all criteria are met
-		if matched, ok := result[0]["ruleMatched"].(bool); ok && matched {
-			slog.Debug("All sequence conditions met for rule", "rule", rule.Name)
-			return true
-		}
-	}
-
-	return false
-}
-
-// parseSequenceString converts a criteria string into a BSON document for MongoDB queries
-func parseSequenceString(criteria map[string]interface{}, event *platform_connectors.HealthEvent) (bson.D, error) {
-	doc := bson.D{}
-
-	for key, value := range criteria {
-		strValue, ok := value.(string)
-		if ok && len(strValue) > 5 && strValue[:5] == "this." {
-			fieldPath := strValue[5:] // Skip "this."
-			doc = append(doc, bson.E{Key: key, Value: getValueFromPath(fieldPath, event)})
-		} else {
-			doc = append(doc, bson.E{Key: key, Value: value})
-		}
-	}
-
-	return doc, nil
 }

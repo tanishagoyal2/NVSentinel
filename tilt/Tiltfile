@@ -79,7 +79,7 @@ include('../janitor/Tiltfile')
 include('../node-drainer-module/Tiltfile')
 include('../platform-connectors/Tiltfile')
 include('./simple-health-client/Tiltfile')
-#include('../health-events-analyzer/Tiltfile') # This module was a proof-of-concept, never completed
+include('../health-events-analyzer/Tiltfile')
 include('../health-monitors/gpu-health-monitor/Tiltfile')
 include('../health-monitors/syslog-health-monitor/Tiltfile')
 include('../labeler-module/Tiltfile')
@@ -114,6 +114,11 @@ k8s_resource(
         'nvsentinel-janitor-webhook-cert:certificate'
     ],
     resource_deps=['cert-manager'],
+)
+k8s_resource(
+    workload='nvsentinel-mongodb',
+    resource_deps=['cert-manager-resources'],
+    port_forwards='27017:27017',
 )
 k8s_resource(
     new_name='prometheus-resources',

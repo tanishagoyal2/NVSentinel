@@ -21,7 +21,7 @@ import (
 )
 
 type SequenceStep struct {
-	Criteria   map[string]interface{} `toml:"criteria"`
+	Criteria   map[string]interface{} `toml:"criteria,omitempty"`
 	ErrorCount int                    `toml:"errorCount"`
 }
 
