@@ -99,6 +99,8 @@ func (r *Reconciler) Start(ctx context.Context) error {
 			}
 		}(ctx, event)
 	}
+
+	return nil
 }
 
 func (r *Reconciler) processEvent(ctx context.Context, event bson.M) error {
@@ -176,7 +178,6 @@ func (r *Reconciler) handleEvent(ctx context.Context, event *storeconnector.Heal
 func (r *Reconciler) processRule(ctx context.Context,
 	rule config.HealthEventsAnalyzerRule,
 	event *storeconnector.HealthEventWithStatus) (bool, error) {
-
 	// Validate all sequences from DB docs
 	matchedSequences, err := r.validateAllSequenceCriteria(ctx, rule, *event)
 	if err != nil {

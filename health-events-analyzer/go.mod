@@ -19,11 +19,7 @@ require (
 )
 
 require (
-<<<<<<< HEAD
-=======
 	github.com/hashicorp/errwrap v1.0.0 // indirect
-	github.com/kr/text v0.2.0 // indirect
->>>>>>> dcc55c6 (feat: detect multiple fatal error)
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
