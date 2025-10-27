@@ -34,6 +34,7 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		keyGpuNodeName
 		ERRORCODE_13 = "13"
 		ERRORCODE_48 = "48"
+		ERRORCODE_31 = "31"
 	)
 
 	feature := features.New("TestMultipleFatalEventRule").
@@ -115,17 +116,8 @@ func TestMultipleFatalEventRule(t *testing.T) {
 			t.Fatal("GPU node name not found in context - previous assess step may have failed")
 		}
 
-		// Ensure cleanup at the end of the test
-		defer func() {
-			t.Logf("Starting cleanup for node %s", gpuNodeName)
-
-			err := helpers.TestCleanUp(ctx, gpuNodeName, "MultipleFatalError", "31", c)
-			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
-			t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
-		}()
-
 		// inject XID 31 error to trigger the rule
-		err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "31", "data/fatal-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_31, "data/fatal-health-event.json")
 		assert.NoError(t, err, "failed to send fatal events")
 		time.Sleep(10 * time.Second)
 
@@ -157,6 +149,22 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		} else {
 			t.Fatal("failed to extract healthevent from MongoDB document")
 		}
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		gpuNodeName, ok := ctx.Value(keyGpuNodeName).(string)
+		if !ok || gpuNodeName == "" {
+			t.Log("GPU node name not found in context - skipping cleanup")
+			return ctx
+		}
+
+		t.Logf("Starting cleanup for node %s", gpuNodeName)
+
+		err := helpers.TestCleanUp(ctx, gpuNodeName, "MultipleFatalError", ERRORCODE_31, c)
+		assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
+		t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 
 		return ctx
 	})

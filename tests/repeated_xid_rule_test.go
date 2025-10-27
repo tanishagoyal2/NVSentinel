@@ -18,7 +18,6 @@ import (
 	"math/rand"
 	"testing"
 	"tests/helpers"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
@@ -32,6 +31,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 	const (
 		keyGpuNodes contextKey = iota
 		keyGpuNodeName
+		ERRORCODE_13 = "13"
 	)
 
 	feature := features.New("TestRepeatedXIDRule").
@@ -58,7 +58,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
 		for i := 0; i < 5; i++ {
-			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "13", "data/fatal-health-event.json")
+			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
 			assert.NoError(t, err, "failed to send fatal events")
 		}
 
@@ -70,14 +70,6 @@ func TestRepeatedXIDRule(t *testing.T) {
 		if !ok || gpuNodeName == "" {
 			t.Fatal("GPU node name not found in context - previous assess step may have failed")
 		}
-
-		defer func() {
-			t.Logf("Starting cleanup for node %s", gpuNodeName)
-
-			err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXid13", "13", c)
-			assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
-			t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
-		}()
 
 		t.Logf("Checking node conditions and MongoDB for node %s", gpuNodeName)
 
@@ -111,10 +103,21 @@ func TestRepeatedXIDRule(t *testing.T) {
 			t.Fatal("failed to extract healthevent from MongoDB document")
 		}
 
-		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "13", "data/healthy-event.json")
-		assert.NoError(t, err, "failed to send healthy events")
+		return ctx
+	})
 
-		time.Sleep(5 * time.Second)
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		gpuNodeName, ok := ctx.Value(keyGpuNodeName).(string)
+		if !ok || gpuNodeName == "" {
+			t.Log("GPU node name not found in context - skipping cleanup")
+			return ctx
+		}
+
+		t.Logf("Starting cleanup for node %s", gpuNodeName)
+
+		err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXid13", ERRORCODE_13, c)
+		assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
+		t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 
 		return ctx
 	})

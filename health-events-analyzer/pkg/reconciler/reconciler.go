@@ -24,6 +24,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
+	parser "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/parser"
 	"github.com/nvidia/nvsentinel/health-events-analyzer/pkg/publisher"
 	"go.mongodb.org/mongo-driver/bson"
 
@@ -180,7 +181,7 @@ func (r *Reconciler) processRule(ctx context.Context,
 	matchedSequences, err := r.validateAllSequenceCriteria(ctx, rule, *event)
 	if err != nil {
 		slog.Error("Error in validating all sequence criteria", "error", err)
-		return false, err
+		return false, fmt.Errorf("error in validating all sequence criteria: %w", err)
 	}
 
 	if !matchedSequences {
@@ -202,7 +203,7 @@ func (r *Reconciler) publishMatchedEvent(ctx context.Context,
 	err := r.config.Publisher.Publish(ctx, event.HealthEvent, platform_connectors.RecommenedAction(actionVal), rule.Name)
 	if err != nil {
 		slog.Error("Error in publishing the new fatal event", "error", err)
-		return false, err
+		return false, fmt.Errorf("error in publishing the new fatal event: %w", err)
 	}
 
 	slog.Info("New event successfully published for matching rule", "rule_name", rule.Name)
@@ -240,8 +241,8 @@ func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule confi
 
 	// Create facets for each sequence
 	facets := bson.D{}
-	parser := Parser{
-		event: healthEventWithStatus,
+	parser := parser.Parser{
+		Event: healthEventWithStatus,
 	}
 
 	for i, seq := range rule.Sequence {
@@ -249,7 +250,7 @@ func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule confi
 
 		facetName := "sequence_" + strconv.Itoa(i)
 
-		matchCriteria, err := parser.parseSequenceString(seq.Criteria)
+		matchCriteria, err := parser.ParseSequenceString(seq.Criteria)
 		if err != nil {
 			slog.Error("Failed to parse sequence criteria", "error", err)
 

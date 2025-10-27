@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reconciler
+package parser
 
 import (
 	"encoding/json"
@@ -28,11 +28,11 @@ import (
 )
 
 type Parser struct {
-	event storeconnector.HealthEventWithStatus
+	Event storeconnector.HealthEventWithStatus
 }
 
 // parseSequenceString converts a criteria map into a BSON document for MongoDB queries
-func (p *Parser) parseSequenceString(criteria map[string]any) (bson.D, error) {
+func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
 	doc := bson.D{}
 
 	for key, value := range criteria {
@@ -50,7 +50,7 @@ func (p *Parser) parseSequenceString(criteria map[string]any) (bson.D, error) {
 			resolvedValue, err := p.getValueFromPath(fieldPath)
 
 			if err != nil {
-				return doc, err
+				return doc, fmt.Errorf("error in getting value from path: %w", err)
 			}
 
 			doc = append(doc, bson.E{Key: key, Value: resolvedValue})
@@ -83,9 +83,9 @@ func (p *Parser) getValueFromPath(path string) (any, error) {
 	parts := strings.Split(path, ".")
 
 	if len(parts) > 0 && (parts[0] == "healthevent") {
-		return getValueFromHealthEvent(p.event.HealthEvent, parts[1:]), nil
+		return getValueFromHealthEvent(p.Event.HealthEvent, parts[1:]), nil
 	} else if len(parts) > 0 && (parts[0] == "healtheventstatus") {
-		return getValueFromHealthEventStatus(p.event.HealthEventStatus, parts[1:]), nil
+		return getValueFromHealthEventStatus(p.Event.HealthEventStatus, parts[1:]), nil
 	}
 
 	return nil, fmt.Errorf("invalid path: %s", path)

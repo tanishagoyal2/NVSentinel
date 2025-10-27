@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	WaitTimeout  = 1 * time.Minute
+	WaitTimeout  = 10 * time.Minute
 	WaitInterval = 10 * time.Second
 )
 
@@ -645,19 +645,15 @@ func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeN
 		return fmt.Errorf("failed to create clientset: %w", err)
 	}
 
-	// Try to update the node condition with retries (platform connector may be racing with us)
 	maxRetries := 3
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Get the current node
 		node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 		}
 
-		// Set node conditions that match the checkName to healthy state (Status=False)
-		// This mimics what the platform connector does when it receives a healthy event
 		conditionFound := false
 		conditionUpdated := false
 
@@ -666,7 +662,6 @@ func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeN
 				klog.Infof("Found condition to clean up: Type=%s, Reason=%s, Status=%s, Message=%s",
 					condition.Type, condition.Reason, condition.Status, condition.Message)
 				conditionFound = true
-				// Only update if currently unhealthy
 				if condition.Status == v1.ConditionTrue {
 					node.Status.Conditions[i].Status = v1.ConditionFalse
 					node.Status.Conditions[i].Message = "No Health Failures"
@@ -683,7 +678,6 @@ func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeN
 			break
 		}
 
-		// Update node status only if we found and updated conditions
 		if conditionUpdated {
 			_, err = clientset.CoreV1().Nodes().UpdateStatus(ctx, node, metav1.UpdateOptions{})
 			if err != nil {
@@ -691,10 +685,10 @@ func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeN
 				time.Sleep(time.Second * time.Duration(attempt))
 				continue
 			}
-			// Successfully updated
+			klog.Infof("Successfully updated node condition for %s", nodeName)
 			break
 		} else {
-			// Condition already healthy
+			klog.Infof("No condition to clean up for %s", nodeName)
 			break
 		}
 	}
@@ -718,6 +712,7 @@ func CleanupNodeConditionAndUncordon(ctx context.Context, c klient.Client, nodeN
 				time.Sleep(time.Second * time.Duration(attempt))
 				continue
 			}
+			klog.Infof("Successfully uncordon node %s", nodeName)
 		}
 		break
 	}

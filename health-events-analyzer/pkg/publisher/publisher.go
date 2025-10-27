@@ -16,6 +16,7 @@ package publisher
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -77,14 +78,14 @@ func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEv
 		slog.Error("Non-retryable error occurred", "error", err)
 		fatalEventPublishingError.WithLabelValues("non_retryable_error").Inc()
 
-		return false, err
+		return false, fmt.Errorf("non retryable error occurred while sending health event: %w", err)
 	})
 
 	if err != nil {
 		slog.Error("All retry attempts to send health event failed", "error", err)
 		fatalEventPublishingError.WithLabelValues("event_publishing_to_UDS_error").Inc()
 
-		return err
+		return fmt.Errorf("all retry attempts to send health event failed: %w", err)
 	}
 
 	return nil
@@ -100,10 +101,10 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
 
 	// Override fields with new values
 	newEvent.Agent = "health-events-analyzer"
-	newEvent.CheckName = ruleName                  // change the check name to HealthEventsAnalyzer
-	newEvent.RecommendedAction = recommendedAction // set the rule's recommended action
-	newEvent.IsHealthy = false                     // mark event as unhealthy
-	newEvent.IsFatal = true                        // mark event as fatal
+	newEvent.CheckName = ruleName
+	newEvent.RecommendedAction = recommendedAction
+	newEvent.IsHealthy = false
+	newEvent.IsFatal = true
 
 	req := &pb.HealthEvents{
 		Version: 1,
