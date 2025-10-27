@@ -77,12 +77,12 @@ func TestRepeatedXIDRule(t *testing.T) {
 		assert.NoError(t, err, "failed to create client")
 
 		// Check node condition for matched ruleset
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "RepeatedXid13")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "RepeatedXidError")
 
-		// Check MongoDB for health event with checkName = "RepeatedXid13"
+		// Check MongoDB for health event with checkName = "RepeatedXidError"
 		filter := bson.M{
 			"healthevent.nodename":  gpuNodeName,
-			"healthevent.checkname": "RepeatedXid13",
+			"healthevent.checkname": "RepeatedXidError",
 		}
 
 		event, err := helpers.QueryHealthEventByFilter(ctx, filter)
@@ -97,7 +97,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 
 			checkName, ok := healthEvent["checkname"].(string)
 			assert.True(t, ok, "checkname should be a string")
-			assert.Equal(t, "RepeatedXid13", checkName, "checkName should be RepeatedXid13")
+			assert.Equal(t, "RepeatedXidError", checkName, "checkName should be RepeatedXidError")
 			t.Logf("Successfully verified health event in MongoDB with checkName: %s", checkName)
 		} else {
 			t.Fatal("failed to extract healthevent from MongoDB document")
@@ -115,7 +115,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 
 		t.Logf("Starting cleanup for node %s", gpuNodeName)
 
-		err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXid13", ERRORCODE_13, c)
+		err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXidError", ERRORCODE_13, c)
 		assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
 		t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
 
