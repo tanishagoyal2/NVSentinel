@@ -22,13 +22,13 @@ import (
 	"strconv"
 	"strings"
 
+	data_models "github.com/nvidia/nvsentinel/data-models/pkg/model"
 	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
-	storeconnector "github.com/nvidia/nvsentinel/platform-connectors/pkg/connectors/store"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
 type Parser struct {
-	Event storeconnector.HealthEventWithStatus
+	Event data_models.HealthEventWithStatus
 }
 
 // parseSequenceString converts a criteria map into a BSON document for MongoDB queries
@@ -81,6 +81,9 @@ func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
 // getValueFromPath extracts a value from the event using a dot-notation path
 func (p *Parser) getValueFromPath(path string) (any, error) {
 	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid path: %s", path)
+	}
 
 	if len(parts) > 0 && (parts[0] == "healthevent") {
 		return getValueFromHealthEvent(p.Event.HealthEvent, parts[1:]), nil
@@ -104,10 +107,6 @@ func getFieldByName(val reflect.Value, fieldName string) any {
 }
 
 func getValueFromHealthEvent(event *platform_connectors.HealthEvent, parts []string) any {
-	if len(parts) == 0 {
-		return nil
-	}
-
 	rootField := strings.ToLower(parts[0])
 
 	// Simple one-level field lookup
@@ -117,24 +116,20 @@ func getValueFromHealthEvent(event *platform_connectors.HealthEvent, parts []str
 
 	switch rootField {
 	case "errorcode":
-		return getValueFromErrorCode(event, parts[1:])
+		return getErrorCode(event, parts[1:])
 	case "entitiesimpacted":
-		return getValueFromEntitiesImpacted(event, parts[1:])
+		return getEntitiesImpacted(event, parts[1:])
 	case "metadata":
-		return getValueFromMetadata(event, parts[1:])
+		return getMetadata(event, parts[1:])
 	case "generatedtimestamp":
-		return getValueFromGeneratedTimestamp(event, parts[1:])
+		return getGeneratedTimestamp(event, parts[1:])
 	default:
 		return nil
 	}
 }
 
-// getValueFromErrorCode safely returns event.ErrorCode[index] if present.
-func getValueFromErrorCode(event *platform_connectors.HealthEvent, parts []string) any {
-	if len(parts) == 0 {
-		return nil
-	}
-
+// getErrorCode safely returns event.ErrorCode[index] if present.
+func getErrorCode(event *platform_connectors.HealthEvent, parts []string) any {
 	idx, err := strconv.Atoi(parts[0])
 	if err != nil || idx >= len(event.ErrorCode) || idx < 0 {
 		return nil
@@ -143,12 +138,8 @@ func getValueFromErrorCode(event *platform_connectors.HealthEvent, parts []strin
 	return event.ErrorCode[idx]
 }
 
-// getValueFromMetadata returns the value for a metadata key if it exists.
-func getValueFromMetadata(event *platform_connectors.HealthEvent, parts []string) any {
-	if len(parts) == 0 {
-		return nil
-	}
-
+// getMetadata returns the value for a metadata key if it exists.
+func getMetadata(event *platform_connectors.HealthEvent, parts []string) any {
 	key := parts[0]
 	if val, ok := event.Metadata[key]; ok {
 		return val
@@ -157,7 +148,7 @@ func getValueFromMetadata(event *platform_connectors.HealthEvent, parts []string
 	return nil
 }
 
-func getValueFromEntitiesImpacted(event *platform_connectors.HealthEvent, parts []string) any {
+func getEntitiesImpacted(event *platform_connectors.HealthEvent, parts []string) any {
 	if len(parts) < 2 {
 		return nil
 	}
@@ -174,7 +165,7 @@ func getValueFromEntitiesImpacted(event *platform_connectors.HealthEvent, parts 
 	return nil
 }
 
-func getValueFromGeneratedTimestamp(event *platform_connectors.HealthEvent, parts []string) any {
+func getGeneratedTimestamp(event *platform_connectors.HealthEvent, parts []string) any {
 	if len(parts) < 2 {
 		return nil
 	}
@@ -192,7 +183,7 @@ func getValueFromGeneratedTimestamp(event *platform_connectors.HealthEvent, part
 	return nil
 }
 
-func getValueFromHealthEventStatus(event storeconnector.HealthEventStatus, parts []string) any {
+func getValueFromHealthEventStatus(event data_models.HealthEventStatus, parts []string) any {
 	if len(parts) == 0 {
 		return nil
 	}

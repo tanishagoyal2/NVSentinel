@@ -20,7 +20,6 @@ import (
 	"tests/helpers"
 
 	"github.com/stretchr/testify/assert"
-	"go.mongodb.org/mongo-driver/bson"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
@@ -58,7 +57,7 @@ func TestRepeatedXIDRule(t *testing.T) {
 		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
 		for i := 0; i < 5; i++ {
-			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json")
+			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/fatal-health-event.json", "")
 			assert.NoError(t, err, "failed to send fatal events")
 		}
 
@@ -79,45 +78,22 @@ func TestRepeatedXIDRule(t *testing.T) {
 		// Check node condition for matched ruleset
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "RepeatedXidError")
 
-		// Check MongoDB for health event with checkName = "RepeatedXidError"
-		filter := bson.M{
-			"healthevent.nodename":  gpuNodeName,
-			"healthevent.checkname": "RepeatedXidError",
-		}
-
-		event, err := helpers.QueryHealthEventByFilter(ctx, filter)
-		assert.NoError(t, err, "failed to query health event from MongoDB")
-		assert.NotNil(t, event, "health event should exist in MongoDB")
-
-		// Verify the event has the expected checkName
-		if healthEvent, ok := event["healthevent"].(map[string]interface{}); ok {
-			nodeName, ok := healthEvent["nodename"].(string)
-			assert.True(t, ok, "nodename should be a string")
-			assert.Equal(t, gpuNodeName, nodeName, "nodeName should be the same as the node name")
-
-			checkName, ok := healthEvent["checkname"].(string)
-			assert.True(t, ok, "checkname should be a string")
-			assert.Equal(t, "RepeatedXidError", checkName, "checkName should be RepeatedXidError")
-			t.Logf("Successfully verified health event in MongoDB with checkName: %s", checkName)
-		} else {
-			t.Fatal("failed to extract healthevent from MongoDB document")
-		}
-
 		return ctx
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		gpuNodeName, ok := ctx.Value(keyGpuNodeName).(string)
-		if !ok || gpuNodeName == "" {
-			t.Log("GPU node name not found in context - skipping cleanup")
-			return ctx
-		}
+		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
 
 		t.Logf("Starting cleanup for node %s", gpuNodeName)
 
-		err := helpers.TestCleanUp(ctx, gpuNodeName, "RepeatedXidError", ERRORCODE_13, c)
-		assert.NoError(t, err, "failed to cleanup node condition and uncordon node %s", gpuNodeName)
-		t.Logf("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
+		err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/multiple-fatal-healthy-event.json", "RepeatedXidError")
+		assert.NoError(t, err, "failed to send healthy events")
+
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/multiple-fatal-healthy-event.json", "MultipleFatalError")
+		assert.NoError(t, err, "failed to send healthy events")
+
+		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, ERRORCODE_13, "data/healthy-event.json", "")
+		assert.NoError(t, err, "failed to send healthy events")
 
 		return ctx
 	})

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	multierror "github.com/hashicorp/go-multierror"
+	data_models "github.com/nvidia/nvsentinel/data-models/pkg/model"
 	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
 	parser "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/parser"
@@ -88,16 +89,14 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	for event := range watcher.Events() {
 		slog.Info("Processing event", "event", event)
 
-		go func(ctx context.Context, event bson.M) {
-			err := r.processEvent(ctx, event)
-			if err != nil {
-				slog.Error("Error processing event", "error", err)
-			}
+		err := r.processEvent(ctx, event)
+		if err != nil {
+			slog.Error("Error processing event", "error", err)
+		}
 
-			if err := watcher.MarkProcessed(ctx); err != nil {
-				slog.Error("Error updating resume token", "error", err)
-			}
-		}(ctx, event)
+		if err := watcher.MarkProcessed(ctx); err != nil {
+			slog.Error("Error updating resume token", "error", err)
+		}
 	}
 
 	return nil
@@ -106,7 +105,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 func (r *Reconciler) processEvent(ctx context.Context, event bson.M) error {
 	startTime := time.Now()
 
-	healthEventWithStatus := storeconnector.HealthEventWithStatus{}
+	healthEventWithStatus := data_models.HealthEventWithStatus{}
 	if err := storewatcher.UnmarshalFullDocumentFromEvent(
 		event,
 		&healthEventWithStatus,
@@ -149,7 +148,7 @@ func (r *Reconciler) processEvent(ctx context.Context, event bson.M) error {
 	return err
 }
 
-func (r *Reconciler) handleEvent(ctx context.Context, event *storeconnector.HealthEventWithStatus) (bool, error) {
+func (r *Reconciler) handleEvent(ctx context.Context, event *data_models.HealthEventWithStatus) (bool, error) {
 	var multiErr *multierror.Error
 
 	publishedNewEvent := false
@@ -177,7 +176,7 @@ func (r *Reconciler) handleEvent(ctx context.Context, event *storeconnector.Heal
 // processRule handles the processing of a single rule against an event
 func (r *Reconciler) processRule(ctx context.Context,
 	rule config.HealthEventsAnalyzerRule,
-	event *storeconnector.HealthEventWithStatus) (bool, error) {
+	event *data_models.HealthEventWithStatus) (bool, error) {
 	// Validate all sequences from DB docs
 	matchedSequences, err := r.validateAllSequenceCriteria(ctx, rule, *event)
 	if err != nil {
@@ -189,38 +188,44 @@ func (r *Reconciler) processRule(ctx context.Context,
 		return false, nil
 	}
 
-	return r.publishMatchedEvent(ctx, rule, event)
+	err = r.publishMatchedEvent(ctx, rule, event)
+	if err != nil {
+		slog.Error("Error in publishing the matched event", "error", err)
+		return false, fmt.Errorf("error in publishing the matched event: %w", err)
+	}
+
+	return true, nil
 }
 
 // publishMatchedEvent publishes an event when a rule matches
 func (r *Reconciler) publishMatchedEvent(ctx context.Context,
 	rule config.HealthEventsAnalyzerRule,
-	event *storeconnector.HealthEventWithStatus) (bool, error) {
+	event *data_models.HealthEventWithStatus) error {
 	slog.Info("Rule matched for event", "rule_name", rule.Name, "event", event)
 	ruleMatchedTotal.WithLabelValues(rule.Name, event.HealthEvent.NodeName).Inc()
 
 	actionVal := r.getRecommendedActionValue(rule.RecommendedAction, rule.Name)
 
-	err := r.config.Publisher.Publish(ctx, event.HealthEvent, platform_connectors.RecommenedAction(actionVal), rule.Name)
+	err := r.config.Publisher.Publish(ctx, event.HealthEvent, platform_connectors.RecommendedAction(actionVal), rule.Name)
 	if err != nil {
 		slog.Error("Error in publishing the new fatal event", "error", err)
-		return false, fmt.Errorf("error in publishing the new fatal event: %w", err)
+		return fmt.Errorf("error in publishing the new fatal event: %w", err)
 	}
 
 	slog.Info("New event successfully published for matching rule", "rule_name", rule.Name)
 
-	return true, nil
+	return nil
 }
 
 // getRecommendedActionValue returns the action value, with fallback to RecommenedAction_CONTACT_SUPPORT if invalid
 func (r *Reconciler) getRecommendedActionValue(recommendedAction, ruleName string) int32 {
-	actionVal, ok := platform_connectors.RecommenedAction_value[recommendedAction]
+	actionVal, ok := platform_connectors.RecommendedAction_value[recommendedAction]
 	if !ok {
-		defaultAction := int32(platform_connectors.RecommenedAction_CONTACT_SUPPORT)
+		defaultAction := int32(platform_connectors.RecommendedAction_CONTACT_SUPPORT)
 		slog.Warn("Invalid recommended_action in rule; defaulting to CONTACT_SUPPORT",
 			"recommended_action", recommendedAction,
 			"rule_name", ruleName,
-			"default_action", platform_connectors.RecommenedAction_name[defaultAction])
+			"default_action", platform_connectors.RecommendedAction_name[defaultAction])
 
 		return defaultAction
 	}
@@ -229,7 +234,7 @@ func (r *Reconciler) getRecommendedActionValue(recommendedAction, ruleName strin
 }
 
 func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule config.HealthEventsAnalyzerRule,
-	healthEventWithStatus storeconnector.HealthEventWithStatus) (bool, error) {
+	healthEventWithStatus data_models.HealthEventWithStatus) (bool, error) {
 	slog.Debug("Evaluating rule for event", "rule_name", rule.Name, "event", healthEventWithStatus)
 
 	timeWindow, err := time.ParseDuration(rule.TimeWindow)
@@ -317,6 +322,7 @@ func getFacet(facetName string, timeWindow time.Duration, matchCriteria bson.D) 
 				{Key: "healthevent.generatedtimestamp.seconds", Value: bson.D{
 					{Key: "$gte", Value: time.Now().UTC().Add(-timeWindow).Unix()},
 				}},
+				{Key: "healthevent.checkname", Value: bson.D{{Key: "$ne", Value: "HealthEventsAnalyzer"}}},
 			}}},
 			bson.D{{Key: "$match", Value: matchCriteria}},
 			bson.D{{Key: "$count", Value: "count"}},

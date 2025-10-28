@@ -88,7 +88,7 @@ func TestScaleHealthEvents(t *testing.T) {
 	feature.Assess(fmt.Sprintf("Send unhealthy events to %d%% of nodes", nodeSubsetPercentage), func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		healthCheckNodes := ctx.Value(keyHealthCheckNodes).([]string)
 
-		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "79", "data/fatal-health-event.json")
+		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "79", "data/fatal-health-event.json", "")
 		assert.NoError(t, err, "failed to send unhealthy events")
 
 		return ctx
@@ -119,7 +119,7 @@ func TestScaleHealthEvents(t *testing.T) {
 	feature.Assess(fmt.Sprintf("Send healthy events to %d%% of nodes", nodeSubsetPercentage), func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		healthCheckNodes := ctx.Value(keyHealthCheckNodes).([]string)
 
-		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "79", "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "79", "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy events")
 
 		return ctx

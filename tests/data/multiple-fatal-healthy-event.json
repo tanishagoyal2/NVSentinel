@@ -1,0 +1,20 @@
+{
+    "version": 1,
+    "agent": "health-events-analyzer",
+    "componentClass": "GPU",
+    "checkName": "CHECK_NAME",
+    "isFatal": false,
+    "isHealthy": true,
+    "message": "XID error occured",
+    "recommendedAction": 15,
+    "errorCode": [
+        "ERROR_CODE"
+    ],
+    "entitiesImpacted": [
+        {
+            "entityType": "GPU",
+            "entityValue": "0"
+        }
+    ],
+    "nodeName": "NODE_NAME"
+}

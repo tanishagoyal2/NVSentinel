@@ -31,11 +31,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 // SendHealthEventsToNodes sends health events from the specified `eventFilePath` to all nodes listed in `nodeNames` concurrently.
-func SendHealthEventsToNodes(nodeNames []string, errorCode string, eventFilePath string) error {
+func SendHealthEventsToNodes(nodeNames []string, errorCode string, eventFilePath string, checkName string) error {
 	eventData, err := os.ReadFile(eventFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read health event file %s: %w", eventFilePath, err)
@@ -57,6 +56,7 @@ func SendHealthEventsToNodes(nodeNames []string, errorCode string, eventFilePath
 
 			eventJSON := strings.ReplaceAll(string(eventData), "NODE_NAME", nodeName)
 			eventJSON = strings.ReplaceAll(eventJSON, "ERROR_CODE", errorCode)
+			eventJSON = strings.ReplaceAll(eventJSON, "CHECK_NAME", checkName)
 
 			resp, err := client.Post("http://localhost:8080/health-event", "application/json", strings.NewReader(eventJSON))
 			if err != nil {
@@ -182,32 +182,4 @@ func QueryHealthEventByFilter(ctx context.Context, filter bson.M) (map[string]in
 		return nil, fmt.Errorf("find event: %w", err)
 	}
 	return result, nil
-}
-
-// NOTE: this functionality is added specifically to remove node conditions added by health event analyzer
-// because currently health event analyzer doesn't send healthy event for the corresponding fatal event.
-func TestCleanUp(ctx context.Context, gpuNodeName string, nodeCondition string, errorCode string, c *envconf.Config) error {
-	// Send healthy event to clear the error
-	err := SendHealthEventsToNodes([]string{gpuNodeName}, errorCode, "data/healthy-event.json")
-	if err != nil {
-		klog.Errorf("failed to send healthy events during cleanup: %v", err)
-	}
-	time.Sleep(5 * time.Second)
-
-	// Clean up node condition and uncordon
-	client, err := c.NewClient()
-	if err != nil {
-		klog.Errorf("failed to create client during cleanup: %v", err)
-		return fmt.Errorf("failed to create client during cleanup: %w", err)
-	}
-
-	err = CleanupNodeConditionAndUncordon(ctx, client, gpuNodeName, nodeCondition)
-	if err != nil {
-		klog.Errorf("failed to cleanup node condition and uncordon node %s: %v", gpuNodeName, err)
-		return fmt.Errorf("failed to cleanup node condition and uncordon node %s: %w", gpuNodeName, err)
-	}
-
-	klog.Infof("Successfully cleaned up node condition and uncordoned node %s", gpuNodeName)
-
-	return nil
 }

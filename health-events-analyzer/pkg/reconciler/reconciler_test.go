@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
+	data_models "github.com/nvidia/nvsentinel/data-models/pkg/model"
 	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
 	"github.com/nvidia/nvsentinel/health-events-analyzer/pkg/publisher"
-	storeconnector "github.com/nvidia/nvsentinel/platform-connectors/pkg/connectors/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.mongodb.org/mongo-driver/bson"
@@ -132,7 +132,7 @@ var (
 			RecommendedAction: "CONTACT_SUPPORT",
 		},
 	}
-	healthEvent_13 = storeconnector.HealthEventWithStatus{
+	healthEvent_13 = data_models.HealthEventWithStatus{
 		CreatedAt: time.Now(),
 		HealthEvent: &platform_connectors.HealthEvent{
 			Version:        1,
@@ -156,9 +156,9 @@ var (
 			},
 			NodeName: "node1",
 		},
-		HealthEventStatus: storeconnector.HealthEventStatus{},
+		HealthEventStatus: data_models.HealthEventStatus{},
 	}
-	healthEvent_48 = storeconnector.HealthEventWithStatus{
+	healthEvent_48 = data_models.HealthEventWithStatus{
 		CreatedAt: time.Now(),
 		HealthEvent: &platform_connectors.HealthEvent{
 			Version:        1,
@@ -182,7 +182,7 @@ var (
 			},
 			NodeName: "node1",
 		},
-		HealthEventStatus: storeconnector.HealthEventStatus{},
+		HealthEventStatus: data_models.HealthEventStatus{},
 	}
 )
 
@@ -208,7 +208,7 @@ func TestHandleEvent(t *testing.T) {
 			CheckName:          "rule2",                  // Publisher sets this to ruleName
 			ComponentClass:     healthEvent_13.HealthEvent.ComponentClass,
 			Message:            healthEvent_13.HealthEvent.Message,
-			RecommendedAction:  platform_connectors.RecommenedAction_CONTACT_SUPPORT, // From rule2
+			RecommendedAction:  platform_connectors.RecommendedAction_CONTACT_SUPPORT, // From rule2
 			ErrorCode:          healthEvent_13.HealthEvent.ErrorCode,
 			IsHealthy:          false, // Publisher sets this
 			IsFatal:            true,  // Publisher sets this
@@ -222,7 +222,7 @@ func TestHandleEvent(t *testing.T) {
 			Events:  []*platform_connectors.HealthEvent{expectedTransformedEvent},
 		}
 
-		mockPublisher.On("HealthEventOccuredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
+		mockPublisher.On("HealthEventOccurredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
 
 		mockCursor, _ := createMockCursor([]bson.M{{"ruleMatched": true}})
 		mockClient.On("Aggregate", ctx, mock.Anything, mock.Anything).Return(mockCursor, nil)
@@ -252,7 +252,7 @@ func TestHandleEvent(t *testing.T) {
 			CheckName:          "rule1",                  // Publisher sets this to ruleName
 			ComponentClass:     healthEvent_13.HealthEvent.ComponentClass,
 			Message:            healthEvent_13.HealthEvent.Message,
-			RecommendedAction:  platform_connectors.RecommenedAction_CONTACT_SUPPORT, // From rule1
+			RecommendedAction:  platform_connectors.RecommendedAction_CONTACT_SUPPORT, // From rule1
 			ErrorCode:          healthEvent_13.HealthEvent.ErrorCode,
 			IsHealthy:          false, // Publisher sets this
 			IsFatal:            true,  // Publisher sets this
@@ -266,7 +266,7 @@ func TestHandleEvent(t *testing.T) {
 			Events:  []*platform_connectors.HealthEvent{expectedTransformedEvent},
 		}
 
-		mockPublisher.On("HealthEventOccuredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
+		mockPublisher.On("HealthEventOccurredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
 		mockCursor, _ := createMockCursor([]bson.M{{"ruleMatched": true}})
 		mockClient.On("Aggregate", ctx, mock.Anything, mock.Anything).Return(mockCursor, nil)
 
@@ -292,7 +292,7 @@ func TestHandleEvent(t *testing.T) {
 		published, _ := reconciler.handleEvent(ctx, &healthEvent_48)
 		assert.False(t, published)
 		mockClient.AssertExpectations(t)
-		mockPublisher.AssertNotCalled(t, "HealthEventOccuredV1")
+		mockPublisher.AssertNotCalled(t, "HealthEventOccurredV1")
 	})
 	t.Run("one sequence matched", func(t *testing.T) {
 		mockClient := new(mockCollectionClient)
@@ -311,7 +311,7 @@ func TestHandleEvent(t *testing.T) {
 		published, _ := reconciler.handleEvent(ctx, &healthEvent_13)
 		assert.False(t, published)
 		mockClient.AssertExpectations(t)
-		mockPublisher.AssertNotCalled(t, "HealthEventOccuredV1")
+		mockPublisher.AssertNotCalled(t, "HealthEventOccurredV1")
 
 		healthEvent_13.HealthEvent.ErrorCode = []string{"13"}
 	})

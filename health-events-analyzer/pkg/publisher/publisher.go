@@ -96,7 +96,7 @@ func NewPublisher(platformConnectorClient pb.PlatformConnectorClient) *Publisher
 }
 
 func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
-	recommendedAction pb.RecommenedAction, ruleName string) error {
+	recommendedAction pb.RecommendedAction, ruleName string) error {
 	newEvent := proto.Clone(event).(*pb.HealthEvent)
 
 	// Override fields with new values

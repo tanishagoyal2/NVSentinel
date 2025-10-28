@@ -57,5 +57,5 @@ config: |
   recommended_action = "REPORT_ISSUE"
 
   [[rules.sequence]]
-  criteria = { "healthevent.entitiesimpacted.0.entitytype" = "GPU","healthevent.entitiesimpacted.0.entityvalue" = "this.healthevent.entitiesimpacted.0.entityvalue","healthevent.errorcode.0" = "this.healthevent.errorcode.0","healthevent.nodename" = "this.healthevent.nodename","healthevent.checkname" = "{\"$ne\": \"HealthEventsAnalyzer\"}"}
+  criteria = { "healthevent.ishealthy" = false, "healthevent.entitiesimpacted.0.entitytype" = "GPU","healthevent.entitiesimpacted.0.entityvalue" = "this.healthevent.entitiesimpacted.0.entityvalue","healthevent.errorcode.0" = "this.healthevent.errorcode.0","healthevent.nodename" = "this.healthevent.nodename"}
   errorCount = 5

@@ -110,7 +110,7 @@ func TestFatalHealthEvent(t *testing.T) {
 	feature.Assess("Can send fatal health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/fatal-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/fatal-health-event.json", "")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -185,7 +185,7 @@ func TestFatalHealthEvent(t *testing.T) {
 	feature.Assess("Can send healthy event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -301,7 +301,7 @@ func TestFatalUnsupportedHealthEvent(t *testing.T) {
 	feature.Assess("Can send fatal health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/unsupported-health-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "79", "data/unsupported-health-event.json", "")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx
@@ -373,7 +373,7 @@ func TestFatalUnsupportedHealthEvent(t *testing.T) {
 	feature.Assess("Can send healthy event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "145", "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes([]string{nodeName}, "145", "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send health event")
 
 		return ctx

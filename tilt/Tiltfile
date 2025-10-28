@@ -115,11 +115,7 @@ k8s_resource(
     ],
     resource_deps=['cert-manager'],
 )
-k8s_resource(
-    workload='nvsentinel-mongodb',
-    resource_deps=['cert-manager-resources'],
-    port_forwards='27017:27017',
-)
+
 k8s_resource(
     new_name='prometheus-resources',
     objects=['nvsentinel-pod-monitor:podmonitor'],
