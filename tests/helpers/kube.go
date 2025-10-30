@@ -1279,3 +1279,28 @@ func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klie
 		return false
 	}, WaitTimeout, WaitInterval, "node %s should have a condition with check name %s", nodeName, checkName)
 }
+
+// EnsureNodeConditionNotPresent ensures that the node does NOT have a condition with the reason containing the specified checkName.
+func EnsureNodeConditionNotPresent(ctx context.Context, t *testing.T, c klient.Client, nodeName, checkName string) {
+	const waitTimeout = 30 * time.Second
+
+	require.Never(t, func() bool {
+		node, err := GetNodeByName(ctx, c, nodeName)
+		if err != nil {
+			t.Logf("failed to get node %s: %v", nodeName, err)
+			return false
+		}
+
+		// Check if any condition has the specified check name
+		for _, condition := range node.Status.Conditions {
+			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) {
+				t.Logf("ERROR: Found unexpected node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
+					condition.Type, condition.Reason, condition.Status, condition.Message)
+				return true
+			}
+		}
+
+		t.Logf("Node %s correctly does not have a condition with check name '%s'", nodeName, checkName)
+		return false
+	}, waitTimeout, WaitInterval, "node %s should NOT have a condition with check name %s", nodeName, checkName)
+}

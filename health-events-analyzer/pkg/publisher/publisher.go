@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"time"
 
-	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
+	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,7 +34,7 @@ const (
 )
 
 type PublisherConfig struct {
-	platformConnectorClient pb.PlatformConnectorClient
+	platformConnectorClient protos.PlatformConnectorClient
 }
 
 func isRetryableError(err error) bool {
@@ -51,7 +51,7 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEvents *pb.HealthEvents) error {
+func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEvents *protos.HealthEvents) error {
 	backoff := wait.Backoff{
 		Steps:    maxRetries,
 		Duration: delay,
@@ -91,13 +91,13 @@ func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEv
 	return nil
 }
 
-func NewPublisher(platformConnectorClient pb.PlatformConnectorClient) *PublisherConfig {
+func NewPublisher(platformConnectorClient protos.PlatformConnectorClient) *PublisherConfig {
 	return &PublisherConfig{platformConnectorClient: platformConnectorClient}
 }
 
-func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
-	recommendedAction pb.RecommendedAction, ruleName string) error {
-	newEvent := proto.Clone(event).(*pb.HealthEvent)
+func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent,
+	recommendedAction protos.RecommendedAction, ruleName string) error {
+	newEvent := proto.Clone(event).(*protos.HealthEvent)
 
 	// Override fields with new values
 	newEvent.Agent = "health-events-analyzer"
@@ -106,9 +106,9 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
 	newEvent.IsHealthy = false
 	newEvent.IsFatal = true
 
-	req := &pb.HealthEvents{
+	req := &protos.HealthEvents{
 		Version: 1,
-		Events:  []*pb.HealthEvent{newEvent},
+		Events:  []*protos.HealthEvent{newEvent},
 	}
 
 	return p.sendHealthEventWithRetry(ctx, req)

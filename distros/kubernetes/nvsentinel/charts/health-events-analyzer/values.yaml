@@ -33,11 +33,14 @@ logLevel: info
 
 config: |
   [[rules]]
+  # The node condition for this rule needs to be removed manually because health-events-analyzer does not publish healthy events to clear it.
+  # Please run the command below to remove the node condition:
+  # kubectl get node <NODE_NAME> -o json | jq '.status.conditions |= map(select(.type != "MultipleFatalError"))' | kubectl replace -f - --subresource=status
   name = "MultipleFatalError"
   description = "Detect occurrence of multiple faults within 7 days"
   time_window = "168h"
-  recommended_action = "REPORT_ISSUE"
+  recommended_action = "CONTACT_SUPPORT"
 
   [[rules.sequence]]
-  criteria = {"healtheventstatus.faultremediated" = true, "healthevent.nodename" = "this.healthevent.nodename"}
+  criteria = {"healtheventstatus.faultremediated" = true, "healthevent.nodename" = "this.healthevent.nodename", "healthevent.isfatal" = "this.healthevent.isfatal"}
   errorCount = 5

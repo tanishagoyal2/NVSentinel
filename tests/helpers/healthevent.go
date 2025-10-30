@@ -182,7 +182,7 @@ func sendHealthEventData(nodeNames []string, eventData []byte) error {
 		wg.Add(1)
 		go func(nodeName string) {
 			defer wg.Done()
-			klog.Infof("Sending health event to node %s with error code %s", nodeName, errorCode)
+			t.Logf("Sending %s event to node %s with error code %s", eventFilePath, nodeName, errorCode)
 
 			eventJSON := strings.ReplaceAll(string(eventData), "NODE_NAME", nodeName)
 			eventJSON = strings.ReplaceAll(eventJSON, "ERROR_CODE", errorCode)

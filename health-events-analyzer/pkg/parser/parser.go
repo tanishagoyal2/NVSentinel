@@ -22,13 +22,13 @@ import (
 	"strconv"
 	"strings"
 
-	data_models "github.com/nvidia/nvsentinel/data-models/pkg/model"
-	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
+	datamodels "github.com/nvidia/nvsentinel/data-models/pkg/model"
+	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
 type Parser struct {
-	Event data_models.HealthEventWithStatus
+	Event datamodels.HealthEventWithStatus
 }
 
 // parseSequenceString converts a criteria map into a BSON document for MongoDB queries
@@ -106,7 +106,7 @@ func getFieldByName(val reflect.Value, fieldName string) any {
 	return nil
 }
 
-func getValueFromHealthEvent(event *platform_connectors.HealthEvent, parts []string) any {
+func getValueFromHealthEvent(event *protos.HealthEvent, parts []string) any {
 	rootField := strings.ToLower(parts[0])
 
 	// Simple one-level field lookup
@@ -129,7 +129,7 @@ func getValueFromHealthEvent(event *platform_connectors.HealthEvent, parts []str
 }
 
 // getErrorCode safely returns event.ErrorCode[index] if present.
-func getErrorCode(event *platform_connectors.HealthEvent, parts []string) any {
+func getErrorCode(event *protos.HealthEvent, parts []string) any {
 	idx, err := strconv.Atoi(parts[0])
 	if err != nil || idx >= len(event.ErrorCode) || idx < 0 {
 		return nil
@@ -139,7 +139,7 @@ func getErrorCode(event *platform_connectors.HealthEvent, parts []string) any {
 }
 
 // getMetadata returns the value for a metadata key if it exists.
-func getMetadata(event *platform_connectors.HealthEvent, parts []string) any {
+func getMetadata(event *protos.HealthEvent, parts []string) any {
 	key := parts[0]
 	if val, ok := event.Metadata[key]; ok {
 		return val
@@ -148,7 +148,7 @@ func getMetadata(event *platform_connectors.HealthEvent, parts []string) any {
 	return nil
 }
 
-func getEntitiesImpacted(event *platform_connectors.HealthEvent, parts []string) any {
+func getEntitiesImpacted(event *protos.HealthEvent, parts []string) any {
 	if len(parts) < 2 {
 		return nil
 	}
@@ -165,7 +165,7 @@ func getEntitiesImpacted(event *platform_connectors.HealthEvent, parts []string)
 	return nil
 }
 
-func getGeneratedTimestamp(event *platform_connectors.HealthEvent, parts []string) any {
+func getGeneratedTimestamp(event *protos.HealthEvent, parts []string) any {
 	if len(parts) < 2 {
 		return nil
 	}
@@ -183,11 +183,7 @@ func getGeneratedTimestamp(event *platform_connectors.HealthEvent, parts []strin
 	return nil
 }
 
-func getValueFromHealthEventStatus(event data_models.HealthEventStatus, parts []string) any {
-	if len(parts) == 0 {
-		return nil
-	}
-
+func getValueFromHealthEventStatus(event datamodels.HealthEventStatus, parts []string) any {
 	rootField := strings.ToLower(parts[0])
 
 	if len(parts) == 1 {

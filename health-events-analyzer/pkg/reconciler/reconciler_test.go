@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	data_models "github.com/nvidia/nvsentinel/data-models/pkg/model"
-	platform_connectors "github.com/nvidia/nvsentinel/data-models/pkg/protos"
+	datamodels "github.com/nvidia/nvsentinel/data-models/pkg/model"
+	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
 	"github.com/nvidia/nvsentinel/health-events-analyzer/pkg/publisher"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +39,7 @@ type mockPublisher struct {
 	mock.Mock
 }
 
-func (m *mockPublisher) HealthEventOccurredV1(ctx context.Context, events *platform_connectors.HealthEvents, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (m *mockPublisher) HealthEventOccurredV1(ctx context.Context, events *protos.HealthEvents, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	args := m.Called(ctx, events)
 	return args.Get(0).(*emptypb.Empty), args.Error(1)
 }
@@ -132,9 +132,9 @@ var (
 			RecommendedAction: "CONTACT_SUPPORT",
 		},
 	}
-	healthEvent_13 = data_models.HealthEventWithStatus{
+	healthEvent_13 = datamodels.HealthEventWithStatus{
 		CreatedAt: time.Now(),
-		HealthEvent: &platform_connectors.HealthEvent{
+		HealthEvent: &protos.HealthEvent{
 			Version:        1,
 			Agent:          "gpu-health-monitor",
 			ComponentClass: "GPU",
@@ -143,7 +143,7 @@ var (
 			IsHealthy:      false,
 			Message:        "XID error occurred",
 			ErrorCode:      []string{"13"},
-			EntitiesImpacted: []*platform_connectors.Entity{{
+			EntitiesImpacted: []*protos.Entity{{
 				EntityType:  "GPU",
 				EntityValue: "1",
 			}},
@@ -156,11 +156,11 @@ var (
 			},
 			NodeName: "node1",
 		},
-		HealthEventStatus: data_models.HealthEventStatus{},
+		HealthEventStatus: datamodels.HealthEventStatus{},
 	}
-	healthEvent_48 = data_models.HealthEventWithStatus{
+	healthEvent_48 = datamodels.HealthEventWithStatus{
 		CreatedAt: time.Now(),
-		HealthEvent: &platform_connectors.HealthEvent{
+		HealthEvent: &protos.HealthEvent{
 			Version:        1,
 			Agent:          "gpu-health-monitor",
 			ComponentClass: "GPU",
@@ -169,7 +169,7 @@ var (
 			IsHealthy:      false,
 			Message:        "XID error occurred",
 			ErrorCode:      []string{"48"},
-			EntitiesImpacted: []*platform_connectors.Entity{{
+			EntitiesImpacted: []*protos.Entity{{
 				EntityType:  "GPU",
 				EntityValue: "1",
 			}},
@@ -182,7 +182,7 @@ var (
 			},
 			NodeName: "node1",
 		},
-		HealthEventStatus: data_models.HealthEventStatus{},
+		HealthEventStatus: datamodels.HealthEventStatus{},
 	}
 )
 
@@ -202,13 +202,13 @@ func TestHandleEvent(t *testing.T) {
 		reconciler := NewReconciler(cfg)
 
 		// Create the expected health event that the publisher will create (transformed)
-		expectedTransformedEvent := &platform_connectors.HealthEvent{
+		expectedTransformedEvent := &protos.HealthEvent{
 			Version:            healthEvent_13.HealthEvent.Version,
 			Agent:              "health-events-analyzer", // Publisher sets this
 			CheckName:          "rule2",                  // Publisher sets this to ruleName
 			ComponentClass:     healthEvent_13.HealthEvent.ComponentClass,
 			Message:            healthEvent_13.HealthEvent.Message,
-			RecommendedAction:  platform_connectors.RecommendedAction_CONTACT_SUPPORT, // From rule2
+			RecommendedAction:  protos.RecommendedAction_CONTACT_SUPPORT, // From rule2
 			ErrorCode:          healthEvent_13.HealthEvent.ErrorCode,
 			IsHealthy:          false, // Publisher sets this
 			IsFatal:            true,  // Publisher sets this
@@ -217,9 +217,9 @@ func TestHandleEvent(t *testing.T) {
 			GeneratedTimestamp: healthEvent_13.HealthEvent.GeneratedTimestamp,
 			NodeName:           healthEvent_13.HealthEvent.NodeName,
 		}
-		expectedHealthEvents := &platform_connectors.HealthEvents{
+		expectedHealthEvents := &protos.HealthEvents{
 			Version: 1,
-			Events:  []*platform_connectors.HealthEvent{expectedTransformedEvent},
+			Events:  []*protos.HealthEvent{expectedTransformedEvent},
 		}
 
 		mockPublisher.On("HealthEventOccurredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
@@ -245,13 +245,13 @@ func TestHandleEvent(t *testing.T) {
 		reconciler := NewReconciler(cfg)
 
 		// This test uses all rules, so rule1 (IsMultipleFatalErrorRule: true) will match
-		expectedTransformedEvent := &platform_connectors.HealthEvent{
+		expectedTransformedEvent := &protos.HealthEvent{
 			Version:            healthEvent_13.HealthEvent.Version,
 			Agent:              "health-events-analyzer", // Publisher sets this
 			CheckName:          "rule1",                  // Publisher sets this to ruleName
 			ComponentClass:     healthEvent_13.HealthEvent.ComponentClass,
 			Message:            healthEvent_13.HealthEvent.Message,
-			RecommendedAction:  platform_connectors.RecommendedAction_CONTACT_SUPPORT,
+			RecommendedAction:  protos.RecommendedAction_CONTACT_SUPPORT,
 			ErrorCode:          healthEvent_13.HealthEvent.ErrorCode,
 			IsHealthy:          false, // Publisher sets this
 			IsFatal:            true,  // Publisher sets this
@@ -260,9 +260,9 @@ func TestHandleEvent(t *testing.T) {
 			GeneratedTimestamp: healthEvent_13.HealthEvent.GeneratedTimestamp,
 			NodeName:           healthEvent_13.HealthEvent.NodeName,
 		}
-		expectedHealthEvents := &platform_connectors.HealthEvents{
+		expectedHealthEvents := &protos.HealthEvents{
 			Version: 1,
-			Events:  []*platform_connectors.HealthEvent{expectedTransformedEvent},
+			Events:  []*protos.HealthEvent{expectedTransformedEvent},
 		}
 
 		mockPublisher.On("HealthEventOccurredV1", ctx, expectedHealthEvents).Return(&emptypb.Empty{}, nil)
