@@ -1,10 +1,10 @@
 {
     "version": 1,
-    "agent": "gpu-health-monitor",
+    "agent": "health-events-analyzer",
     "componentClass": "GPU",
-    "checkName": "GpuXidError",
-    "isFatal": true,
-    "isHealthy": false,
+    "checkName": "CHECK_NAME",
+    "isFatal": false,
+    "isHealthy": true,
     "message": "XID error occurred",
     "recommendedAction": 15,
     "errorCode": [

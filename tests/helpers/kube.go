@@ -24,6 +24,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1254,4 +1255,27 @@ func PortForwardPod(ctx context.Context, restConfig *rest.Config, namespace, pod
 	}()
 
 	return stopChan, readyChan
+}
+
+// WaitForNodeConditionWithCheckName waits for the node to have a condition with the reason containing the specified checkName.
+func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klient.Client, nodeName, checkName string) {
+	require.Eventually(t, func() bool {
+		node, err := GetNodeByName(ctx, c, nodeName)
+		if err != nil {
+			t.Logf("failed to get node %s: %v", nodeName, err)
+			return false
+		}
+
+		// Look for a condition where the reason contains the check name
+		for _, condition := range node.Status.Conditions {
+			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) {
+				t.Logf("Found node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
+					condition.Type, condition.Reason, condition.Status, condition.Message)
+				return true
+			}
+		}
+
+		t.Logf("Node %s does not have a condition with check name '%s'", nodeName, checkName)
+		return false
+	}, WaitTimeout, WaitInterval, "node %s should have a condition with check name %s", nodeName, checkName)
 }

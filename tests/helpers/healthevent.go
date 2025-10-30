@@ -182,8 +182,11 @@ func sendHealthEventData(nodeNames []string, eventData []byte) error {
 		wg.Add(1)
 		go func(nodeName string) {
 			defer wg.Done()
+			klog.Infof("Sending health event to node %s with error code %s", nodeName, errorCode)
 
 			eventJSON := strings.ReplaceAll(string(eventData), "NODE_NAME", nodeName)
+			eventJSON = strings.ReplaceAll(eventJSON, "ERROR_CODE", errorCode)
+			eventJSON = strings.ReplaceAll(eventJSON, "CHECK_NAME", checkName)
 
 			resp, err := client.Post("http://localhost:8080/health-event", "application/json", strings.NewReader(eventJSON))
 			if err != nil {

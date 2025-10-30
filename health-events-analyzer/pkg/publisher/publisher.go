@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -69,20 +70,22 @@ func (p *PublisherConfig) sendHealthEventWithRetry(ctx context.Context, healthEv
 
 		if isRetryableError(err) {
 			slog.Error("Retryable error occurred", "error", err)
-			FatalEventPublishingError.WithLabelValues("retryable_error").Inc()
+			fatalEventPublishingError.WithLabelValues("retryable_error").Inc()
 
 			return false, nil
 		}
 
 		slog.Error("Non-retryable error occurred", "error", err)
-		FatalEventPublishingError.WithLabelValues("non_retryable_error").Inc()
+		fatalEventPublishingError.WithLabelValues("non_retryable_error").Inc()
 
-		return false, fmt.Errorf("non-retryable error publishing health event: %w", err)
+		return false, fmt.Errorf("non retryable error occurred while sending health event: %w", err)
 	})
 
 	if err != nil {
 		slog.Error("All retry attempts to send health event failed", "error", err)
-		return fmt.Errorf("failed to publish health event after retries: %w", err)
+		fatalEventPublishingError.WithLabelValues("event_publishing_to_UDS_error").Inc()
+
+		return fmt.Errorf("all retry attempts to send health event failed: %w", err)
 	}
 
 	return nil
@@ -93,13 +96,19 @@ func NewPublisher(platformConnectorClient pb.PlatformConnectorClient) *Publisher
 }
 
 func (p *PublisherConfig) Publish(ctx context.Context, event *pb.HealthEvent,
-	recommendedAction pb.RecommendedAction) error {
-	// Create the health events request
-	event.IsFatal = true
-	event.RecommendedAction = recommendedAction
+	recommendedAction pb.RecommendedAction, ruleName string) error {
+	newEvent := proto.Clone(event).(*pb.HealthEvent)
+
+	// Override fields with new values
+	newEvent.Agent = "health-events-analyzer"
+	newEvent.CheckName = ruleName
+	newEvent.RecommendedAction = recommendedAction
+	newEvent.IsHealthy = false
+	newEvent.IsFatal = true
+
 	req := &pb.HealthEvents{
-		Version: 1, // Set appropriate version
-		Events:  []*pb.HealthEvent{event},
+		Version: 1,
+		Events:  []*pb.HealthEvent{newEvent},
 	}
 
 	return p.sendHealthEventWithRetry(ctx, req)

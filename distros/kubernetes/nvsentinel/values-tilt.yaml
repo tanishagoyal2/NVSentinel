@@ -33,7 +33,7 @@ global:
     enabled: true
 
   healthEventsAnalyzer:
-    enabled: false
+    enabled: true
 
   faultQuarantine:
     enabled: true

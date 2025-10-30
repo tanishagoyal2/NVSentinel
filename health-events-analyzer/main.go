@@ -59,7 +59,7 @@ func createPipeline() mongo.Pipeline {
 		bson.D{
 			{Key: "$match", Value: bson.D{
 				{Key: "operationType", Value: "insert"},
-				{Key: "fullDocument.healthevent.isfatal", Value: false},
+				{Key: "fullDocument.healthevent.agent", Value: bson.D{{Key: "$ne", Value: "health-events-analyzer"}}},
 				{Key: "fullDocument.healthevent.ishealthy", Value: false},
 			}},
 		},
