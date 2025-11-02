@@ -1258,7 +1258,7 @@ func PortForwardPod(ctx context.Context, restConfig *rest.Config, namespace, pod
 }
 
 // WaitForNodeConditionWithCheckName waits for the node to have a condition with the reason containing the specified checkName.
-func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klient.Client, nodeName, checkName string) {
+func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klient.Client, nodeName, checkName, message string) {
 	require.Eventually(t, func() bool {
 		node, err := GetNodeByName(ctx, c, nodeName)
 		if err != nil {
@@ -1268,7 +1268,7 @@ func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klie
 
 		// Look for a condition where the reason contains the check name
 		for _, condition := range node.Status.Conditions {
-			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) {
+			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) && strings.Contains(message, condition.Message) {
 				t.Logf("Found node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
 					condition.Type, condition.Reason, condition.Status, condition.Message)
 				return true

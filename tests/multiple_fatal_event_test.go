@@ -59,10 +59,16 @@ func TestMultipleFatalEventRule(t *testing.T) {
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create kubernetes client")
+
+		// clean up any existing node conditions
+		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
+		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
+		assert.NoError(t, err, "failed to send non-fatal events")
+
 		xidsToInject := []string{ERRORCODE_13, ERRORCODE_48, ERRORCODE_13, ERRORCODE_48, ERRORCODE_13}
 
 		// inject 5 fatal errors and let the remediation cycle finish
-
+		t.Logf("Injecting fatal errors to node %s", gpuNodeName)
 		for _, xid := range xidsToInject {
 			// inject XID error
 			err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, xid, "data/fatal-health-event.json", "")
@@ -92,7 +98,7 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		assert.NoError(t, err, "failed to send fatal events")
 
 		// Check node condition for matched ruleset
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleFatalError")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleFatalError", "ErrorCode:31 GPU:0 XID error occurred Recommended Action=CONTACT_SUPPORT;")
 
 		return ctx
 	})
@@ -143,8 +149,13 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
 		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
 		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
-		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
+		// clean up any existing node conditions
+		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
+		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
+		assert.NoError(t, err, "failed to send non-fatal events")
+
+		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
 		for i := 0; i < 5; i++ {
 			// inject XID error
 			err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
