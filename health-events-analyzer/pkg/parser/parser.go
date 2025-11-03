@@ -29,6 +29,7 @@ import (
 // parseSequenceString converts a criteria map into a BSON document for MongoDB queries
 func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWithStatus) (bson.D, error) {
 	doc := bson.D{}
+	allowedStringPattern := regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 
 	for key, value := range criteria {
 		strVal, isString := value.(string)
@@ -60,7 +61,7 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 		}
 
 		// String with only allowed characters (alphanumeric, dot, and hyphen)
-		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9.-]+$`, strVal); matched {
+		if allowedStringPattern.MatchString(strVal) {
 			doc = append(doc, bson.E{Key: key, Value: strVal})
 			continue
 		}
