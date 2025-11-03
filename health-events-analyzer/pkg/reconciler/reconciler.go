@@ -247,16 +247,13 @@ func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule confi
 
 	// Create facets for each sequence
 	facets := bson.D{}
-	parser := parser.Parser{
-		Event: healthEventWithStatus,
-	}
 
 	for i, seq := range rule.Sequence {
 		slog.Debug("Evaluating sequence", "sequence", seq)
 
 		facetName := "sequence_" + strconv.Itoa(i)
 
-		matchCriteria, err := parser.ParseSequenceString(seq.Criteria)
+		matchCriteria, err := parser.ParseSequenceString(seq.Criteria, healthEventWithStatus)
 		if err != nil {
 			slog.Error("Failed to parse sequence criteria", "error", err)
 

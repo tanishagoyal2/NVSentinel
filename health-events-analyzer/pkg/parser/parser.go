@@ -17,22 +17,16 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
 
 	datamodels "github.com/nvidia/nvsentinel/data-models/pkg/model"
-	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-type Parser struct {
-	Event datamodels.HealthEventWithStatus
-}
-
 // parseSequenceString converts a criteria map into a BSON document for MongoDB queries
-func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
+func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWithStatus) (bson.D, error) {
 	doc := bson.D{}
 
 	for key, value := range criteria {
@@ -47,10 +41,10 @@ func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
 		// "this." reference → resolve from current event
 		if strings.HasPrefix(strVal, "this.") {
 			fieldPath := strings.TrimPrefix(strVal, "this.")
-			resolvedValue, err := p.getValueFromPath(fieldPath)
+			resolvedValue, err := getValueFromPath(fieldPath, event)
 
 			if err != nil {
-				return doc, fmt.Errorf("error in getting value from path: %w", err)
+				return nil, fmt.Errorf("error in getting value from path: %w", err)
 			}
 
 			doc = append(doc, bson.E{Key: key, Value: resolvedValue})
@@ -62,11 +56,10 @@ func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
 		if strings.HasPrefix(strVal, "{") && strings.HasSuffix(strVal, "}") {
 			var operatorMap map[string]any
 			if err := json.Unmarshal([]byte(strVal), &operatorMap); err != nil {
-				slog.Warn("Failed to parse MongoDB operator string, treating as literal", "string", strVal, "error", err)
-				doc = append(doc, bson.E{Key: key, Value: strVal})
-			} else {
-				doc = append(doc, bson.E{Key: key, Value: operatorMap})
+				return nil, fmt.Errorf("failed to parse MongoDB operator string '%s': %w", strVal, err)
 			}
+
+			doc = append(doc, bson.E{Key: key, Value: operatorMap})
 
 			continue
 		}
@@ -79,126 +72,120 @@ func (p *Parser) ParseSequenceString(criteria map[string]any) (bson.D, error) {
 }
 
 // getValueFromPath extracts a value from the event using a dot-notation path
-func (p *Parser) getValueFromPath(path string) (any, error) {
+func getValueFromPath(path string, event datamodels.HealthEventWithStatus) (any, error) {
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("invalid path: %s", path)
 	}
 
-	if len(parts) > 0 && (parts[0] == "healthevent") {
-		return getValueFromHealthEvent(p.Event.HealthEvent, parts[1:]), nil
-	} else if len(parts) > 0 && (parts[0] == "healtheventstatus") {
-		return getValueFromHealthEventStatus(p.Event.HealthEventStatus, parts[1:]), nil
-	}
-
-	return nil, fmt.Errorf("invalid path: %s", path)
-}
-
-// getFieldByName is a common helper function to find a field by name using reflection (case-insensitive)
-func getFieldByName(val reflect.Value, fieldName string) any {
-	for i := 0; i < val.NumField(); i++ {
-		field := val.Type().Field(i)
-		if strings.EqualFold(field.Name, fieldName) {
-			return val.Field(i).Interface()
-		}
-	}
-
-	return nil
-}
-
-func getValueFromHealthEvent(event *protos.HealthEvent, parts []string) any {
-	rootField := strings.ToLower(parts[0])
-
-	// Simple one-level field lookup
-	if len(parts) == 1 {
-		return getFieldByName(reflect.ValueOf(event).Elem(), rootField)
-	}
-
-	switch rootField {
-	case "errorcode":
-		return getErrorCode(event, parts[1:])
-	case "entitiesimpacted":
-		return getEntitiesImpacted(event, parts[1:])
-	case "metadata":
-		return getMetadata(event, parts[1:])
-	case "generatedtimestamp":
-		return getGeneratedTimestamp(event, parts[1:])
+	switch parts[0] {
+	case "healthevent":
+		return getValueByReflection(reflect.ValueOf(event.HealthEvent), parts[1:])
+	case "healtheventstatus":
+		return getValueByReflection(reflect.ValueOf(event.HealthEventStatus), parts[1:])
 	default:
-		return nil
+		return nil, fmt.Errorf("invalid root field: %s", parts[0])
 	}
 }
 
-// getErrorCode safely returns event.ErrorCode[index] if present.
-func getErrorCode(event *protos.HealthEvent, parts []string) any {
-	idx, err := strconv.Atoi(parts[0])
-	if err != nil || idx >= len(event.ErrorCode) || idx < 0 {
-		return nil
+// getValueByReflection recursively traverses a value using reflection based on a path
+// It handles structs, maps, slices/arrays, and pointers automatically
+func getValueByReflection(value reflect.Value, parts []string) (any, error) {
+	if len(parts) == 0 {
+		return getInterfaceOrNil(value)
 	}
 
-	return event.ErrorCode[idx]
+	// Dereference pointers
+	value = dereferencePointer(value)
+	if !value.IsValid() {
+		return nil, fmt.Errorf("invalid value")
+	}
+
+	// Get the current part of the path
+	part := parts[0]
+
+	switch value.Kind() {
+	case reflect.Struct:
+		return handleStructField(value, part, parts[1:])
+	case reflect.Slice, reflect.Array:
+		return handleSliceOrArray(value, part, parts[1:])
+	case reflect.Map:
+		return handleMapKey(value, part, parts[1:])
+	case reflect.Invalid,
+		reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Chan, reflect.Func, reflect.Interface, reflect.Ptr,
+		reflect.String, reflect.UnsafePointer:
+		return nil, fmt.Errorf("invalid value: %s", value.Kind())
+	}
+
+	return nil, fmt.Errorf("invalid value: %s", value.Kind())
 }
 
-// getMetadata returns the value for a metadata key if it exists.
-func getMetadata(event *protos.HealthEvent, parts []string) any {
-	key := parts[0]
-	if val, ok := event.Metadata[key]; ok {
-		return val
+// getInterfaceOrNil returns the interface value or nil if invalid
+func getInterfaceOrNil(value reflect.Value) (any, error) {
+	if !value.IsValid() {
+		return nil, fmt.Errorf("invalid value")
 	}
 
-	return nil
+	return value.Interface(), nil
 }
 
-func getEntitiesImpacted(event *protos.HealthEvent, parts []string) any {
-	if len(parts) < 2 {
-		return nil
+// dereferencePointer dereferences a pointer value
+func dereferencePointer(value reflect.Value) reflect.Value {
+	if value.Kind() == reflect.Ptr {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+
+		return value.Elem()
 	}
 
-	if idx, err := strconv.Atoi(parts[0]); err == nil && idx >= 0 && idx < len(event.EntitiesImpacted) {
-		entity := event.EntitiesImpacted[idx]
-		subField := strings.ToLower(parts[1])
-
-		entityVal := reflect.ValueOf(entity).Elem()
-
-		return getFieldByName(entityVal, subField)
-	}
-
-	return nil
+	return value
 }
 
-func getGeneratedTimestamp(event *protos.HealthEvent, parts []string) any {
-	if len(parts) < 2 {
-		return nil
+// handleStructField finds and traverses a struct field
+func handleStructField(value reflect.Value, fieldName string, remainingParts []string) (any, error) {
+	field := findField(value, fieldName)
+	if !field.IsValid() {
+		return nil, fmt.Errorf("field not found: %s", fieldName)
 	}
 
-	subField := strings.ToLower(parts[1])
+	return getValueByReflection(field, remainingParts)
+}
 
-	timestampVal := reflect.ValueOf(event.GeneratedTimestamp).Elem()
-	for i := 0; i < timestampVal.NumField(); i++ {
-		field := timestampVal.Type().Field(i)
-		if strings.EqualFold(field.Name, subField) {
-			return timestampVal.Field(i).Interface()
+// handleSliceOrArray accesses a slice or array element by index
+func handleSliceOrArray(value reflect.Value, indexStr string, remainingParts []string) (any, error) {
+	idx, err := strconv.Atoi(indexStr)
+	if err != nil || idx < 0 || idx >= value.Len() {
+		return nil, fmt.Errorf("invalid index: %s", indexStr)
+	}
+
+	return getValueByReflection(value.Index(idx), remainingParts)
+}
+
+// handleMapKey accesses a map value by key
+func handleMapKey(value reflect.Value, key string, remainingParts []string) (any, error) {
+	mapValue := value.MapIndex(reflect.ValueOf(key))
+	if !mapValue.IsValid() {
+		return nil, fmt.Errorf("map key not found: %s", key)
+	}
+
+	return getValueByReflection(mapValue, remainingParts)
+}
+
+// findField finds a struct field by name
+func findField(structValue reflect.Value, fieldName string) reflect.Value {
+	structType := structValue.Type()
+	for i := 0; i < structValue.NumField(); i++ {
+		field := structType.Field(i)
+		if strings.EqualFold(field.Name, fieldName) {
+			return structValue.Field(i)
 		}
 	}
 
-	return nil
-}
-
-func getValueFromHealthEventStatus(event datamodels.HealthEventStatus, parts []string) any {
-	rootField := strings.ToLower(parts[0])
-
-	if len(parts) == 1 {
-		val := reflect.ValueOf(event)
-
-		return getFieldByName(val, rootField)
-	}
-
-	// Handle nested fields in HealthEventStatus (e.g., userpodsevictionstatus.status)
-	if strings.EqualFold(rootField, "userpodsevictionstatus") && len(parts) > 1 {
-		subField := strings.ToLower(parts[1])
-		val := reflect.ValueOf(event.UserPodsEvictionStatus)
-
-		return getFieldByName(val, subField)
-	}
-
-	return nil
+	return reflect.Value{}
 }

@@ -1268,7 +1268,7 @@ func WaitForNodeConditionWithCheckName(ctx context.Context, t *testing.T, c klie
 
 		// Look for a condition where the reason contains the check name
 		for _, condition := range node.Status.Conditions {
-			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) && strings.Contains(message, condition.Message) {
+			if condition.Status == v1.ConditionTrue && condition.Reason == checkName+"IsNotHealthy" && strings.Contains(message, condition.Message) {
 				t.Logf("Found node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
 					condition.Type, condition.Reason, condition.Status, condition.Message)
 				return true
@@ -1293,7 +1293,7 @@ func EnsureNodeConditionNotPresent(ctx context.Context, t *testing.T, c klient.C
 
 		// Check if any condition has the specified check name
 		for _, condition := range node.Status.Conditions {
-			if condition.Status == v1.ConditionTrue && strings.Contains(condition.Reason, checkName) {
+			if condition.Status == v1.ConditionTrue && condition.Reason == checkName+"IsNotHealthy" {
 				t.Logf("ERROR: Found unexpected node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
 					condition.Type, condition.Reason, condition.Status, condition.Message)
 				return true

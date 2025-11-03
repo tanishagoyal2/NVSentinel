@@ -28,11 +28,10 @@ func TestMultipleFatalEventRule(t *testing.T) {
 	type contextKey int
 
 	const (
-		keyGpuNodes contextKey = iota
-		keyGpuNodeName
-		ERRORCODE_13 = "13"
-		ERRORCODE_48 = "48"
-		ERRORCODE_31 = "31"
+		keyGpuNodeName contextKey = iota
+		ERRORCODE_13              = "13"
+		ERRORCODE_48              = "48"
+		ERRORCODE_31              = "31"
 	)
 
 	feature := features.New("TestMultipleFatalEventRule").
@@ -44,26 +43,25 @@ func TestMultipleFatalEventRule(t *testing.T) {
 
 		gpuNodes, err := helpers.GetAllNodesNames(ctx, client)
 		assert.NoError(t, err, "failed to get nodes")
+		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
 
-		ctx = context.WithValue(ctx, keyGpuNodes, gpuNodes)
+		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
+		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
+
+		// clean up any existing node conditions
+		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
+		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/health-event-analyzer-healthy-event.json", "")
+		assert.NoError(t, err, "failed to send healthy event")
 
 		return ctx
 	})
 
 	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		gpuNodes := ctx.Value(keyGpuNodes).([]string)
-		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
-		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
+		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
 		t.Logf("Injecting fatal events to node %s", gpuNodeName)
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create kubernetes client")
-
-		// clean up any existing node conditions
-		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
-		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
-		assert.NoError(t, err, "failed to send non-fatal events")
 
 		xidsToInject := []string{ERRORCODE_13, ERRORCODE_48, ERRORCODE_13, ERRORCODE_48, ERRORCODE_13}
 
@@ -109,7 +107,7 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		t.Logf("Starting cleanup for node %s", gpuNodeName)
 
 		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/health-event-analyzer-healthy-event.json", "MultipleFatalError")
-		assert.NoError(t, err, "failed to send healthy events")
+		assert.NoError(t, err, "failed to send healthy event")
 
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy events")
@@ -124,9 +122,8 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 	type contextKey int
 
 	const (
-		keyGpuNodes contextKey = iota
-		keyGpuNodeName
-		ERRORCODE_13 = "13"
+		keyGpuNodeName contextKey = iota
+		ERRORCODE_13              = "13"
 	)
 
 	feature := features.New("TestMultipleNonFatalEventRule").
@@ -139,21 +136,19 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 		gpuNodes, err := helpers.GetAllNodesNames(ctx, client)
 		assert.NoError(t, err, "failed to get nodes")
 
-		ctx = context.WithValue(ctx, keyGpuNodes, gpuNodes)
-
-		return ctx
-	})
-
-	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		gpuNodes := ctx.Value(keyGpuNodes).([]string)
-		assert.True(t, len(gpuNodes) > 0, "no gpu nodes found")
 		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
 		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
 
 		// clean up any existing node conditions
 		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
-		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
-		assert.NoError(t, err, "failed to send non-fatal events")
+		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/health-event-analyzer-healthy-event.json", "")
+		assert.NoError(t, err, "failed to send healthy event")
+
+		return ctx
+	})
+
+	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
 
 		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
 		for i := 0; i < 5; i++ {

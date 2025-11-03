@@ -97,7 +97,7 @@ var (
 			Sequence: []config.SequenceStep{{
 				Criteria: map[string]interface{}{
 					"healthevent.entitiesimpacted.0.entitytype":  "GPU",
-					"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted[0].entityvalue",
+					"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted.0.entityvalue",
 					"healthevent.errorcode.0":                    "13",
 					"healthevent.nodename":                       "this.healthevent.nodename",
 					"healthevent.checkname":                      "{\"$ne\": \"HealthEventsAnalyzer\"}",
@@ -114,7 +114,7 @@ var (
 				{
 					Criteria: map[string]interface{}{
 						"healthevent.entitiesimpacted.0.entitytype":  "GPU",
-						"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted[0].entityvalue",
+						"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted.0.entityvalue",
 						"healthevent.errorcode.0":                    "13",
 						"healthevent.nodename":                       "this.healthevent.nodename",
 					},
@@ -123,7 +123,7 @@ var (
 				{
 					Criteria: map[string]interface{}{
 						"healthevent.entitiesimpacted.0.entitytype":  "GPU",
-						"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted[0].entityvalue",
+						"healthevent.entitiesimpacted.0.entityvalue": "this.healthevent.entitiesimpacted.0.entityvalue",
 						"healthevent.errorcode.0":                    "31",
 						"healthevent.nodename":                       "this.healthevent.nodename",
 					},
