@@ -35,9 +35,9 @@ config: |
   [[rules]]
   # The node condition for this rule needs to be removed manually because health-events-analyzer does not publish healthy events to clear it.
   # Please run the command below to remove the node condition:
-  # kubectl get node <NODE_NAME> -o json | jq '.status.conditions |= map(select(.type != "MultipleFatalError"))' | kubectl replace -f - --subresource=status
-  name = "MultipleFatalError"
-  description = "Detect occurrence of multiple faults within 7 days"
+  # kubectl get node <NODE_NAME> -o json | jq '.status.conditions |= map(select(.type != "MultipleRemediations"))' | kubectl replace -f - --subresource=status
+  name = "MultipleRemediations"
+  description = "Detect if multiple remediations are performed within 7 days on a node"
   time_window = "168h"
   recommended_action = "CONTACT_SUPPORT"
 

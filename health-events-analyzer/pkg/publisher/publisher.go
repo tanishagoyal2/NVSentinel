@@ -99,7 +99,6 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent
 	recommendedAction protos.RecommendedAction, ruleName string) error {
 	newEvent := proto.Clone(event).(*protos.HealthEvent)
 
-	// Override fields with new values
 	newEvent.Agent = "health-events-analyzer"
 	newEvent.CheckName = ruleName
 	newEvent.RecommendedAction = recommendedAction

@@ -91,7 +91,7 @@ spec:
       volumes:
       - name: config-volume
         configMap:
-          name: health-events-analyzer-config
+          name: {{ include "health-events-analyzer.fullname" . }}-config
           items:
           - key: config.toml
             path: config.toml

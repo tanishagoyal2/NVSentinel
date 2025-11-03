@@ -30,7 +30,6 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 	doc := bson.D{}
 
 	for key, value := range criteria {
-		// Non-string values are appended as-is
 		strVal, isString := value.(string)
 
 		if !isString {
@@ -64,7 +63,6 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 			continue
 		}
 
-		// Plain string literal
 		doc = append(doc, bson.E{Key: key, Value: strVal})
 	}
 
@@ -78,14 +76,14 @@ func getValueFromPath(path string, event datamodels.HealthEventWithStatus) (any,
 		return nil, fmt.Errorf("invalid path: %s", path)
 	}
 
-	switch parts[0] {
-	case "healthevent":
-		return getValueByReflection(reflect.ValueOf(event.HealthEvent), parts[1:])
-	case "healtheventstatus":
-		return getValueByReflection(reflect.ValueOf(event.HealthEventStatus), parts[1:])
-	default:
+	eventValue := reflect.ValueOf(event)
+	rootField := findField(eventValue, parts[0])
+
+	if !rootField.IsValid() {
 		return nil, fmt.Errorf("invalid root field: %s", parts[0])
 	}
+
+	return getValueByReflection(rootField, parts[1:])
 }
 
 // getValueByReflection recursively traverses a value using reflection based on a path
@@ -95,13 +93,11 @@ func getValueByReflection(value reflect.Value, parts []string) (any, error) {
 		return getInterfaceOrNil(value)
 	}
 
-	// Dereference pointers
 	value = dereferencePointer(value)
 	if !value.IsValid() {
 		return nil, fmt.Errorf("invalid value")
 	}
 
-	// Get the current part of the path
 	part := parts[0]
 
 	switch value.Kind() {
@@ -177,7 +173,11 @@ func handleMapKey(value reflect.Value, key string, remainingParts []string) (any
 	return getValueByReflection(mapValue, remainingParts)
 }
 
-// findField finds a struct field by name
+// findField finds a struct field by name using case-insensitive matching.
+// Note: case-insensitive matching is necessary because MongoDB uses lowercase field names (e.g., "nodename"),
+// and config criteria are written to match MongoDB conventions (e.g., "healthevent.nodename").
+// However, Go structs follow PascalCase naming conventions (e.g., NodeName).
+// Case-insensitive matching allows seamless resolution of config-defined paths to Go struct fields.
 func findField(structValue reflect.Value, fieldName string) reflect.Value {
 	structType := structValue.Type()
 	for i := 0; i < structValue.NumField(); i++ {

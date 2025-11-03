@@ -15,7 +15,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: health-events-analyzer-config
+  name: {{ include "health-events-analyzer.fullname" . }}-config
 data:
   config.toml: |
     {{ .Values.config | nindent 6 }}

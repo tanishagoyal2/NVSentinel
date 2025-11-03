@@ -245,7 +245,6 @@ func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule confi
 		return false, fmt.Errorf("failed to parse time window: %w", err)
 	}
 
-	// Create facets for each sequence
 	facets := bson.D{}
 
 	for i, seq := range rule.Sequence {
@@ -319,7 +318,7 @@ func getFacet(facetName string, timeWindow time.Duration, matchCriteria bson.D) 
 				{Key: "healthevent.generatedtimestamp.seconds", Value: bson.D{
 					{Key: "$gte", Value: time.Now().UTC().Add(-timeWindow).Unix()},
 				}},
-				{Key: "healthevent.checkname", Value: bson.D{{Key: "$ne", Value: "HealthEventsAnalyzer"}}},
+				{Key: "healthevent.agent", Value: bson.D{{Key: "$ne", Value: "health-events-analyzer"}}},
 			}}},
 			bson.D{{Key: "$match", Value: matchCriteria}},
 			bson.D{{Key: "$count", Value: "count"}},

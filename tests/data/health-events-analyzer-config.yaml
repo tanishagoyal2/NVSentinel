@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: health-events-analyzer-config
+  namespace: nvsentinel
+data:
+  config.toml: |
+    [[rules]]
+    name = "MultipleRemediations"
+    description = "Detect if multiple remediations are performed within 7 days on a node"
+    time_window = "2m"
+    recommended_action = "CONTACT_SUPPORT"
+
+    [[rules.sequence]]
+    criteria = {"healtheventstatus.faultremediated" = true, "healthevent.nodename" = "this.healthevent.nodename", "healthevent.isfatal" = "this.healthevent.isfatal"}
+    errorCount = 5
+

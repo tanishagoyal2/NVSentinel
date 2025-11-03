@@ -79,7 +79,7 @@ var (
 	rules = []config.HealthEventsAnalyzerRule{
 		{
 			Name:        "rule1",
-			Description: "check the occurrence of multiple fatal errors",
+			Description: "check multiple remediations are completed within 2 minutes",
 			TimeWindow:  "2m",
 			Sequence: []config.SequenceStep{{
 				Criteria: map[string]interface{}{
@@ -233,7 +233,7 @@ func TestHandleEvent(t *testing.T) {
 		mockPublisher.AssertExpectations(t)
 	})
 
-	t.Run("match multiple fatal error rule", func(t *testing.T) {
+	t.Run("match multiple remediations rule", func(t *testing.T) {
 		// Create fresh mock instances for this test
 		mockClient := new(mockCollectionClient)
 		mockPublisher := &mockPublisher{}
@@ -244,7 +244,7 @@ func TestHandleEvent(t *testing.T) {
 		}
 		reconciler := NewReconciler(cfg)
 
-		// This test uses all rules, so rule1 (IsMultipleFatalErrorRule: true) will match
+		// This test uses all rules, so rule1 (IsMultipleRemediationsRule: true) will match
 		expectedTransformedEvent := &protos.HealthEvent{
 			Version:            healthEvent_13.HealthEvent.Version,
 			Agent:              "health-events-analyzer", // Publisher sets this

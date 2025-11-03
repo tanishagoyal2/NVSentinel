@@ -20,21 +20,26 @@ import (
 	"tests/helpers"
 
 	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
-func TestMultipleFatalEventRule(t *testing.T) {
+const (
+	ERRORCODE_13 = "13"
+	ERRORCODE_48 = "48"
+	ERRORCODE_31 = "31"
+)
+
+func TestMultipleRemediationsCompleted(t *testing.T) {
 	type contextKey int
 
 	const (
 		keyGpuNodeName contextKey = iota
-		ERRORCODE_13              = "13"
-		ERRORCODE_48              = "48"
-		ERRORCODE_31              = "31"
+		keyOriginalConfig
 	)
 
-	feature := features.New("TestMultipleFatalEventRule").
+	feature := features.New("TestMultipleRemediationsCompleted").
 		WithLabel("suite", "health-event-analyzer")
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -48,18 +53,24 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
 		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
 
-		// clean up any existing node conditions
 		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/health-event-analyzer-healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy event")
+
+		t.Logf("Backing up original health-events-analyzer config")
+		originalConfig, err := helpers.GetConfigMap(ctx, client, "health-events-analyzer-config", "nvsentinel")
+		assert.NoError(t, err, "failed to get original config")
+		ctx = context.WithValue(ctx, keyOriginalConfig, originalConfig)
+
+		err = helpers.UpdateConfig(ctx, t, client, "data/health-events-analyzer-config.yaml", "health-events-analyzer")
+		assert.NoError(t, err, "failed to update health-events-analyzer config")
 
 		return ctx
 	})
 
 	feature.Assess("Inject multiple fatal errors", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
-		t.Logf("Injecting fatal events to node %s", gpuNodeName)
-
+		
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create kubernetes client")
 
@@ -68,7 +79,6 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		// inject 5 fatal errors and let the remediation cycle finish
 		t.Logf("Injecting fatal errors to node %s", gpuNodeName)
 		for _, xid := range xidsToInject {
-			// inject XID error
 			err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, xid, "data/fatal-health-event.json", "")
 			assert.NoError(t, err, "failed to send fatal events")
 			// Wait for RebootNode CR to be created and completed
@@ -84,19 +94,16 @@ func TestMultipleFatalEventRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if MultipleFatalError node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// Get GPU node name from context
+	feature.Assess("Check if MultipleRemediations node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		// inject XID 31 error to trigger the rule
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/fatal-health-event.json", "")
 		assert.NoError(t, err, "failed to send fatal events")
 
-		// Check node condition for matched ruleset
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleFatalError", "ErrorCode:31 GPU:0 XID error occurred Recommended Action=CONTACT_SUPPORT;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations", "ErrorCode:31 GPU:0 XID error occurred Recommended Action=CONTACT_SUPPORT;")
 
 		return ctx
 	})
@@ -106,11 +113,20 @@ func TestMultipleFatalEventRule(t *testing.T) {
 
 		t.Logf("Starting cleanup for node %s", gpuNodeName)
 
-		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/health-event-analyzer-healthy-event.json", "MultipleFatalError")
+		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/health-event-analyzer-healthy-event.json", "MultipleRemediations")
 		assert.NoError(t, err, "failed to send healthy event")
 
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_31, "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy events")
+
+		client, err := c.NewClient()
+		assert.NoError(t, err, "failed to create kubernetes client")
+
+		if originalConfig := ctx.Value(keyOriginalConfig); originalConfig != nil {
+			t.Logf("Restoring original health-events-analyzer config")
+			err = helpers.ApplyConfigMap(ctx, t, client, originalConfig.(*v1.ConfigMap), "health-events-analyzer")
+			assert.NoError(t, err, "failed to restore original config")
+		}
 
 		return ctx
 	})
@@ -118,15 +134,15 @@ func TestMultipleFatalEventRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestMultipleNonFatalEventRule(t *testing.T) {
+func TestMultipleRemediationsNotTriggered(t *testing.T) {
 	type contextKey int
 
 	const (
 		keyGpuNodeName contextKey = iota
-		ERRORCODE_13              = "13"
+		keyOriginalConfig
 	)
 
-	feature := features.New("TestMultipleNonFatalEventRule").
+	feature := features.New("TestMultipleRemediationsNotTriggered").
 		WithLabel("suite", "health-event-analyzer")
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -139,10 +155,17 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 		gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))]
 		ctx = context.WithValue(ctx, keyGpuNodeName, gpuNodeName)
 
-		// clean up any existing node conditions
 		t.Logf("Cleaning up any existing node conditions for node %s", gpuNodeName)
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/health-event-analyzer-healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy event")
+
+		t.Logf("Backing up original health-events-analyzer config")
+		originalConfig, err := helpers.GetConfigMap(ctx, client, "health-events-analyzer-config", "nvsentinel")
+		assert.NoError(t, err, "failed to get original config")
+		ctx = context.WithValue(ctx, keyOriginalConfig, originalConfig)
+
+		err = helpers.UpdateConfig(ctx, t, client, "data/health-events-analyzer-config.yaml", "health-events-analyzer")
+		assert.NoError(t, err, "failed to update health-events-analyzer config")
 
 		return ctx
 	})
@@ -152,7 +175,6 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 
 		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
 		for i := 0; i < 5; i++ {
-			// inject XID error
 			err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
 			assert.NoError(t, err, "failed to send fatal events")
 
@@ -163,19 +185,16 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if MultipleFatalError node condition is NOT added for non-fatal events", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// Get GPU node name from context
+	feature.Assess("Check if MultipleRemediations node condition is NOT added for non-fatal events", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		gpuNodeName := ctx.Value(keyGpuNodeName).(string)
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		// inject XID 13 non-fatal error - should NOT trigger the MultipleFatalError rule
 		err = helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/non-fatal-health-event.json", "")
 		assert.NoError(t, err, "failed to send non-fatal events")
 
-		// Ensure node condition is NOT added since these are non-fatal events
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, gpuNodeName, "MultipleFatalError")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, gpuNodeName, "MultipleRemediations")
 
 		return ctx
 	})
@@ -187,6 +206,15 @@ func TestMultipleNonFatalEventRule(t *testing.T) {
 
 		err := helpers.SendHealthEventsToNodes(t, []string{gpuNodeName}, ERRORCODE_13, "data/healthy-event.json", "")
 		assert.NoError(t, err, "failed to send healthy events")
+
+		client, err := c.NewClient()
+		assert.NoError(t, err, "failed to create kubernetes client")
+
+		if originalConfig := ctx.Value(keyOriginalConfig); originalConfig != nil {
+			t.Logf("Restoring original health-events-analyzer config")
+			err = helpers.ApplyConfigMap(ctx, t, client, originalConfig.(*v1.ConfigMap), "health-events-analyzer")
+			assert.NoError(t, err, "failed to restore original config")
+		}
 
 		return ctx
 	})
