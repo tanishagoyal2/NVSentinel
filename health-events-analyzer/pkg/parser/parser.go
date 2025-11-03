@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -52,18 +53,19 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 		}
 
 		// JSON object string representing MongoDB operator (e.g. '{"$ne":"x"}')
-		if strings.HasPrefix(strVal, "{") && strings.HasSuffix(strVal, "}") {
-			var operatorMap map[string]any
-			if err := json.Unmarshal([]byte(strVal), &operatorMap); err != nil {
-				return nil, fmt.Errorf("failed to parse MongoDB operator string '%s': %w", strVal, err)
-			}
-
+		var operatorMap map[string]any
+		if err := json.Unmarshal([]byte(strVal), &operatorMap); err == nil {
 			doc = append(doc, bson.E{Key: key, Value: operatorMap})
-
 			continue
 		}
 
-		doc = append(doc, bson.E{Key: key, Value: strVal})
+		// String with only allowed characters (alphanumeric, dot, and hyphen)
+		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9.-]+$`, strVal); matched {
+			doc = append(doc, bson.E{Key: key, Value: strVal})
+			continue
+		}
+
+		return nil, fmt.Errorf("failed to parse criteria '%s'", strVal)
 	}
 
 	return doc, nil

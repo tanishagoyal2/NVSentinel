@@ -161,15 +161,15 @@ func (h *HealthEventTemplate) WriteToTempFile() (string, error) {
 	return tempFile.Name(), nil
 }
 
-func SendHealthEventsToNodes(nodeNames []string, eventFilePath string) error {
+func SendHealthEventsToNodes(nodeNames []string, eventFilePath string, errorCode string, checkName string) error {
 	eventData, err := os.ReadFile(eventFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read health event file %s: %w", eventFilePath, err)
 	}
-	return sendHealthEventData(nodeNames, eventData)
+	return sendHealthEventData(nodeNames, eventData, errorCode, checkName)
 }
 
-func sendHealthEventData(nodeNames []string, eventData []byte) error {
+func sendHealthEventData(nodeNames []string, eventData []byte, errorCode string, checkName string) error {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
@@ -182,7 +182,6 @@ func sendHealthEventData(nodeNames []string, eventData []byte) error {
 		wg.Add(1)
 		go func(nodeName string) {
 			defer wg.Done()
-			t.Logf("Sending %s event to node %s with error code %s", eventFilePath, nodeName, errorCode)
 
 			eventJSON := strings.ReplaceAll(string(eventData), "NODE_NAME", nodeName)
 			eventJSON = strings.ReplaceAll(eventJSON, "ERROR_CODE", errorCode)
@@ -219,7 +218,12 @@ func SendHealthEvent(ctx context.Context, t *testing.T, event *HealthEventTempla
 	eventData, err := json.MarshalIndent(event, "", "    ")
 	require.NoError(t, err)
 
-	err = sendHealthEventData([]string{event.NodeName}, eventData)
+	errorCode := ""
+	if len(event.ErrorCode) > 0 {
+		errorCode = event.ErrorCode[0]
+	}
+
+	err = sendHealthEventData([]string{event.NodeName}, eventData, errorCode, event.CheckName)
 	require.NoError(t, err)
 
 	t.Logf("Health event sent successfully")

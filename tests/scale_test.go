@@ -112,7 +112,7 @@ func TestScaleHealthEvents(t *testing.T) {
 	feature.Assess("Send unhealthy events to trigger circuit breaker", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		healthCheckNodes := ctx.Value(keyHealthCheckNodes).([]string)
 
-		err := helpers.SendHealthEventsToNodes(t, healthCheckNodes, "79", "data/fatal-health-event.json", "")
+		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "data/fatal-health-event.json", "79", "")
 		assert.NoError(t, err, "failed to send unhealthy events")
 
 		return ctx
@@ -231,7 +231,7 @@ func TestScaleHealthEvents(t *testing.T) {
 
 		helpers.SetCircuitBreakerState(ctx, t, c, "CLOSED")
 
-		err := helpers.SendHealthEventsToNodes(t, healthCheckNodes, "data/healthy-event.json")
+		err := helpers.SendHealthEventsToNodes(healthCheckNodes, "data/healthy-event.json", "", "")
 		assert.NoError(t, err, "failed to send healthy events")
 
 		return ctx
