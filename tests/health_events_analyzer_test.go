@@ -44,6 +44,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 		helpers.TriggerMultipleRemediationsCycle(ctx, t, client, testCtx.NodeName)
+		
 		return newCtx
 	})
 
