@@ -18,6 +18,7 @@ import (
 	"testing"
 	"tests/helpers"
 
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -51,10 +52,9 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 		assert.NoError(t, err, "failed to create client")
 		gpuNodeName := testCtx.NodeName
 
-		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "data/fatal-health-event.json", ERRORCODE_31, "")
-		assert.NoError(t, err, "failed to send fatal events")
+		helpers.SendEventWithValues(ctx, t, gpuNodeName, true, ERRORCODE_31, int(pb.RecommendedAction_RESTART_VM))
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations", "ErrorCode:31 GPU:0 XID error occurred Recommended Action=CONTACT_SUPPORT;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations", "ErrorCode:31 GPU:0 Recommended Action=CONTACT_SUPPORT;")
 
 		return ctx
 	})
@@ -80,11 +80,9 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 
 		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
 		for i := 0; i < 5; i++ {
-			err := helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "data/non-fatal-health-event.json", ERRORCODE_13, "")
-			assert.NoError(t, err, "failed to send fatal events")
+			helpers.SendEventWithValues(ctx, t, gpuNodeName, false, ERRORCODE_13, int(pb.RecommendedAction_RESTART_VM))
 
-			err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "data/healthy-event.json", ERRORCODE_13, "")
-			assert.NoError(t, err, "failed to send healthy events")
+			helpers.SendHealthyEvent(ctx, t, gpuNodeName)
 		}
 
 		return newCtx
@@ -96,8 +94,7 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		err = helpers.SendHealthEventsToNodes([]string{gpuNodeName}, "data/non-fatal-health-event.json", ERRORCODE_13, "")
-		assert.NoError(t, err, "failed to send non-fatal events")
+		helpers.SendEventWithValues(ctx, t, gpuNodeName, false, ERRORCODE_13, int(pb.RecommendedAction_RESTART_VM))
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, gpuNodeName, "MultipleRemediations")
 

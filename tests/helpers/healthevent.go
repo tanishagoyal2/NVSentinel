@@ -161,15 +161,15 @@ func (h *HealthEventTemplate) WriteToTempFile() (string, error) {
 	return tempFile.Name(), nil
 }
 
-func SendHealthEventsToNodes(nodeNames []string, eventFilePath string, errorCode string, checkName string) error {
+func SendHealthEventsToNodes(nodeNames []string, eventFilePath string) error {
 	eventData, err := os.ReadFile(eventFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read health event file %s: %w", eventFilePath, err)
 	}
-	return sendHealthEventData(nodeNames, eventData, errorCode, checkName)
+	return sendHealthEventData(nodeNames, eventData)
 }
 
-func sendHealthEventData(nodeNames []string, eventData []byte, errorCode string, checkName string) error {
+func sendHealthEventData(nodeNames []string, eventData []byte) error {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
@@ -184,8 +184,6 @@ func sendHealthEventData(nodeNames []string, eventData []byte, errorCode string,
 			defer wg.Done()
 
 			eventJSON := strings.ReplaceAll(string(eventData), "NODE_NAME", nodeName)
-			eventJSON = strings.ReplaceAll(eventJSON, "ERROR_CODE", errorCode)
-			eventJSON = strings.ReplaceAll(eventJSON, "CHECK_NAME", checkName)
 
 			resp, err := client.Post("http://localhost:8080/health-event", "application/json", strings.NewReader(eventJSON))
 			if err != nil {
@@ -218,12 +216,7 @@ func SendHealthEvent(ctx context.Context, t *testing.T, event *HealthEventTempla
 	eventData, err := json.MarshalIndent(event, "", "    ")
 	require.NoError(t, err)
 
-	errorCode := ""
-	if len(event.ErrorCode) > 0 {
-		errorCode = event.ErrorCode[0]
-	}
-
-	err = sendHealthEventData([]string{event.NodeName}, eventData, errorCode, event.CheckName)
+	err = sendHealthEventData([]string{event.NodeName}, eventData)
 	require.NoError(t, err)
 
 	t.Logf("Health event sent successfully")
@@ -238,5 +231,15 @@ func SendHealthyEvent(ctx context.Context, t *testing.T, nodeName string) {
 		WithMessage("No health failures").
 		WithComponentClass("GPU")
 
+	SendHealthEvent(ctx, t, event)
+}
+
+func SendEventWithValues(ctx context.Context, t *testing.T, nodeName string, isFatal bool, errorCode string, recommendedAction int) {
+	t.Helper()
+	t.Logf("Sending fatal event to node %s: errorCode=%s", nodeName, errorCode)
+	event := NewHealthEvent(nodeName).
+		WithErrorCode(errorCode).
+		WithFatal(isFatal).
+		WithRecommendedAction(recommendedAction)
 	SendHealthEvent(ctx, t, event)
 }

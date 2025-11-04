@@ -432,6 +432,9 @@ func DeleteAllRebootNodeCRs(ctx context.Context, t *testing.T, c klient.Client) 
 func DeleteRebootNodeCR(ctx context.Context, c klient.Client, rebootNode *unstructured.Unstructured) error {
 	err := c.Resources().Delete(ctx, rebootNode)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to delete RebootNode CR %s: %w", rebootNode.GetName(), err)
 	}
 

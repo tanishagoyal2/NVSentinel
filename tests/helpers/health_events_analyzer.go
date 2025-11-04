@@ -19,15 +19,17 @@ import (
 	"math/rand"
 	"testing"
 
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
 const (
-	ERRORCODE_13 = "13"
-	ERRORCODE_48 = "48"
-	ERRORCODE_31 = "31"
+	ERRORCODE_13                 = "13"
+	ERRORCODE_48                 = "48"
+	ERRORCODE_31                 = "31"
+	HEALTH_EVENTS_ANALYZER_AGENT = "health-events-analyzer"
 )
 
 type HealthEventsAnalyzerTestContext struct {
@@ -57,8 +59,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	}
 
 	t.Logf("Cleaning up any existing node conditions for node %s", testCtx.NodeName)
-	err = SendHealthEventsToNodes([]string{testCtx.NodeName}, "data/health-event-analyzer-healthy-event.json", ERRORCODE_13, "")
-	require.NoError(t, err, "failed to send healthy event")
+	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(testCtx.NodeName, "MultipleRemediations", ERRORCODE_31))
 
 	t.Log("Backing up current health-events-analyzer configmap")
 	backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
@@ -70,6 +71,25 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	require.NoError(t, err)
 
 	return ctx, testCtx
+}
+
+func CreateHealthEventsAnalyzerHealthyEvent(nodeName string, checkName string, errorCode string) *HealthEventTemplate {
+	event := NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU")
+
+	if checkName != "" {
+		event = event.WithCheckName(checkName)
+	}
+
+	if errorCode != "" {
+		event = event.WithErrorCode(errorCode)
+	}
+
+	return event
 }
 
 func applyHealthEventsAnalyzerConfigAndRestart(ctx context.Context, t *testing.T, client klient.Client, configMapPath string) error {
@@ -97,27 +117,24 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 }
 
 func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klient.Client, nodeName, xid string) {
-	err := SendHealthEventsToNodes([]string{nodeName}, "data/fatal-health-event.json", xid, "")
-	require.NoError(t, err, "failed to send fatal events")
+	SendEventWithValues(ctx, t, nodeName, true, xid, int(pb.RecommendedAction_RESTART_VM))
 
 	rebootNodeCR := WaitForRebootNodeCR(ctx, t, client, nodeName)
 	require.NotNil(t, rebootNodeCR, "RebootNode CR should be created for XID 13 error")
 
-	err = DeleteRebootNodeCR(ctx, client, rebootNodeCR)
+	err := DeleteRebootNodeCR(ctx, client, rebootNodeCR)
 	require.NoError(t, err, "failed to delete RebootNode CR")
 
-	err = SendHealthEventsToNodes([]string{nodeName}, "data/healthy-event.json", xid, "")
-	require.NoError(t, err, "failed to send healthy events")
+	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(nodeName, "", xid))
 }
 
 func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 	c *envconf.Config, nodeName string, configMapBackup []byte) context.Context {
 	t.Logf("Starting cleanup for node %s", nodeName)
 
-	err := SendHealthEventsToNodes([]string{nodeName}, "data/health-event-analyzer-healthy-event.json", ERRORCODE_31, "MultipleRemediations")
-	require.NoError(t, err, "failed to send healthy event")
-
+	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(nodeName, "MultipleRemediations", ERRORCODE_31))
 	SendHealthyEvent(ctx, t, nodeName)
+
 	restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
 
 	return ctx

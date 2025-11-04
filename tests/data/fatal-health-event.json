@@ -8,7 +8,7 @@
     "message": "XID error occurred",
     "recommendedAction": 15,
     "errorCode": [
-        "ERROR_CODE"
+        "79"
     ],
     "entitiesImpacted": [
         {
