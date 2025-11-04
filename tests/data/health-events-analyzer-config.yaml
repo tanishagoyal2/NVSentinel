@@ -7,8 +7,8 @@ data:
   config.toml: |
     [[rules]]
     name = "MultipleRemediations"
-    description = "Detect if multiple remediations are performed within 2 minutes on a node"
-    time_window = "2m"
+    description = "Detect if multiple remediations are performed within 3 minutes on a node"
+    time_window = "3m"
     recommended_action = "CONTACT_SUPPORT"
 
     [[rules.sequence]]
