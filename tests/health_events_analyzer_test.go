@@ -52,7 +52,10 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 		assert.NoError(t, err, "failed to create client")
 		gpuNodeName := testCtx.NodeName
 
-		helpers.SendEventWithValues(ctx, t, gpuNodeName, true, ERRORCODE_31, int(pb.RecommendedAction_RESTART_VM))
+		event := helpers.NewHealthEvent(gpuNodeName).
+			WithErrorCode(ERRORCODE_31).
+			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+		helpers.SendHealthEvent(ctx, t, event)
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations", "ErrorCode:31 GPU:0 Recommended Action=CONTACT_SUPPORT;")
 
@@ -80,7 +83,11 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 
 		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
 		for i := 0; i < 5; i++ {
-			helpers.SendEventWithValues(ctx, t, gpuNodeName, false, ERRORCODE_13, int(pb.RecommendedAction_RESTART_VM))
+			event := helpers.NewHealthEvent(gpuNodeName).
+				WithFatal(false).
+				WithErrorCode(ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+			helpers.SendHealthEvent(ctx, t, event)
 
 			helpers.SendHealthyEvent(ctx, t, gpuNodeName)
 		}
@@ -94,7 +101,11 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		helpers.SendEventWithValues(ctx, t, gpuNodeName, false, ERRORCODE_13, int(pb.RecommendedAction_RESTART_VM))
+		event := helpers.NewHealthEvent(gpuNodeName).
+			WithFatal(false).
+			WithErrorCode(ERRORCODE_13).
+			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+		helpers.SendHealthEvent(ctx, t, event)
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, gpuNodeName, "MultipleRemediations")
 

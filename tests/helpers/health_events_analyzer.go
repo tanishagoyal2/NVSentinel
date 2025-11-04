@@ -59,7 +59,15 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	}
 
 	t.Logf("Cleaning up any existing node conditions for node %s", testCtx.NodeName)
-	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(testCtx.NodeName, "MultipleRemediations", ERRORCODE_31))
+	event := NewHealthEvent(testCtx.NodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("MultipleRemediations").
+		WithErrorCode(ERRORCODE_31)
+	SendHealthEvent(ctx, t, event)
 
 	t.Log("Backing up current health-events-analyzer configmap")
 	backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
@@ -71,25 +79,6 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	require.NoError(t, err)
 
 	return ctx, testCtx
-}
-
-func CreateHealthEventsAnalyzerHealthyEvent(nodeName string, checkName string, errorCode string) *HealthEventTemplate {
-	event := NewHealthEvent(nodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU")
-
-	if checkName != "" {
-		event = event.WithCheckName(checkName)
-	}
-
-	if errorCode != "" {
-		event = event.WithErrorCode(errorCode)
-	}
-
-	return event
 }
 
 func applyHealthEventsAnalyzerConfigAndRestart(ctx context.Context, t *testing.T, client klient.Client, configMapPath string) error {
@@ -117,7 +106,10 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 }
 
 func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klient.Client, nodeName, xid string) {
-	SendEventWithValues(ctx, t, nodeName, true, xid, int(pb.RecommendedAction_RESTART_VM))
+	event := NewHealthEvent(nodeName).
+		WithErrorCode(xid).
+		WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+	SendHealthEvent(ctx, t, event)
 
 	rebootNodeCR := WaitForRebootNodeCR(ctx, t, client, nodeName)
 	require.NotNil(t, rebootNodeCR, "RebootNode CR should be created for XID 13 error")
@@ -125,14 +117,22 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 	err := DeleteRebootNodeCR(ctx, client, rebootNodeCR)
 	require.NoError(t, err, "failed to delete RebootNode CR")
 
-	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(nodeName, "", xid))
+	SendHealthyEvent(ctx, t, nodeName)
 }
 
 func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 	c *envconf.Config, nodeName string, configMapBackup []byte) context.Context {
 	t.Logf("Starting cleanup for node %s", nodeName)
 
-	SendHealthEvent(ctx, t, CreateHealthEventsAnalyzerHealthyEvent(nodeName, "MultipleRemediations", ERRORCODE_31))
+	event := NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithCheckName("MultipleRemediations").
+		WithErrorCode(ERRORCODE_31)
+
+	SendHealthEvent(ctx, t, event)
 	SendHealthyEvent(ctx, t, nodeName)
 
 	restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)

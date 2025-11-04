@@ -8,7 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/go-logr/logr v1.4.3
 	github.com/nvidia/nvsentinel/commons v0.0.0
-	github.com/nvidia/nvsentinel/data-models v0.0.0-00010101000000-000000000000
+	github.com/nvidia/nvsentinel/data-models v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.2
 	github.com/stretchr/testify v1.11.1

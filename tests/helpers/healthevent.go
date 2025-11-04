@@ -233,13 +233,3 @@ func SendHealthyEvent(ctx context.Context, t *testing.T, nodeName string) {
 
 	SendHealthEvent(ctx, t, event)
 }
-
-func SendEventWithValues(ctx context.Context, t *testing.T, nodeName string, isFatal bool, errorCode string, recommendedAction int) {
-	t.Helper()
-	t.Logf("Sending fatal event to node %s: errorCode=%s", nodeName, errorCode)
-	event := NewHealthEvent(nodeName).
-		WithErrorCode(errorCode).
-		WithFatal(isFatal).
-		WithRecommendedAction(recommendedAction)
-	SendHealthEvent(ctx, t, event)
-}
