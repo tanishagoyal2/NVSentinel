@@ -96,6 +96,9 @@ func applyHealthEventsAnalyzerConfigAndRestart(ctx context.Context, t *testing.T
 		return err
 	}
 
+	t.Log("Waiting for health-events-analyzer to establish change stream connection")
+	time.Sleep(5 * time.Second)
+
 	return nil
 }
 
@@ -108,8 +111,10 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 		waitForRemediationToComplete(ctx, t, client, nodeName, xid)
 	}
 
-	t.Log("Waiting for all remediation events to be fully persisted")
+	// Small buffer for MongoDB replication/consistency
+	t.Log("Waiting for MongoDB updates to be fully propagated")
 	time.Sleep(3 * time.Second)
+	t.Log("All remediation events should now be ready for health-events-analyzer to query")
 }
 
 func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klient.Client, nodeName, xid string) {
@@ -119,12 +124,41 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 	SendHealthEvent(ctx, t, event)
 
 	rebootNodeCR := WaitForRebootNodeCR(ctx, t, client, nodeName)
-	require.NotNil(t, rebootNodeCR, "RebootNode CR should be created for XID 13 error")
+	require.NotNil(t, rebootNodeCR, "RebootNode CR should be created for XID error")
 
 	err := DeleteRebootNodeCR(ctx, client, rebootNodeCR)
 	require.NoError(t, err, "failed to delete RebootNode CR")
 
 	SendHealthyEvent(ctx, t, nodeName)
+
+	// CRITICAL FIX: Wait for node to be fully cleaned up before sending next event
+	// This prevents webhook rejections when events arrive too quickly
+	// Without this, the next event gets rejected and retries 10+ seconds later,
+	// causing MongoDB updates to be delayed and test to fail
+	t.Logf("Waiting for node %s to be fully uncordoned and cleaned up", nodeName)
+	require.Eventually(t, func() bool {
+		node, err := GetNodeByName(ctx, client, nodeName)
+		if err != nil {
+			return false
+		}
+		// Check node is uncordoned
+		if node.Spec.Unschedulable {
+			return false
+		}
+		// Check quarantine annotation is removed
+		if node.Annotations != nil {
+			if _, exists := node.Annotations["quarantineHealthEvent"]; exists {
+				return false
+			}
+			// Check remediation state annotation is removed
+			if _, exists := node.Annotations["latestFaultRemediationState"]; exists {
+				return false
+			}
+		}
+		return true
+	}, EventuallyWaitTimeout, WaitInterval, "node should be fully cleaned up before next remediation cycle")
+
+	t.Logf("Node %s is fully cleaned up, ready for next event", nodeName)
 }
 
 func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,

@@ -17,6 +17,7 @@ import (
 	"context"
 	"testing"
 	"tests/helpers"
+	"time"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/assert"
@@ -57,6 +58,11 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 			WithErrorCode(ERRORCODE_31).
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
 		helpers.SendHealthEvent(ctx, t, event)
+
+		// Wait for async processing chain: trigger event → health-events-analyzer processes 
+		// → publishes MultipleRemediations event → platform-connector creates node condition
+		t.Log("Waiting for health-events-analyzer to process and publish the MultipleRemediations event")
+		time.Sleep(5 * time.Second)
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations", "ErrorCode:31 GPU:0 Recommended Action=CONTACT_SUPPORT;")
 
