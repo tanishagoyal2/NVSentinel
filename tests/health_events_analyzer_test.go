@@ -87,6 +87,7 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 				WithFatal(false).
 				WithErrorCode(ERRORCODE_13).
 				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+
 			helpers.SendHealthEvent(ctx, t, event)
 
 			helpers.SendHealthyEvent(ctx, t, gpuNodeName)
