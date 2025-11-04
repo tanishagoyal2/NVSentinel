@@ -175,5 +175,9 @@ csp-health-monitor:
 
 # Enable node metadata enrichment for testing
 platformConnector:
+  k8sConnector:
+    enabled: true
+    qps: 5.0
+    burst: 10
   nodeMetadata:
     enabled: true

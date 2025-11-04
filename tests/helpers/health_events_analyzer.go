@@ -18,6 +18,7 @@ import (
 	"context"
 	"math/rand"
 	"testing"
+	"time"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/require"
@@ -91,7 +92,11 @@ func applyHealthEventsAnalyzerConfigAndRestart(ctx context.Context, t *testing.T
 
 	t.Log("Restarting health-events-analyzer deployment")
 	err = RestartDeployment(ctx, t, client, "health-events-analyzer", NVSentinelNamespace)
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client klient.Client, nodeName string) {
@@ -103,6 +108,8 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 		waitForRemediationToComplete(ctx, t, client, nodeName, xid)
 	}
 
+	t.Log("Waiting for all remediation events to be fully persisted")
+	time.Sleep(3 * time.Second)
 }
 
 func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klient.Client, nodeName, xid string) {
@@ -135,7 +142,7 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 	SendHealthEvent(ctx, t, event)
 	SendHealthyEvent(ctx, t, nodeName)
 
-	restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
+	//restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
 
 	return ctx
 }
