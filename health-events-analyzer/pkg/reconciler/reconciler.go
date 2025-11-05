@@ -342,6 +342,7 @@ func getPipeline(facets bson.D, rule config.HealthEventsAnalyzerRule) mongo.Pipe
 							}},
 						}
 					}
+
 					return conditions
 				}()},
 			}},
