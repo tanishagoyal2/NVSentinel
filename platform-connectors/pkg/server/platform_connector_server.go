@@ -50,15 +50,7 @@ type PlatformConnectorServer struct {
 
 func (p *PlatformConnectorServer) HealthEventOccurredV1(ctx context.Context,
 	he *pb.HealthEvents) (*empty.Empty, error) {
-	if len(he.Events) > 0 {
-		slog.Info("Health events received via gRPC",
-			"event_count", len(he.Events),
-			"first_event_node", he.Events[0].NodeName,
-			"first_event_check", he.Events[0].CheckName,
-			"first_event_agent", he.Events[0].Agent,
-			"first_event_isHealthy", he.Events[0].IsHealthy,
-			"first_event_isFatal", he.Events[0].IsFatal)
-	}
+	slog.Info("Health events received", "events", he)
 
 	healthEventsReceived.Add(float64(len(he.Events)))
 
@@ -72,15 +64,8 @@ func (p *PlatformConnectorServer) HealthEventOccurredV1(ctx context.Context,
 		}
 	}
 
-	slog.Debug("Enqueueing health events to ring buffers",
-		"event_count", len(he.Events),
-		"ring_buffer_count", len(ringBufferQueue))
-
-	for i, buffer := range ringBufferQueue {
+	for _, buffer := range ringBufferQueue {
 		buffer.Enqueue(he)
-		slog.Debug("Enqueued to ring buffer",
-			"buffer_index", i,
-			"event_count", len(he.Events))
 	}
 
 	return nil, nil

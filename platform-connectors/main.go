@@ -200,32 +200,18 @@ func initializeConnectors(
 		err            error
 	)
 
-	slog.Info("Initializing platform connectors",
-		"enableK8sPlatformConnector", config["enableK8sPlatformConnector"],
-		"enableMongoDBStorePlatformConnector", config["enableMongoDBStorePlatformConnector"])
-
 	if config["enableK8sPlatformConnector"] == True {
-		slog.Info("K8sPlatformConnector is enabled, initializing...")
 		k8sRingBuffer, processor, err = initializeK8sConnector(ctx, config, stopCh)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to initialize K8s connector: %w", err)
 		}
-		slog.Info("K8sPlatformConnector initialized successfully")
-	} else {
-		slog.Warn("K8sPlatformConnector is DISABLED - node conditions and events will NOT be created",
-			"config_value", config["enableK8sPlatformConnector"])
 	}
 
 	if config["enableMongoDBStorePlatformConnector"] == True {
-		slog.Info("MongoDBStorePlatformConnector is enabled, initializing...")
 		storeConnector, err = initializeMongoDBConnector(ctx, mongoClientCertMountPath)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to initialize MongoDB store connector: %w", err)
 		}
-		slog.Info("MongoDBStorePlatformConnector initialized successfully")
-	} else {
-		slog.Warn("MongoDBStorePlatformConnector is DISABLED - health events will NOT be persisted to MongoDB",
-			"config_value", config["enableMongoDBStorePlatformConnector"])
 	}
 
 	return k8sRingBuffer, storeConnector, processor, nil

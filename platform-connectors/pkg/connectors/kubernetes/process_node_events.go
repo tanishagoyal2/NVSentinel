@@ -42,14 +42,6 @@ const (
 
 //nolint:cyclop, gocognit
 func (r *K8sConnector) updateNodeConditions(ctx context.Context, healthEvents []*protos.HealthEvent) error {
-	if len(healthEvents) == 0 {
-		return nil
-	}
-
-	slog.Debug("Updating node conditions",
-		"node", healthEvents[0].NodeName,
-		"event_count", len(healthEvents))
-
 	sortedHealthEvents := slices.Clone(healthEvents)
 
 	// sort in ascending order
@@ -330,21 +322,11 @@ func (r *K8sConnector) constructHealthEventMessage(healthEvent *protos.HealthEve
 }
 
 func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
-	slog.Debug("Processing health events for node conditions and events",
-		"event_count", len(healthEvents.Events))
-
 	var nodeConditions []corev1.NodeCondition
 
 	for _, healthEvent := range healthEvents.Events {
 		conditionType := corev1.NodeConditionType(string(healthEvent.CheckName))
 		message := r.fetchHealthEventMessage(healthEvent)
-
-		slog.Debug("Evaluating event for node condition",
-			"node", healthEvent.NodeName,
-			"checkName", healthEvent.CheckName,
-			"agent", healthEvent.Agent,
-			"isHealthy", healthEvent.IsHealthy,
-			"isFatal", healthEvent.IsFatal)
 
 		if healthEvent.IsHealthy || healthEvent.IsFatal {
 			newCondition := corev1.NodeCondition{
@@ -355,25 +337,10 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 			}
 
 			nodeConditions = append(nodeConditions, newCondition)
-			slog.Debug("Event qualifies for node condition",
-				"node", healthEvent.NodeName,
-				"conditionType", conditionType,
-				"isHealthy", healthEvent.IsHealthy,
-				"isFatal", healthEvent.IsFatal)
-		} else {
-			slog.Debug("Event does NOT qualify for node condition (not healthy and not fatal)",
-				"node", healthEvent.NodeName,
-				"checkName", healthEvent.CheckName,
-				"isHealthy", healthEvent.IsHealthy,
-				"isFatal", healthEvent.IsFatal)
 		}
 	}
 
 	if len(nodeConditions) > 0 {
-		slog.Info("Updating node conditions",
-			"condition_count", len(nodeConditions),
-			"node", healthEvents.Events[0].NodeName)
-
 		start := time.Now()
 		err := r.updateNodeConditions(ctx, healthEvents.Events)
 
@@ -382,20 +349,10 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 
 		if err != nil {
 			nodeConditionUpdateCounter.WithLabelValues(StatusFailed).Inc()
-			slog.Error("Failed to update node conditions",
-				"error", err,
-				"node", healthEvents.Events[0].NodeName,
-				"condition_count", len(nodeConditions))
 			return fmt.Errorf("failed to update node conditions: %w", err)
 		}
 
-		slog.Info("Successfully updated node conditions",
-			"node", healthEvents.Events[0].NodeName,
-			"condition_count", len(nodeConditions),
-			"duration_ms", duration)
 		nodeConditionUpdateCounter.WithLabelValues(StatusSuccess).Inc()
-	} else {
-		slog.Debug("No node conditions to update (all events filtered out)")
 	}
 
 	for _, healthEvent := range healthEvents.Events {

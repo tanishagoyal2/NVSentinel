@@ -56,8 +56,6 @@ func NewK8sConnector(
 func InitializeK8sConnector(ctx context.Context, ringbuffer *ringbuffer.RingBuffer,
 	qps float32, burst int, stopCh <-chan struct{},
 ) (*K8sConnector, kubernetes.Interface, error) {
-	slog.Info("Initializing K8sConnector", "qps", qps, "burst", burst)
-
 	// Create the in-cluster config
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -74,13 +72,10 @@ func InitializeK8sConnector(ctx context.Context, ringbuffer *ringbuffer.RingBuff
 
 	kubernetesConnector := NewK8sConnector(clientSet, ringbuffer, stopCh, ctx)
 
-	slog.Info("K8sConnector initialized successfully - will process health events for node conditions and events")
-
 	return kubernetesConnector, clientSet, nil
 }
 
 func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
-	slog.Info("K8sConnector worker started - listening for health events to create node conditions/events")
 	for {
 		select {
 		case <-r.stopCh:
@@ -88,21 +83,10 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 			return
 		default:
 			healthEvents := r.ringBuffer.Dequeue()
-			if healthEvents == nil || len(healthEvents.GetEvents()) == 0 {
-				continue
-			}
-
-			slog.Debug("K8sConnector received health events from ring buffer",
-				"event_count", len(healthEvents.GetEvents()),
-				"first_event_node", healthEvents.GetEvents()[0].NodeName,
-				"first_event_check", healthEvents.GetEvents()[0].CheckName)
-
 			if err := r.processHealthEvents(ctx, healthEvents); err != nil {
 				slog.Error("Not able to process healthEvent", "error", err)
 				r.ringBuffer.HealthMetricEleProcessingFailed(healthEvents)
 			} else {
-				slog.Debug("K8sConnector successfully processed health events",
-					"event_count", len(healthEvents.GetEvents()))
 				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
 			}
 		}
