@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"testing"
-	"time"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/require"
@@ -96,9 +95,6 @@ func applyHealthEventsAnalyzerConfigAndRestart(ctx context.Context, t *testing.T
 		return err
 	}
 
-	t.Log("Waiting for health-events-analyzer to establish change stream connection")
-	time.Sleep(5 * time.Second)
-
 	return nil
 }
 
@@ -110,9 +106,6 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 	for _, xid := range xidsToInject {
 		waitForRemediationToComplete(ctx, t, client, nodeName, xid)
 	}
-
-	time.Sleep(3 * time.Second)
-	t.Log("All remediation events should now be ready for health-events-analyzer to query")
 }
 
 func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klient.Client, nodeName, xid string) {
@@ -129,10 +122,6 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 
 	SendHealthyEvent(ctx, t, nodeName)
 
-	// CRITICAL FIX: Wait for node to be fully cleaned up before sending next event
-	// This prevents webhook rejections when events arrive too quickly
-	// Without this, the next event gets rejected and retries 10+ seconds later,
-	// causing MongoDB updates to be delayed and test to fail
 	t.Logf("Waiting for node %s to be fully uncordoned and cleaned up", nodeName)
 	require.Eventually(t, func() bool {
 		node, err := GetNodeByName(ctx, client, nodeName)
@@ -152,8 +141,6 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 		}
 		return true
 	}, EventuallyWaitTimeout, WaitInterval, "node should be fully cleaned up before next remediation cycle")
-
-	t.Logf("Node %s is fully cleaned up, ready for next event", nodeName)
 }
 
 func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
@@ -171,12 +158,11 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 	SendHealthEvent(ctx, t, event)
 	SendHealthyEvent(ctx, t, nodeName)
 
-	//restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
+	restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
 
 	return ctx
 }
 
-// restoreHealthEventsAnalyzerConfig restores the health-events-analyzer config from backup and restarts the deployment.
 func restoreHealthEventsAnalyzerConfig(ctx context.Context, t *testing.T, c *envconf.Config, configMapBackup []byte) {
 	t.Helper()
 	client, err := c.NewClient()

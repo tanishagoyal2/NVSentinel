@@ -25,12 +25,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
-const (
-	ERRORCODE_13 = "13"
-	ERRORCODE_48 = "48"
-	ERRORCODE_31 = "31"
-)
-
 func TestMultipleRemediationsCompleted(t *testing.T) {
 	feature := features.New("TestMultipleRemediationsCompleted").
 		WithLabel("suite", "health-event-analyzer")
@@ -54,7 +48,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 		gpuNodeName := testCtx.NodeName
 
 		event := helpers.NewHealthEvent(gpuNodeName).
-			WithErrorCode(ERRORCODE_31).
+			WithErrorCode(helpers.ERRORCODE_31).
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
 		helpers.SendHealthEvent(ctx, t, event)
 
@@ -86,7 +80,7 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			event := helpers.NewHealthEvent(gpuNodeName).
 				WithFatal(false).
-				WithErrorCode(ERRORCODE_13).
+				WithErrorCode(helpers.ERRORCODE_13).
 				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
 
 			helpers.SendHealthEvent(ctx, t, event)
@@ -105,7 +99,7 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 
 		event := helpers.NewHealthEvent(gpuNodeName).
 			WithFatal(false).
-			WithErrorCode(ERRORCODE_13).
+			WithErrorCode(helpers.ERRORCODE_13).
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
 		helpers.SendHealthEvent(ctx, t, event)
 

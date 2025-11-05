@@ -276,8 +276,8 @@ func (r *Reconciler) validateAllSequenceCriteria(ctx context.Context, rule confi
 	var result []bson.M
 
 	startTime := time.Now()
-	cursor, err := r.config.CollectionClient.Aggregate(ctx, pipeline)
 
+	cursor, err := r.config.CollectionClient.Aggregate(ctx, pipeline)
 	if err != nil {
 		slog.Error("Failed to execute aggregation pipeline", "error", err)
 		totalEventProcessingError.WithLabelValues("execute_pipeline_error").Inc()

@@ -42,8 +42,8 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 		// "this." reference → resolve from current event
 		if strings.HasPrefix(strVal, "this.") {
 			fieldPath := strings.TrimPrefix(strVal, "this.")
-			resolvedValue, err := getValueFromPath(fieldPath, event)
 
+			resolvedValue, err := getValueFromPath(fieldPath, event)
 			if err != nil {
 				return nil, fmt.Errorf("error in getting value from path: %w", err)
 			}
@@ -72,7 +72,6 @@ func ParseSequenceString(criteria map[string]any, event datamodels.HealthEventWi
 	return doc, nil
 }
 
-// getValueFromPath extracts a value from the event using a dot-notation path
 func getValueFromPath(path string, event datamodels.HealthEventWithStatus) (any, error) {
 	parts := strings.Split(path, ".")
 	if len(parts) < 2 {
@@ -89,8 +88,6 @@ func getValueFromPath(path string, event datamodels.HealthEventWithStatus) (any,
 	return getValueByReflection(rootField, parts[1:])
 }
 
-// getValueByReflection recursively traverses a value using reflection based on a path
-// It handles structs, maps, slices/arrays, and pointers automatically
 func getValueByReflection(value reflect.Value, parts []string) (any, error) {
 	if len(parts) == 0 {
 		return getInterfaceOrNil(value)
@@ -124,7 +121,6 @@ func getValueByReflection(value reflect.Value, parts []string) (any, error) {
 	return nil, fmt.Errorf("invalid value: %s", value.Kind())
 }
 
-// getInterfaceOrNil returns the interface value or nil if invalid
 func getInterfaceOrNil(value reflect.Value) (any, error) {
 	if !value.IsValid() {
 		return nil, fmt.Errorf("invalid value")
@@ -133,7 +129,6 @@ func getInterfaceOrNil(value reflect.Value) (any, error) {
 	return value.Interface(), nil
 }
 
-// dereferencePointer dereferences a pointer value
 func dereferencePointer(value reflect.Value) reflect.Value {
 	if value.Kind() == reflect.Ptr {
 		if value.IsNil() {
@@ -146,7 +141,6 @@ func dereferencePointer(value reflect.Value) reflect.Value {
 	return value
 }
 
-// handleStructField finds and traverses a struct field
 func handleStructField(value reflect.Value, fieldName string, remainingParts []string) (any, error) {
 	field := findField(value, fieldName)
 	if !field.IsValid() {
@@ -156,7 +150,6 @@ func handleStructField(value reflect.Value, fieldName string, remainingParts []s
 	return getValueByReflection(field, remainingParts)
 }
 
-// handleSliceOrArray accesses a slice or array element by index
 func handleSliceOrArray(value reflect.Value, indexStr string, remainingParts []string) (any, error) {
 	idx, err := strconv.Atoi(indexStr)
 	if err != nil || idx < 0 || idx >= value.Len() {
@@ -166,7 +159,6 @@ func handleSliceOrArray(value reflect.Value, indexStr string, remainingParts []s
 	return getValueByReflection(value.Index(idx), remainingParts)
 }
 
-// handleMapKey accesses a map value by key
 func handleMapKey(value reflect.Value, key string, remainingParts []string) (any, error) {
 	mapValue := value.MapIndex(reflect.ValueOf(key))
 	if !mapValue.IsValid() {
