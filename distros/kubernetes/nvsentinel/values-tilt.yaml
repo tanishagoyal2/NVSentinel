@@ -165,9 +165,6 @@ labeler:
   # Uncomment to test custom kata detection:
   # kataLabelOverride: "io.katacontainers.config.runtime.oci_runtime"
 
-health-events-analyzer:
-  logLevel: debug
-
 csp-health-monitor:
   logLevel: debug
   quarantineTriggerEngine:
