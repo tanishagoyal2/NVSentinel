@@ -111,8 +111,6 @@ func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client 
 		waitForRemediationToComplete(ctx, t, client, nodeName, xid)
 	}
 
-	// Small buffer for MongoDB replication/consistency
-	t.Log("Waiting for MongoDB updates to be fully propagated")
 	time.Sleep(3 * time.Second)
 	t.Log("All remediation events should now be ready for health-events-analyzer to query")
 }
@@ -141,16 +139,13 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 		if err != nil {
 			return false
 		}
-		// Check node is uncordoned
 		if node.Spec.Unschedulable {
 			return false
 		}
-		// Check quarantine annotation is removed
 		if node.Annotations != nil {
 			if _, exists := node.Annotations["quarantineHealthEvent"]; exists {
 				return false
 			}
-			// Check remediation state annotation is removed
 			if _, exists := node.Annotations["latestFaultRemediationState"]; exists {
 				return false
 			}
