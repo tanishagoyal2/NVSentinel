@@ -42,6 +42,7 @@ const (
 // Store defines the interface for datastore operations related to maintenance events.
 type Store interface {
 	UpsertMaintenanceEvent(ctx context.Context, event *model.MaintenanceEvent) error
+	FindEventByID(ctx context.Context, eventID string) (*model.MaintenanceEvent, bool, error)
 	FindEventsToTriggerQuarantine(ctx context.Context, triggerTimeLimit time.Duration) ([]model.MaintenanceEvent, error)
 	FindEventsToTriggerHealthy(ctx context.Context, healthyDelay time.Duration) ([]model.MaintenanceEvent, error)
 	UpdateEventStatus(ctx context.Context, eventID string, newStatus model.InternalStatus) error
@@ -242,6 +243,32 @@ func (s *MongoStore) UpsertMaintenanceEvent(ctx context.Context, event *model.Ma
 	slog.Debug("Upserting event directly as prepared by Processor", "eventID", event.EventID)
 
 	return s.executeUpsert(ctx, filter, event)
+}
+
+// FindEventByID finds a maintenance event by its EventID.
+// Returns the event, a boolean indicating if found, and any error.
+func (s *MongoStore) FindEventByID(
+	ctx context.Context,
+	eventID string,
+) (*model.MaintenanceEvent, bool, error) {
+	if eventID == "" {
+		return nil, false, fmt.Errorf("eventID cannot be empty")
+	}
+
+	filter := bson.D{{Key: "eventId", Value: eventID}}
+
+	var event model.MaintenanceEvent
+
+	err := s.client.FindOne(ctx, filter).Decode(&event)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("failed to find event by ID %s: %w", eventID, err)
+	}
+
+	return &event, true, nil
 }
 
 // FindEventsToTriggerQuarantine finds events ready for quarantine trigger.

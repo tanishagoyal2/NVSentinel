@@ -15,33 +15,37 @@
 global:
   dryRun: false
   image:
-    tag: "main"
-  metricsPort: 2112
+    tag: "main-53d73cf"
 
-  # Shared metadata path used by metadata-collector and syslog-health-monitor
-  metadataPath: /var/lib/nvsentinel/gpu_metadata.json
+  metricsPort: 2112
 
   nodeSelector: {}
   tolerations: []
   affinity: {}
   systemNodeSelector: {}
-  systemNodeTolerations: []
+  systemNodeTolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
   imagePullSecrets: []
 
   gpuHealthMonitor:
     enabled: true
   healthEventsAnalyzer:
     enabled: false
-  faultQuarantine:
-    enabled: false
-  nodeDrainer:
-    enabled: false
-  faultRemediation:
-    enabled: false
+  faultQuarantineModule:
+    enabled: true
+  nodeDrainerModule:
+    enabled: true
+  faultRemediationModule:
+    enabled: true
   janitor:
-    enabled: false
+    enabled: true
   cspHealthMonitor:
-    enabled: false
+    enabled: true
   syslogHealthMonitor:
     enabled: true
   labeler:
@@ -53,7 +57,7 @@ global:
     metricsPort: 9001
     cleanupMetricsPort: 9002
   mongodbStore:
-    enabled: false
+    enabled: true
 
 platformConnector:
   image:
@@ -105,3 +109,270 @@ platformConnector:
       - "cloud.google.com/gce-topology-subblock"
 
 socketPath: "/var/run/nvsentinel.sock"
+
+nodeSelector:
+  nodeGroup: system-cpu
+
+# Tolerations for MongoDB jobs (longer timeout for job completion)
+jobTolerations:
+  - effect: NoExecute
+    key: dedicated
+    tolerationSeconds: 600
+    value: system-workload
+  - effect: NoSchedule
+    key: dedicated
+    value: system-workload
+
+gpu-health-monitor:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+
+  systemNodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      value: present
+
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+  systemNodeTolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+csp-health-monitor:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+  cspName: aws
+
+  configToml:
+    maintenanceEventPollIntervalSeconds: 60
+    triggerQuarantineWorkflowTimeLimitMinutes: 30
+    postMaintenanceHealthyDelayMinutes: 15
+    nodeReadinessTimeoutMinutes: 60
+    clusterName: "tawsdfw04"
+
+    gcp:
+      targetProjectId: ""
+      apiPollingIntervalSeconds: 60
+      gcpServiceAccountName: ""
+      logFilter: ""
+
+    aws:
+      accountId: "897722687756"
+      pollingIntervalSeconds: 60
+      region: "us-east-1"
+
+dca-health-monitor:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      value: present
+
+fault-quarantine:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+  circuitBreaker:
+    enabled: true
+    percentage: 50
+    duration: 5m
+
+fault-remediation:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+node-drainer:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+nic-health-monitor:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      value: present
+
+nvswitch-health-monitor:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+
+  systemNodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      value: present
+
+  systemNodeTolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+syslog-health-monitor:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: user-workload
+    - effect: NoSchedule
+      key: nvidia.com/gpu
+      value: present
+
+  systemNodeTolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+  systemNodeSelector:
+    nodeGroup: system-cpu
+
+health-events-analyzer:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+incluster-file-server:
+  nodeSelector:
+    nodeGroup: system-cpu
+
+  tolerations:
+    - effect: NoExecute
+      key: dedicated
+      value: system-workload
+    - effect: NoSchedule
+      key: dedicated
+      value: system-workload
+
+# Main nvsentinel platform connector tolerations
+tolerations:
+  - effect: NoExecute
+    key: dedicated
+    value: system-workload
+  - effect: NoSchedule
+    key: dedicated
+    value: system-workload
+  - effect: NoExecute
+    key: dedicated
+    value: user-workload
+  - effect: NoSchedule
+    key: dedicated
+    value: user-workload
+  - effect: NoExecute
+    key: components.gke.io/gke-managed-components
+    value: "true"
+  - effect: NoSchedule
+    key: CriticalAddonsOnly
+    value: "true"
+  - effect: NoSchedule
+    key: nvidia.com/gpu
+    value: present
+  - effect: NoSchedule
+    key: nvidia.com/gpu
+
+mongodb-store:
+  mongodb:
+    tolerations:
+      - effect: NoExecute
+        key: dedicated
+        value: system-workload
+      - effect: NoSchedule
+        key: dedicated
+        value: system-workload
+    jobTolerations:
+      - effect: NoExecute
+        key: dedicated
+        value: system-workload
+      - effect: NoSchedule
+        key: dedicated
+        value: system-workload

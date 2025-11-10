@@ -32,7 +32,9 @@ data:
     [gcp]
     enabled = {{ eq .Values.cspName "gcp" }}
     targetProjectId = {{ .Values.configToml.gcp.targetProjectId | quote }}
+    {{- if .Values.configToml.gcp.apiPollingIntervalSeconds }}
     apiPollingIntervalSeconds = {{ .Values.configToml.gcp.apiPollingIntervalSeconds }}
+    {{- end }}
     gcpServiceAccountName = {{ .Values.configToml.gcp.gcpServiceAccountName | quote }}
     logFilter = {{ .Values.configToml.gcp.logFilter | quote }}
 

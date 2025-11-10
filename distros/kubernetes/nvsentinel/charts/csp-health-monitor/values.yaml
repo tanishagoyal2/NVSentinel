@@ -29,6 +29,9 @@ resources:
 
 # Configuration for the Quarantine Trigger Engine sidecar
 quarantineTriggerEngine:
+  image:
+    repository: ghcr.io/nvidia/nvsentinel/maintenance-notifier
+    pullPolicy: IfNotPresent
   resources:
     limits:
       cpu: "500m"
@@ -50,7 +53,7 @@ podAnnotations: {}
 logLevel: info
 
 # cspName specifies the active cloud service provider. Can be "gcp" or "aws".
-cspName: ""
+cspName: "aws"
 
 # config.toml content will be generated from the fields below using the configmap template.
 # Both main container and sidecar will mount and use this.
@@ -60,8 +63,8 @@ configToml:
   triggerQuarantineWorkflowTimeLimitMinutes: 30 # Used by Quarantine Trigger Engine sidecar
   postMaintenanceHealthyDelayMinutes: 15 # Used by Quarantine Trigger Engine sidecar
   nodeReadinessTimeoutMinutes: 60 # Used to monitor node readiness after maintenance
-  clusterName: "" # Used by main monitor and potentially sidecar if needed
-  kubeconfigPath: ""  # Optional, only set if running out-of-cluster against a tenant. Set to non-empty string to enable.
+  clusterName: "tawsdfw04" # Used by main monitor and potentially sidecar if needed
+  kubeconfigPath: "" # Optional, only set if running out-of-cluster against a tenant. Set to non-empty string to enable.
 
   gcp:
     targetProjectId: "" # Used by main monitor
@@ -70,8 +73,8 @@ configToml:
     logFilter: "" # example: 'logName="projects/{PROJECT_ID}/logs/csp-health-monitor-test-log" AND operation.producer="compute.instances.upcomingMaintenance"'
 
   aws:
-    accountId: "" # Used by main monitor
+    accountId: "897722687756" # Used by main monitor
     # How often to poll the AWS Health API for events in seconds
     pollingIntervalSeconds: 60 # Used by main monitor (AWS poller)
     # AWS region of the tenant cluster.
-    region: "" # Used by main monitor
+    region: "us-east-1" # Used by main monitor

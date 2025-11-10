@@ -32,14 +32,22 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/config"
 	"github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/model"
-	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
 
 // MockDatastore is a mock implementation of the datastore.Store interface
 type MockDatastore struct {
 	mock.Mock
+}
+
+func (m *MockDatastore) FindEventByID(ctx context.Context, eventID string) (*model.MaintenanceEvent, bool, error) {
+	args := m.Called(ctx, eventID)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).(*model.MaintenanceEvent), args.Bool(1), args.Error(2)
 }
 
 func (m *MockDatastore) UpsertMaintenanceEvent(ctx context.Context, event *model.MaintenanceEvent) error {

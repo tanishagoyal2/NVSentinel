@@ -399,6 +399,62 @@ func (c *AWSClient) handleMaintenanceEvents(
 	return nil
 }
 
+// shouldSkipEntity checks if entity should be skipped due to missing or unchanged data.
+func (c *AWSClient) shouldSkipEntity(
+	ctx context.Context,
+	entity types.AffectedEntity,
+	evt types.Event,
+	eventArn string,
+	nodeMap map[string]string,
+) (skip bool, instanceID, nodeName, entityArn string) {
+	if entity.EntityValue == nil {
+		slog.Warn("Entity with nil EntityValue", "eventArn", eventArn)
+		return true, "", "", ""
+	}
+
+	instanceID = *entity.EntityValue
+
+	var ok bool
+
+	nodeName, ok = nodeMap[instanceID]
+	if !ok {
+		return true, "", "", ""
+	}
+
+	if entity.EventArn == nil || entity.EntityArn == nil {
+		slog.Warn("Affected entity doesn't have complete information",
+			"instanceID", instanceID,
+			"eventArn", eventArn,
+			"entity", entity,
+			"warning", "Missing EventArn or EntityArn")
+
+		return true, "", "", ""
+	}
+
+	entityArn = aws.ToString(entity.EntityArn)
+	awsStatus := string(evt.StatusCode)
+
+	existingEvent, found, err := c.store.FindEventByID(ctx, entityArn)
+	if err != nil {
+		slog.Warn("Error checking existing event, will process anyway",
+			"entityArn", entityArn,
+			"error", err)
+
+		return false, instanceID, nodeName, entityArn
+	}
+
+	if found && string(existingEvent.CSPStatus) == awsStatus {
+		slog.Debug("Event already exists with same CSP status, skipping",
+			"entityArn", entityArn,
+			"cspStatus", awsStatus,
+			"node", nodeName)
+
+		return true, "", "", ""
+	}
+
+	return false, instanceID, nodeName, entityArn
+}
+
 // processSingleEntityForEvent processes a single affected entity for a given AWS health event.
 func (c *AWSClient) processSingleEntityForEvent(
 	ctx context.Context,
@@ -410,28 +466,8 @@ func (c *AWSClient) processSingleEntityForEvent(
 	nodeMap map[string]string,
 	eventChan chan<- model.MaintenanceEvent,
 ) {
-	if entity.EntityValue == nil {
-		slog.Warn("Entity with nil EntityValue", "eventArn", eventArn)
-		return
-	}
-
-	instanceID := *entity.EntityValue
-
-	nodeName, ok := nodeMap[instanceID]
-	if !ok {
-		// Not an instance in our cluster, or mapping failed. Already logged by
-		// getClusterInstanceNodeMap if node has no providerID.
-		// slog.Debug("Instance %s from event %s not found in current cluster node map", instanceID, eventArn)
-		return
-	}
-
-	if entity.EventArn == nil || entity.EntityArn == nil {
-		slog.Warn("Affected entity doesn't have complete information",
-			"instanceID", instanceID,
-			"eventArn", eventArn,
-			"entity", entity,
-			"warning", "Missing EventArn or EntityArn")
-
+	skip, instanceID, nodeName, entityArn := c.shouldSkipEntity(ctx, entity, evt, eventArn, nodeMap)
+	if skip {
 		return
 	}
 
@@ -439,7 +475,7 @@ func (c *AWSClient) processSingleEntityForEvent(
 		Event:            evt,
 		NodeName:         nodeName,
 		InstanceId:       instanceID,
-		EntityArn:        aws.ToString(entity.EntityArn),
+		EntityArn:        entityArn,
 		ClusterName:      c.clusterName,
 		Action:           action.String(),
 		EventDescription: desc,
@@ -568,6 +604,87 @@ func (c *AWSClient) getAffectedEntities(
 	return detailedEvents.Entities, nil
 }
 
+// processActiveEvent processes a single active event by checking status and normalizing.
+func (c *AWSClient) processActiveEvent(
+	ctx context.Context,
+	activeEvent model.MaintenanceEvent,
+	eventChan chan<- model.MaintenanceEvent,
+) error {
+	awsEvent, awsStatus, err := c.checkStatusOfKnownEvents(ctx, activeEvent)
+	if err != nil {
+		return fmt.Errorf("checkStatusOfKnownEvents: %w", err)
+	}
+
+	if awsStatus == string(model.CSPStatusUnknown) {
+		slog.Warn("AWS status is unknown for event",
+			"eventArn", activeEvent.Metadata["eventArn"])
+
+		err := c.store.UpdateEventStatus(ctx, activeEvent.EventID, model.StatusError)
+		if err != nil {
+			return fmt.Errorf("failed to update event status: %w", err)
+		}
+
+		return nil
+	}
+
+	// if there is no change in the status, skip the event update
+	if model.ProviderStatus(awsStatus) == activeEvent.CSPStatus {
+		return nil
+	}
+
+	nodeName, instanceID, eventArn := activeEvent.NodeName, activeEvent.ResourceID, activeEvent.Metadata["eventArn"]
+	eventMetadata := eventpkg.EventMetadata{
+		Event:            awsEvent,
+		NodeName:         nodeName,
+		InstanceId:       instanceID,
+		EntityArn:        activeEvent.EventID,
+		Action:           activeEvent.RecommendedAction,
+		EventDescription: activeEvent.Metadata["description"],
+	}
+
+	normalizedEvent, err := c.normalizer.Normalize(awsEvent, eventMetadata)
+	if err != nil {
+		metrics.MainNormalizationErrors.WithLabelValues(string(model.CSPAWS)).Inc()
+		slog.Error(
+			"Error normalizing AWS event for node %s (instance %s, event %s): %v",
+			nodeName,
+			instanceID,
+			activeEvent.Metadata["eventArn"],
+			err,
+		)
+
+		return fmt.Errorf("error normalizing AWS event for node %s (instance %s, event %s): %w",
+			nodeName,
+			instanceID,
+			activeEvent.Metadata["eventArn"],
+			err,
+		)
+	}
+
+	metrics.MainEventsToNormalize.WithLabelValues(string(model.CSPAWS)).Inc()
+
+	select {
+	case eventChan <- *normalizedEvent:
+		slog.Info("Dispatched maintenance event",
+			"node", nodeName,
+			"instanceID", instanceID,
+			"eventArn", eventArn)
+	case <-ctx.Done():
+		slog.Warn("Context cancelled while sending event",
+			"node", nodeName,
+			"instanceID", instanceID,
+			"eventArn", eventArn)
+
+		return fmt.Errorf("context cancelled while sending event for node %s (instance %s, event %s)",
+			nodeName,
+			instanceID,
+			eventArn,
+		)
+	}
+
+	return nil
+}
+
 // pollActiveEvents fetch events in non-final states from our
 // collection and refresh their status against AWS Health.
 func (c *AWSClient) pollActiveEvents(ctx context.Context, eventChan chan<- model.MaintenanceEvent) error {
@@ -589,76 +706,15 @@ func (c *AWSClient) pollActiveEvents(ctx context.Context, eventChan chan<- model
 	slog.Debug("Refreshing status for active events", "count", len(activeEvents))
 
 	for _, activeEvent := range activeEvents {
-		awsEvent, awsStatus, err := c.checkStatusOfKnownEvents(ctx, activeEvent)
-		if err != nil {
-			return fmt.Errorf("checkStatusOfKnownEvents: %w", err)
-		}
-
-		if awsStatus == string(model.CSPStatusUnknown) {
-			slog.Warn("AWS status is unknown for event",
-				"eventArn", activeEvent.Metadata["eventArn"])
-
-			err := c.store.UpdateEventStatus(ctx, activeEvent.EventID, model.StatusError)
-			if err != nil {
-				return fmt.Errorf("failed to update event status: %w", err)
-			}
-
-			continue
-		}
-
-		nodeName, instanceID, eventArn := activeEvent.NodeName, activeEvent.ResourceID, activeEvent.Metadata["eventArn"]
-		eventMetadata := eventpkg.EventMetadata{
-			Event:            awsEvent,
-			NodeName:         nodeName,
-			InstanceId:       instanceID,
-			EntityArn:        activeEvent.EventID,
-			Action:           activeEvent.RecommendedAction,
-			EventDescription: activeEvent.Metadata["description"],
-		}
-
-		normalizedEvent, err := c.normalizer.Normalize(awsEvent, eventMetadata)
-		if err != nil {
-			metrics.MainNormalizationErrors.WithLabelValues(string(model.CSPAWS)).Inc()
-			slog.Error(
-				"Error normalizing AWS event for node %s (instance %s, event %s): %v",
-				nodeName,
-				instanceID,
-				activeEvent.Metadata["eventArn"],
-				err,
-			)
-
-			return fmt.Errorf("error normalizing AWS event for node %s (instance %s, event %s): %w",
-				nodeName,
-				instanceID,
-				activeEvent.Metadata["eventArn"],
-				err,
-			)
-		}
-
-		metrics.MainEventsToNormalize.WithLabelValues(string(model.CSPAWS)).Inc()
-
-		select {
-		case eventChan <- *normalizedEvent:
-			slog.Info("Dispatched maintenance event",
-				"node", nodeName,
-				"instanceID", instanceID,
-				"eventArn", eventArn)
-		case <-ctx.Done():
-			slog.Warn("Context cancelled while sending event",
-				"node", nodeName,
-				"instanceID", instanceID,
-				"eventArn", eventArn)
-
-			return fmt.Errorf("context cancelled while sending event for node %s (instance %s, event %s)",
-				nodeName,
-				instanceID,
-				eventArn,
-			)
+		if err := c.processActiveEvent(ctx, activeEvent, eventChan); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
+
+var nowTime = time.Now().UTC()
 
 // pollEventsAPI queries the AWS Health API for events within a time range.
 func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]types.Event, error) {
@@ -670,7 +726,7 @@ func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]t
 		Regions:             []string{c.config.Region},
 		LastUpdatedTimes: []types.DateTimeRange{
 			{
-				From: aws.Time(startTime),
+				From: aws.Time(time.Now().UTC().Add(-24 * time.Hour)),
 			},
 		},
 	}
@@ -684,6 +740,23 @@ func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]t
 		slog.Error("Error while fetching maintenance events", "error", err)
 
 		return nil, fmt.Errorf("error while fetching maintenance events: %w", err)
+	}
+
+	events.Events = events.Events[:1] // only process the first event
+
+	// TODO: Uncomment this AFTER testing
+	if len(events.Events) > 0 {
+		timeSinceNow := time.Since(nowTime)
+		switch {
+		case timeSinceNow > 5*time.Minute:
+			events.Events[0].StatusCode = types.EventStatusCodeClosed
+		case timeSinceNow > 3*time.Minute:
+			events.Events[0].StatusCode = types.EventStatusCodeOpen
+		default:
+			events.Events[0].StatusCode = types.EventStatusCodeUpcoming
+			events.Events[0].StartTime = aws.Time(nowTime.Add(3 * time.Minute))
+			events.Events[0].EndTime = aws.Time(nowTime.Add(5 * time.Minute))
+		}
 	}
 
 	if len(events.Events) > 0 {
