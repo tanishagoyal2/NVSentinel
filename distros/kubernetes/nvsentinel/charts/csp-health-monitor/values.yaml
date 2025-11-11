@@ -50,7 +50,7 @@ tolerations: []
 podAnnotations: {}
 
 # Log verbosity level for the main CSP health monitor container (e.g. "debug", "info", "warn", "error")
-logLevel: info
+logLevel: debug
 
 # cspName specifies the active cloud service provider. Can be "gcp" or "aws".
 cspName: "aws"

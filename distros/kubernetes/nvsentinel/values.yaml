@@ -30,7 +30,8 @@ global:
     - effect: NoSchedule
       key: dedicated
       value: system-workload
-  imagePullSecrets: []
+  imagePullSecrets:
+    - name: nvidia-ngcuser-pull-secret
 
   gpuHealthMonitor:
     enabled: true

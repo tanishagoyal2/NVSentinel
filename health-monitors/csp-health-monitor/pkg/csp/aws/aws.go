@@ -440,13 +440,19 @@ func (c *AWSClient) shouldSkipEntity(
 			"entityArn", entityArn,
 			"error", err)
 
-		return false, instanceID, nodeName, entityArn
+		return true, instanceID, nodeName, entityArn
+	}
+
+	if existingEvent != nil {
+		slog.Info("Existing event found", "existingEventCSPStatus", string(existingEvent.CSPStatus),
+			"newCSPStatus", awsStatus)
 	}
 
 	if found && string(existingEvent.CSPStatus) == awsStatus {
-		slog.Debug("Event already exists with same CSP status, skipping",
+		slog.Info("Event already exists with same CSP status, skipping",
 			"entityArn", entityArn,
-			"cspStatus", awsStatus,
+			"existingCSPStatus", string(existingEvent.CSPStatus),
+			"newCSPStatus", awsStatus,
 			"node", nodeName)
 
 		return true, "", "", ""
@@ -563,6 +569,12 @@ func (c *AWSClient) getEventDescription(ctx context.Context, event types.Event) 
 		return ""
 	}
 
+	// Check if EventDescription is nil before accessing LatestDescription
+	if detailedEvents.SuccessfulSet[0].EventDescription == nil {
+		slog.Error("Event has nil EventDescription", "eventArn", *event.Arn)
+		return ""
+	}
+
 	desc := detailedEvents.SuccessfulSet[0].EventDescription.LatestDescription
 	if desc == nil {
 		return ""
@@ -628,7 +640,13 @@ func (c *AWSClient) processActiveEvent(
 	}
 
 	// if there is no change in the status, skip the event update
+	slog.Info("Checking if there is a change in the status",
+		"awsStatus", awsStatus,
+		"activeEventCSPStatus", string(activeEvent.CSPStatus))
 	if model.ProviderStatus(awsStatus) == activeEvent.CSPStatus {
+		slog.Debug("No change in the status, skipping the event update",
+			"awsStatus", awsStatus,
+			"activeEventCSPStatus", string(activeEvent.CSPStatus))
 		return nil
 	}
 
@@ -714,11 +732,12 @@ func (c *AWSClient) pollActiveEvents(ctx context.Context, eventChan chan<- model
 	return nil
 }
 
-var nowTime = time.Now().UTC()
+// var nowTime = time.Now().UTC()
 
 // pollEventsAPI queries the AWS Health API for events within a time range.
 func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]types.Event, error) {
 	pollStart := time.Now()
+	slog.Info("Polling AWS Health API", "startTime", startTime)
 	filter := &types.EventFilter{
 		Services:            []string{"EC2"},
 		EventTypeCategories: []types.EventTypeCategory{types.EventTypeCategoryScheduledChange},
@@ -726,7 +745,7 @@ func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]t
 		Regions:             []string{c.config.Region},
 		LastUpdatedTimes: []types.DateTimeRange{
 			{
-				From: aws.Time(time.Now().UTC().Add(-24 * time.Hour)),
+				From: aws.Time(startTime),
 			},
 		},
 	}
@@ -740,23 +759,6 @@ func (c *AWSClient) pollEventsAPI(ctx context.Context, startTime time.Time) ([]t
 		slog.Error("Error while fetching maintenance events", "error", err)
 
 		return nil, fmt.Errorf("error while fetching maintenance events: %w", err)
-	}
-
-	events.Events = events.Events[:1] // only process the first event
-
-	// TODO: Uncomment this AFTER testing
-	if len(events.Events) > 0 {
-		timeSinceNow := time.Since(nowTime)
-		switch {
-		case timeSinceNow > 5*time.Minute:
-			events.Events[0].StatusCode = types.EventStatusCodeClosed
-		case timeSinceNow > 3*time.Minute:
-			events.Events[0].StatusCode = types.EventStatusCodeOpen
-		default:
-			events.Events[0].StatusCode = types.EventStatusCodeUpcoming
-			events.Events[0].StartTime = aws.Time(nowTime.Add(3 * time.Minute))
-			events.Events[0].EndTime = aws.Time(nowTime.Add(5 * time.Minute))
-		}
 	}
 
 	if len(events.Events) > 0 {

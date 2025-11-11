@@ -2,7 +2,7 @@ module github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor
 
 go 1.25
 
-toolchain go1.25.3
+toolchain go1.25.0
 
 require (
 	cloud.google.com/go/compute v1.38.0
