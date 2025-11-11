@@ -23,10 +23,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/health"
 	"github.com/aws/aws-sdk-go-v2/service/health/types"
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/config"
 	eventpkg "github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/event"
 	"github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/model"
-	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
@@ -35,12 +35,10 @@ import (
 )
 
 const (
-	// Test AWS configuration constants
 	testRegion    = "us-east-1"
 	testService   = "EC2"
 	testAccountID = "123456789012"
 
-	// Test node and instance constants
 	testNodeName    = "test-node"
 	testNodeName1   = "test-node-1"
 	testNodeName2   = "test-node-2"
@@ -48,7 +46,6 @@ const (
 	testInstanceID1 = "i-additional000000001"
 	testInstanceID2 = "i-additional000000002"
 
-	// Test event description
 	testEventDescription = "What do I need to do?\nWe recommend that you reboot the instance which will restart the instance."
 )
 
@@ -56,7 +53,6 @@ var (
 	pollStartTime = time.Now().Add(-24 * time.Minute)
 )
 
-// MockAWSHealthClient is a mock for AWS Health client
 type MockAWSHealthClient struct {
 	mock.Mock
 }
@@ -92,7 +88,6 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 	mockAWSClient := new(MockAWSHealthClient)
 	fakeK8sClient := fake.NewSimpleClientset()
 
-	// Create a node with AWS provider ID
 	node := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testNodeName,
@@ -110,9 +105,10 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 			PollingIntervalSeconds: 60,
 			Enabled:                true,
 		},
-		awsClient:  mockAWSClient,
-		k8sClient:  fakeK8sClient,
-		normalizer: &eventpkg.AWSNormalizer{},
+		awsClient:   mockAWSClient,
+		k8sClient:   fakeK8sClient,
+		normalizer:  &eventpkg.AWSNormalizer{},
+		clusterName: "test-cluster",
 	}
 
 	return client, mockAWSClient, fakeK8sClient
@@ -614,14 +610,13 @@ func TestInstanceFiltering(t *testing.T) {
 	eventChan := make(chan model.MaintenanceEvent, 10)
 	instanceIDs := map[string]string{
 		testInstanceID: testNodeName,
-		// External instances are deliberately not included
 	}
 
-	// Call the function being tested
 	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
-	assert.NoError(t, err)
 
-	// Should receive exactly one event for our cluster instance
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "instance ID not found in node map")
+
 	receivedEvents := 0
 
 	timeout := time.After(1 * time.Second)
@@ -718,11 +713,13 @@ func TestInvalidEntityData(t *testing.T) {
 		testInstanceID: testNodeName,
 	}
 
-	// Call the function - should handle nil values without panicking
+	// Call the function - should handle nil values without panicking but return errors
 	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
-	assert.NoError(t, err)
+	// Should return error because 2 entities have invalid/nil values
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "entity with nil EntityValue")
 
-	// Should still receive event for the valid entity
+	// Should still receive event for the valid entity (before errors occurred)
 	select {
 	case event := <-eventChan:
 		assert.Equal(t, testInstanceID, event.ResourceID)
