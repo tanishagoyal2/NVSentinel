@@ -34,7 +34,6 @@ import (
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/health"
 	"github.com/aws/aws-sdk-go-v2/service/health/types"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -110,6 +109,7 @@ type AWSClient struct {
 	clusterName    string
 	kubeconfigPath string
 	store          datastore.Store
+	nodeInformer   *NodeInformer
 }
 
 func NewClient(
@@ -164,6 +164,11 @@ func NewClient(
 
 	slog.Info("AWS Client: Kubernetes clientset initialized successfully.")
 
+	nodeInformer := NewNodeInformer(k8sClient)
+	nodeInformer.Start(ctx)
+
+	slog.Info("AWS Client: Node informer started successfully")
+
 	normalizer, err := eventpkg.GetNormalizer(model.CSPAWS)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AWS normalizer: %w", err)
@@ -177,6 +182,7 @@ func NewClient(
 		clusterName:    clusterName,
 		kubeconfigPath: kubeconfigPath,
 		store:          store,
+		nodeInformer:   nodeInformer,
 	}, nil
 }
 
@@ -289,17 +295,7 @@ func (c *AWSClient) pollNewEvents(ctx context.Context,
 
 	slog.Debug("Polling AWS Health API")
 
-	instanceIDs, err := c.getClusterInstanceNodeMap(ctx)
-	if err != nil {
-		metrics.CSPAPIErrors.WithLabelValues(string(model.CSPAWS), "get_nodes_provider_id_error").Inc()
-		slog.Error("Error getting nodes provider IDs", "error", err)
-
-		return fmt.Errorf("error getting nodes provider IDs: %w", err)
-	}
-
-	slog.Debug("Found nodes with instance IDs", "instanceIDs", instanceIDs)
-
-	err = c.handleMaintenanceEvents(ctx, instanceIDs, eventChan, pollStartTime)
+	err := c.handleMaintenanceEvents(ctx, eventChan, pollStartTime)
 	if err != nil {
 		metrics.CSPAPIErrors.WithLabelValues(string(model.CSPAWS), "handle_maintenance_events_error").Inc()
 		slog.Error("Error polling AWS Health events", "error", err)
@@ -313,7 +309,6 @@ func (c *AWSClient) pollNewEvents(ctx context.Context,
 // handleMaintenanceEvents performs a single poll request to the AWS Health API.
 func (c *AWSClient) handleMaintenanceEvents(
 	ctx context.Context,
-	instanceIDs map[string]string,
 	eventChan chan<- model.MaintenanceEvent,
 	pollStartTime time.Time,
 ) error {
@@ -366,8 +361,6 @@ func (c *AWSClient) handleMaintenanceEvents(
 
 	var wg sync.WaitGroup
 
-	var mu sync.Mutex
-
 	var errs *multierror.Error
 
 	for eventID, event := range eventArnsMap {
@@ -384,17 +377,15 @@ func (c *AWSClient) handleMaintenanceEvents(
 				wg.Done()
 			}()
 
+			instanceIDs := c.nodeInformer.GetInstanceIDs()
+
 			err := c.processAWSHealthEvent(ctx, eventID, eventData, instanceIDs, eventChan)
 			if err != nil {
 				slog.Error("Error processing AWS Health event",
 					"eventID", eventID,
 					"error", err)
 
-				mu.Lock()
-
 				errs = multierror.Append(errs, err)
-
-				mu.Unlock()
 			}
 		}(eventID, event)
 	}
@@ -766,54 +757,6 @@ func (c *AWSClient) checkStatusOfKnownEvents(ctx context.Context, activeEvent mo
 	}
 
 	return awsEvents.Events[0], string(awsEvents.Events[0].StatusCode), nil
-}
-
-// GetNodesProviderId returns a list of EC2 instance IDs for the nodes in this cluster
-func (c *AWSClient) getClusterInstanceNodeMap(ctx context.Context) (map[string]string, error) {
-	slog.Debug("Fetching Kubernetes nodes to derive EC2 instance IDs")
-
-	nodes, err := c.k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %w", err)
-	}
-
-	instanceIDs := make(map[string]string)
-
-	for _, node := range nodes.Items {
-		if node.Spec.ProviderID == "" {
-			slog.Info("Node has no providerID", "node", node.Name)
-			continue
-		}
-
-		// Parse AWS provider ID format: aws:///us-east-1/i-0123456789abcdef0
-		if !strings.HasPrefix(node.Spec.ProviderID, "aws:///") {
-			slog.Info("Node has non-AWS providerID",
-				"node", node.Name,
-				"providerID", node.Spec.ProviderID)
-
-			continue
-		}
-
-		idPart := strings.TrimPrefix(node.Spec.ProviderID, "aws:///")
-
-		parts := strings.Split(idPart, "/")
-		instanceID := parts[len(parts)-1]
-
-		if strings.HasPrefix(instanceID, "i-") {
-			instanceIDs[instanceID] = node.Name
-			slog.Debug("Found instance ID for node",
-				"instanceID", instanceID,
-				"node", node.Name)
-		} else {
-			slog.Info("Unexpected instance ID format for node",
-				"node", node.Name,
-				"instanceID", instanceID)
-		}
-	}
-
-	slog.Debug("Found AWS EC2 instances in the cluster", "count", len(instanceIDs))
-
-	return instanceIDs, nil
 }
 
 func (c *AWSClient) mapToValidAction(desc string) pb.RecommendedAction {

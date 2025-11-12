@@ -99,16 +99,24 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 	_, err := fakeK8sClient.CoreV1().Nodes().Create(context.Background(), node, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
+	nodeInformer := &NodeInformer{
+		k8sClient: fakeK8sClient,
+		instanceIDs: map[string]string{
+			testInstanceID: testNodeName,
+		},
+	}
+
 	client := &AWSClient{
 		config: config.AWSConfig{
 			Region:                 testRegion,
 			PollingIntervalSeconds: 60,
 			Enabled:                true,
 		},
-		awsClient:   mockAWSClient,
-		k8sClient:   fakeK8sClient,
-		normalizer:  &eventpkg.AWSNormalizer{},
-		clusterName: "test-cluster",
+		awsClient:    mockAWSClient,
+		k8sClient:    fakeK8sClient,
+		normalizer:   &eventpkg.AWSNormalizer{},
+		clusterName:  "test-cluster",
+		nodeInformer: nodeInformer,
 	}
 
 	return client, mockAWSClient, fakeK8sClient
@@ -167,12 +175,9 @@ func TestHandleMaintenanceEvents(t *testing.T) {
 	}, nil)
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
-		testInstanceID: testNodeName,
-	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify we received an event
@@ -202,12 +207,9 @@ func TestNoMaintenanceEvents(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
-		testInstanceID: testNodeName,
-	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	mockAWSClient.AssertNotCalled(t, "DescribeAffectedEntities", mock.Anything, mock.Anything)
@@ -304,14 +306,15 @@ func TestMultipleAffectedEntities(t *testing.T) {
 
 	// Setup test channel and instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID:  testNodeName,
 		testInstanceID1: testNodeName1,
 		testInstanceID2: testNodeName2,
 	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify we received events for all affected instances
@@ -427,14 +430,14 @@ func TestCompletedEvent(t *testing.T) {
 
 	// Setup test channel and instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID:  testNodeName,
 		testInstanceID1: testNodeName1,
 		testInstanceID2: testNodeName2,
 	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify we received a completed event
@@ -476,12 +479,12 @@ func TestErrorScenario(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
 	// Call the function being tested - should not panic but return error
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.Error(t, err)
 
 	mockAWSClient.AssertNotCalled(t, "DescribeAffectedEntities", mock.Anything, mock.Anything)
@@ -520,12 +523,12 @@ func TestTimeWindowFiltering(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify no events were received (as our filter should exclude the old event)
@@ -608,11 +611,11 @@ func TestInstanceFiltering(t *testing.T) {
 
 	// Setup test channel with our cluster's instance IDs only
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "instance ID not found in node map")
@@ -709,12 +712,12 @@ func TestInvalidEntityData(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
 	// Call the function - should handle nil values without panicking but return errors
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	// Should return error because 2 entities have invalid/nil values
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "entity with nil EntityValue")
@@ -786,12 +789,12 @@ func TestInstanceRebootEvent(t *testing.T) {
 	}, nil)
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
 	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify we received a maintenance event with correct type
@@ -808,11 +811,9 @@ func TestInstanceRebootEvent(t *testing.T) {
 	}
 }
 
-// Test that ignores instance retirement events
 func TestIgnoredEventTypes(t *testing.T) {
 	client, mockAWSClient, _ := createTestClient(t)
 
-	// Setup test data for events that should be ignored
 	startTime := time.Now().Add(24 * time.Hour)
 	endTime := startTime.Add(2 * time.Hour)
 	testInstanceIDIgnored := "i-0123456789abcdef1"
@@ -829,7 +830,6 @@ func TestIgnoredEventTypes(t *testing.T) {
 		testRegion, testService, MAINTENANCE_SCHEDULED,
 	)
 
-	// Setup AWS Health API mock with events to be ignored
 	mockAWSClient.On("DescribeEvents", mock.Anything, mock.Anything).Return(&health.DescribeEventsOutput{
 		Events: []types.Event{
 			{
@@ -886,15 +886,13 @@ func TestIgnoredEventTypes(t *testing.T) {
 			},
 		}, nil)
 
-	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	instanceIDs := map[string]string{
+	client.nodeInformer.instanceIDs = map[string]string{
 		testInstanceID:        testNodeName,
 		testInstanceIDIgnored: testNodeNameIgnored,
 	}
 
-	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), instanceIDs, eventChan, pollStartTime)
+	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify no events were received (as these should be filtered out)
@@ -905,6 +903,5 @@ func TestIgnoredEventTypes(t *testing.T) {
 		assert.Equal(t, testInstanceIDIgnored, event.ResourceID)
 		assert.Equal(t, model.StatusDetected, event.Status)
 	default:
-		// This is expected, no events should be present
 	}
 }
