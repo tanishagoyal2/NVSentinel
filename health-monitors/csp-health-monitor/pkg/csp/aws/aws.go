@@ -249,7 +249,7 @@ func (c *AWSClient) getInitialPollStartTime(
 	defaultPollStartTime := time.Now().UTC().Add(-time.Duration(c.config.PollingIntervalSeconds) * time.Second)
 
 	if c.store == nil {
-		slog.Warn("Datastore client is nil for GCP monitor. Starting poll from current time.")
+		slog.Warn("Datastore client is nil for AWS monitor. Starting poll from current time.")
 
 		return defaultPollStartTime
 	}
@@ -361,6 +361,8 @@ func (c *AWSClient) handleMaintenanceEvents(
 
 	var wg sync.WaitGroup
 
+	var mu sync.Mutex
+
 	var errs *multierror.Error
 
 	for eventID, event := range eventArnsMap {
@@ -385,7 +387,11 @@ func (c *AWSClient) handleMaintenanceEvents(
 					"eventID", eventID,
 					"error", err)
 
+				mu.Lock()
+
 				errs = multierror.Append(errs, err)
+
+				mu.Unlock()
 			}
 		}(eventID, event)
 	}
@@ -486,8 +492,6 @@ func (c *AWSClient) processAWSHealthEvent(
 
 	var errs *multierror.Error
 
-	var mu sync.Mutex
-
 	desc := c.getEventDescription(ctx, evt)
 	action := c.mapToValidAction(desc)
 
@@ -507,11 +511,7 @@ func (c *AWSClient) processAWSHealthEvent(
 				"eventArn", eventArn,
 				"error", err)
 
-			mu.Lock()
-
 			errs = multierror.Append(errs, err)
-
-			mu.Unlock()
 		}
 	}
 
