@@ -30,6 +30,7 @@ import (
 	"github.com/nvidia/nvsentinel/health-monitors/csp-health-monitor/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -145,8 +146,11 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, kubernete
 		nodeInformer.Stop()
 	})
 
-	// Wait for the informer to sync
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		instanceIDs := nodeInformer.GetInstanceIDs()
+		_, exists := instanceIDs[testInstanceID]
+		return exists
+	}, 5*time.Second, 50*time.Millisecond, "Node should be tracked by informer")
 
 	client := &AWSClient{
 		config: config.AWSConfig{
@@ -295,8 +299,13 @@ func TestMultipleAffectedEntities(t *testing.T) {
 		})
 	}
 
-	// Wait for informer to sync the new nodes
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		instanceIDs := client.nodeInformer.GetInstanceIDs()
+		return len(instanceIDs) == 3 &&
+			instanceIDs[testInstanceID] == testNodeName &&
+			instanceIDs[testInstanceID1] == testNodeName1 &&
+			instanceIDs[testInstanceID2] == testNodeName2
+	}, 5*time.Second, 50*time.Millisecond, "All 3 nodes should be tracked by informer")
 
 	startTime := time.Now().Add(24 * time.Hour)
 	endTime := startTime.Add(2 * time.Hour)
@@ -361,9 +370,7 @@ func TestMultipleAffectedEntities(t *testing.T) {
 	receivedEvents := 0
 	affectedNodes := make(map[string]bool)
 
-	// Collect all events from channel (with timeout protection)
-	timeout := time.After(2 * time.Second)
-	for {
+	require.Eventually(t, func() bool {
 		select {
 		case event := <-eventChan:
 			var expectedEntityArn string
@@ -381,18 +388,12 @@ func TestMultipleAffectedEntities(t *testing.T) {
 			affectedNodes[event.NodeName] = true
 			assert.Equal(t, model.StatusDetected, event.Status)
 			assert.Equal(t, expectedEntityArn, event.EventID)
-		case <-timeout:
-			// Break out of the loop after timeout
-			goto checkResults
 		default:
-			if receivedEvents >= 3 {
-				goto checkResults
-			}
-			time.Sleep(10 * time.Millisecond) // Small sleep to prevent CPU spin
+			// No events available
 		}
-	}
+		return receivedEvents >= 3
+	}, 5*time.Second, 50*time.Millisecond, "Should receive 3 maintenance events")
 
-checkResults:
 	assert.Equal(t, 3, receivedEvents, "Should have received 3 maintenance events")
 	assert.Equal(t, 3, len(affectedNodes), "Should have affected 3 distinct nodes")
 }
@@ -492,8 +493,13 @@ func TestCompletedEvent(t *testing.T) {
 	assert.NoError(t, err)
 	defer testK8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeName2, metav1.DeleteOptions{})
 
-	// Wait for the informer to sync the new nodes
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		instanceIDs := client.nodeInformer.GetInstanceIDs()
+		return len(instanceIDs) == 3 &&
+			instanceIDs[testInstanceID] == testNodeName &&
+			instanceIDs[testInstanceID1] == testNodeName1 &&
+			instanceIDs[testInstanceID2] == testNodeName2
+	}, 5*time.Second, 50*time.Millisecond, "All 3 nodes should be tracked by informer")
 
 	eventChan := make(chan model.MaintenanceEvent, 10)
 
@@ -670,25 +676,18 @@ func TestInstanceFiltering(t *testing.T) {
 
 	receivedEvents := 0
 
-	timeout := time.After(1 * time.Second)
-	for {
+	require.Eventually(t, func() bool {
 		select {
 		case event := <-eventChan:
 			receivedEvents++
 			// Verify it's for our cluster's instance
 			assert.Equal(t, testInstanceID, event.ResourceID)
 			assert.Equal(t, testNodeName, event.NodeName)
-		case <-timeout:
-			goto checkResults
 		default:
-			if receivedEvents >= 1 {
-				goto checkResults
-			}
-			time.Sleep(10 * time.Millisecond)
 		}
-	}
+		return receivedEvents >= 1
+	}, 5*time.Second, 50*time.Millisecond, "Should receive event for our cluster's instance")
 
-checkResults:
 	assert.Equal(t, 1, receivedEvents, "Should receive event only for our cluster's instance")
 }
 
@@ -872,8 +871,12 @@ func TestIgnoredEventTypes(t *testing.T) {
 		_ = k8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeNameIgnored, metav1.DeleteOptions{})
 	})
 
-	// Wait for informer to sync
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		instanceIDs := client.nodeInformer.GetInstanceIDs()
+		return len(instanceIDs) == 2 &&
+			instanceIDs[testInstanceID] == testNodeName &&
+			instanceIDs[testInstanceIDIgnored] == testNodeNameIgnored
+	}, 5*time.Second, 50*time.Millisecond, "Both nodes should be tracked by informer")
 
 	instanceStopEventArn := fmt.Sprintf(
 		"arn:aws:health:%s::event/%s/%s/test-event-stop",

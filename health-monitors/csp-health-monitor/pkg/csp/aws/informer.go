@@ -75,10 +75,14 @@ func (ni *NodeInformer) Start(ctx context.Context) {
 
 	if !cache.WaitForCacheSync(ni.stopCh, ni.informer.HasSynced) {
 		slog.Error("Failed to sync node informer cache")
+		ni.Stop()
+
 		return
 	}
 
+	ni.mu.RLock()
 	slog.Info("AWS node informer cache synced successfully", "nodesMap", ni.nodeNameToInstanceIDMap)
+	ni.mu.RUnlock()
 
 	go func() {
 		<-ctx.Done()
