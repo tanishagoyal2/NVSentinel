@@ -101,7 +101,7 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 
 	nodeInformer := &NodeInformer{
 		k8sClient: fakeK8sClient,
-		instanceIDs: map[string]string{
+		nodeNameToInstanceIDMap: map[string]string{
 			testInstanceID: testNodeName,
 		},
 	}
@@ -307,7 +307,7 @@ func TestMultipleAffectedEntities(t *testing.T) {
 	// Setup test channel and instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
 
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID:  testNodeName,
 		testInstanceID1: testNodeName1,
 		testInstanceID2: testNodeName2,
@@ -430,7 +430,7 @@ func TestCompletedEvent(t *testing.T) {
 
 	// Setup test channel and instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID:  testNodeName,
 		testInstanceID1: testNodeName1,
 		testInstanceID2: testNodeName2,
@@ -479,7 +479,7 @@ func TestErrorScenario(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
@@ -523,7 +523,7 @@ func TestTimeWindowFiltering(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
@@ -611,7 +611,7 @@ func TestInstanceFiltering(t *testing.T) {
 
 	// Setup test channel with our cluster's instance IDs only
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
@@ -712,7 +712,7 @@ func TestInvalidEntityData(t *testing.T) {
 
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
@@ -789,7 +789,7 @@ func TestInstanceRebootEvent(t *testing.T) {
 	}, nil)
 	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID: testNodeName,
 	}
 
@@ -887,7 +887,7 @@ func TestIgnoredEventTypes(t *testing.T) {
 		}, nil)
 
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.instanceIDs = map[string]string{
+	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
 		testInstanceID:        testNodeName,
 		testInstanceIDIgnored: testNodeNameIgnored,
 	}

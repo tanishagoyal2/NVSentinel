@@ -164,7 +164,11 @@ func NewClient(
 
 	slog.Info("AWS Client: Kubernetes clientset initialized successfully.")
 
-	nodeInformer := NewNodeInformer(k8sClient)
+	nodeInformer, err := NewNodeInformer(k8sClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create node informer: %w", err)
+	}
+
 	nodeInformer.Start(ctx)
 
 	slog.Info("AWS Client: Node informer started successfully")

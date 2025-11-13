@@ -16,6 +16,7 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -29,22 +30,21 @@ import (
 // NodeInformer watches Kubernetes nodes and maintains an up-to-date mapping
 // of AWS instance IDs to node names
 type NodeInformer struct {
-	k8sClient   kubernetes.Interface
-	informer    cache.SharedIndexInformer
-	stopCh      chan struct{}
-	instanceIDs map[string]string
-	mu          sync.RWMutex
-	stopOnce    sync.Once
+	k8sClient               kubernetes.Interface
+	informer                cache.SharedIndexInformer
+	stopCh                  chan struct{}
+	nodeNameToInstanceIDMap map[string]string
+	mu                      sync.RWMutex
+	stopOnce                sync.Once
 }
 
-func NewNodeInformer(k8sClient kubernetes.Interface) *NodeInformer {
+func NewNodeInformer(k8sClient kubernetes.Interface) (*NodeInformer, error) {
 	ni := &NodeInformer{
-		k8sClient:   k8sClient,
-		stopCh:      make(chan struct{}),
-		instanceIDs: make(map[string]string),
+		k8sClient:               k8sClient,
+		stopCh:                  make(chan struct{}),
+		nodeNameToInstanceIDMap: make(map[string]string),
 	}
 
-	// Use informer factory which works with both real and fake clients
 	factory := informers.NewSharedInformerFactory(k8sClient, 0)
 	informer := factory.Core().V1().Nodes().Informer()
 
@@ -60,11 +60,12 @@ func NewNodeInformer(k8sClient kubernetes.Interface) *NodeInformer {
 	})
 	if err != nil {
 		slog.Error("Failed to add event handlers to informer", "error", err)
+		return nil, fmt.Errorf("failed to add event handlers to informer: %w", err)
 	}
 
 	ni.informer = informer
 
-	return ni
+	return ni, nil
 }
 
 func (ni *NodeInformer) Start(ctx context.Context) {
@@ -77,13 +78,7 @@ func (ni *NodeInformer) Start(ctx context.Context) {
 		return
 	}
 
-	slog.Info("AWS node informer cache synced successfully", "nodesMap", ni.instanceIDs)
-
-	// Log the initial node count
-	ni.mu.RLock()
-	count := len(ni.instanceIDs)
-	ni.mu.RUnlock()
-	slog.Info("AWS node informer ready", "nodeCount", count)
+	slog.Info("AWS node informer cache synced successfully", "nodesMap", ni.nodeNameToInstanceIDMap)
 
 	go func() {
 		<-ctx.Done()
@@ -103,8 +98,8 @@ func (ni *NodeInformer) GetInstanceIDs() map[string]string {
 	defer ni.mu.RUnlock()
 
 	// Return a copy to avoid concurrent access issues
-	instanceIDsCopy := make(map[string]string, len(ni.instanceIDs))
-	for k, v := range ni.instanceIDs {
+	instanceIDsCopy := make(map[string]string, len(ni.nodeNameToInstanceIDMap))
+	for k, v := range ni.nodeNameToInstanceIDMap {
 		instanceIDsCopy[k] = v
 	}
 
@@ -115,7 +110,7 @@ func (ni *NodeInformer) GetNodeName(instanceID string) (string, bool) {
 	ni.mu.RLock()
 	defer ni.mu.RUnlock()
 
-	nodeName, ok := ni.instanceIDs[instanceID]
+	nodeName, ok := ni.nodeNameToInstanceIDMap[instanceID]
 
 	return nodeName, ok
 }
@@ -127,7 +122,7 @@ func (ni *NodeInformer) handleNodeAdd(node *v1.Node) {
 	}
 
 	ni.mu.Lock()
-	ni.instanceIDs[instanceID] = node.Name
+	ni.nodeNameToInstanceIDMap[instanceID] = node.Name
 	ni.mu.Unlock()
 
 	slog.Info("Node added to AWS instance map",
@@ -142,7 +137,7 @@ func (ni *NodeInformer) handleNodeDelete(node *v1.Node) {
 	}
 
 	ni.mu.Lock()
-	delete(ni.instanceIDs, instanceID)
+	delete(ni.nodeNameToInstanceIDMap, instanceID)
 	ni.mu.Unlock()
 
 	slog.Info("Node removed from AWS instance map",
