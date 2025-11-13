@@ -17,6 +17,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -31,7 +32,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 const (
@@ -51,7 +54,37 @@ const (
 
 var (
 	pollStartTime = time.Now().Add(-24 * time.Minute)
+	testEnv       *envtest.Environment
+	testK8sConfig *rest.Config
+	testK8sClient kubernetes.Interface
 )
+
+func TestMain(m *testing.M) {
+	var err error
+
+	testEnv = &envtest.Environment{
+		ErrorIfCRDPathMissing: false,
+	}
+
+	testK8sConfig, err = testEnv.Start()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to start test environment: %v", err))
+	}
+
+	testK8sClient, err = kubernetes.NewForConfig(testK8sConfig)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create Kubernetes client: %v", err))
+	}
+
+	code := m.Run()
+
+	err = testEnv.Stop()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to stop test environment: %v", err))
+	}
+
+	os.Exit(code)
+}
 
 type MockAWSHealthClient struct {
 	mock.Mock
@@ -84,9 +117,8 @@ func (m *MockAWSHealthClient) DescribeEventDetails(
 	return args.Get(0).(*health.DescribeEventDetailsOutput), args.Error(1)
 }
 
-func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Clientset) {
+func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, kubernetes.Interface) {
 	mockAWSClient := new(MockAWSHealthClient)
-	fakeK8sClient := fake.NewSimpleClientset()
 
 	node := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -96,15 +128,25 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 			ProviderID: "aws:///" + testRegion + "/" + testInstanceID,
 		},
 	}
-	_, err := fakeK8sClient.CoreV1().Nodes().Create(context.Background(), node, metav1.CreateOptions{})
+	_, err := testK8sClient.CoreV1().Nodes().Create(context.Background(), node, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
-	nodeInformer := &NodeInformer{
-		k8sClient: fakeK8sClient,
-		nodeNameToInstanceIDMap: map[string]string{
-			testInstanceID: testNodeName,
-		},
-	}
+	t.Cleanup(func() {
+		_ = testK8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeName, metav1.DeleteOptions{})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	nodeInformer, err := NewNodeInformer(testK8sClient)
+	assert.NoError(t, err)
+	nodeInformer.Start(ctx)
+	t.Cleanup(func() {
+		nodeInformer.Stop()
+	})
+
+	// Wait for the informer to sync
+	time.Sleep(100 * time.Millisecond)
 
 	client := &AWSClient{
 		config: config.AWSConfig{
@@ -113,19 +155,18 @@ func createTestClient(t *testing.T) (*AWSClient, *MockAWSHealthClient, *fake.Cli
 			Enabled:                true,
 		},
 		awsClient:    mockAWSClient,
-		k8sClient:    fakeK8sClient,
+		k8sClient:    testK8sClient,
 		normalizer:   &eventpkg.AWSNormalizer{},
 		clusterName:  "test-cluster",
 		nodeInformer: nodeInformer,
 	}
 
-	return client, mockAWSClient, fakeK8sClient
+	return client, mockAWSClient, testK8sClient
 }
 
 func TestHandleMaintenanceEvents(t *testing.T) {
 	client, mockAWSClient, _ := createTestClient(t)
 
-	// Setup test data
 	startTime := time.Now().Add(24 * time.Hour)
 	endTime := startTime.Add(2 * time.Hour)
 	eventArn := fmt.Sprintf("arn:aws:health:%s::event/%s/AWS_EC2_INSTANCE_REBOOT_MAINTENANCE_SCHEDULED/test-event-1", testRegion, testService)
@@ -226,9 +267,9 @@ func TestNoMaintenanceEvents(t *testing.T) {
 // TestMultipleAffectedEntities tests that multiple instances affected by one event
 // generate multiple maintenance events
 func TestMultipleAffectedEntities(t *testing.T) {
-	client, mockAWSClient, fakeK8sClient := createTestClient(t)
+	client, mockAWSClient, k8sClient := createTestClient(t)
 
-	// Create additional 3 nodes
+	// Create additional nodes
 	additionalNodes := []struct {
 		name, instanceID string
 	}{
@@ -245,11 +286,18 @@ func TestMultipleAffectedEntities(t *testing.T) {
 				ProviderID: "aws:///" + testRegion + "/" + nodeData.instanceID,
 			},
 		}
-		_, err := fakeK8sClient.CoreV1().Nodes().Create(context.Background(), node, metav1.CreateOptions{})
+		_, err := k8sClient.CoreV1().Nodes().Create(context.Background(), node, metav1.CreateOptions{})
 		assert.NoError(t, err)
+
+		nodeName := nodeData.name
+		t.Cleanup(func() {
+			_ = k8sClient.CoreV1().Nodes().Delete(context.Background(), nodeName, metav1.DeleteOptions{})
+		})
 	}
 
-	// Setup test data
+	// Wait for informer to sync the new nodes
+	time.Sleep(200 * time.Millisecond)
+
 	startTime := time.Now().Add(24 * time.Hour)
 	endTime := startTime.Add(2 * time.Hour)
 	eventArn := fmt.Sprintf("arn:aws:health:%s::event/%s/AWS_EC2_INSTANCE_REBOOT_MAINTENANCE_SCHEDULED/test-event-1", testRegion, testService)
@@ -304,16 +352,8 @@ func TestMultipleAffectedEntities(t *testing.T) {
 		SuccessfulSet: []types.EventDetails{},
 	}, nil)
 
-	// Setup test channel and instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
 
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID:  testNodeName,
-		testInstanceID1: testNodeName1,
-		testInstanceID2: testNodeName2,
-	}
-
-	// Call the function being tested
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
@@ -428,16 +468,36 @@ func TestCompletedEvent(t *testing.T) {
 		},
 	}, nil)
 
-	// Setup test channel and instance IDs
-	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID:  testNodeName,
-		testInstanceID1: testNodeName1,
-		testInstanceID2: testNodeName2,
+	node2 := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNodeName1,
+		},
+		Spec: v1.NodeSpec{
+			ProviderID: "aws:///" + testRegion + "/" + testInstanceID1,
+		},
 	}
+	_, err := testK8sClient.CoreV1().Nodes().Create(context.Background(), node2, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	defer testK8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeName1, metav1.DeleteOptions{})
 
-	// Call the function being tested
-	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
+	node3 := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNodeName2,
+		},
+		Spec: v1.NodeSpec{
+			ProviderID: "aws:///" + testRegion + "/" + testInstanceID2,
+		},
+	}
+	_, err = testK8sClient.CoreV1().Nodes().Create(context.Background(), node3, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	defer testK8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeName2, metav1.DeleteOptions{})
+
+	// Wait for the informer to sync the new nodes
+	time.Sleep(200 * time.Millisecond)
+
+	eventChan := make(chan model.MaintenanceEvent, 10)
+
+	err = client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify we received a completed event
@@ -477,13 +537,8 @@ func TestErrorScenario(t *testing.T) {
 		assert.AnError, // Mock error
 	)
 
-	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID: testNodeName,
-	}
 
-	// Call the function being tested - should not panic but return error
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.Error(t, err)
 
@@ -521,13 +576,8 @@ func TestTimeWindowFiltering(t *testing.T) {
 		Events: []types.Event{},
 	}, nil)
 
-	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID: testNodeName,
-	}
 
-	// Call the function being tested
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
@@ -609,12 +659,10 @@ func TestInstanceFiltering(t *testing.T) {
 		},
 	}, nil)
 
-	// Setup test channel with our cluster's instance IDs only
+	// Setup test channel
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID: testNodeName,
-	}
 
+	// Note: Informer automatically tracks only the node created in createTestClient
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 
 	assert.Error(t, err)
@@ -710,15 +758,10 @@ func TestInvalidEntityData(t *testing.T) {
 		},
 	}, nil)
 
-	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID: testNodeName,
-	}
 
-	// Call the function - should handle nil values without panicking but return errors
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
-	// Should return error because 2 entities have invalid/nil values
+
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "entity with nil EntityValue")
 
@@ -787,13 +830,8 @@ func TestInstanceRebootEvent(t *testing.T) {
 			},
 		},
 	}, nil)
-	// Setup test channel and test instance IDs
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID: testNodeName,
-	}
 
-	// Call the function being tested
 	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
@@ -812,7 +850,7 @@ func TestInstanceRebootEvent(t *testing.T) {
 }
 
 func TestIgnoredEventTypes(t *testing.T) {
-	client, mockAWSClient, _ := createTestClient(t)
+	client, mockAWSClient, k8sClient := createTestClient(t)
 
 	startTime := time.Now().Add(24 * time.Hour)
 	endTime := startTime.Add(2 * time.Hour)
@@ -820,7 +858,23 @@ func TestIgnoredEventTypes(t *testing.T) {
 	testNodeNameIgnored := "test-node1"
 	entityArn1 := fmt.Sprintf("arn:aws:ec2:%s:%s:instance/%s", testRegion, testAccountID, testInstanceIDIgnored)
 
-	// Create two events that should be ignored
+	nodeIgnored := &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNodeNameIgnored,
+		},
+		Spec: v1.NodeSpec{
+			ProviderID: "aws:///" + testRegion + "/" + testInstanceIDIgnored,
+		},
+	}
+	_, err := k8sClient.CoreV1().Nodes().Create(context.Background(), nodeIgnored, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = k8sClient.CoreV1().Nodes().Delete(context.Background(), testNodeNameIgnored, metav1.DeleteOptions{})
+	})
+
+	// Wait for informer to sync
+	time.Sleep(200 * time.Millisecond)
+
 	instanceStopEventArn := fmt.Sprintf(
 		"arn:aws:health:%s::event/%s/%s/test-event-stop",
 		testRegion, testService, "AWS_EC2_INSTANCE_STOP_SCHEDULED",
@@ -887,12 +941,8 @@ func TestIgnoredEventTypes(t *testing.T) {
 		}, nil)
 
 	eventChan := make(chan model.MaintenanceEvent, 10)
-	client.nodeInformer.nodeNameToInstanceIDMap = map[string]string{
-		testInstanceID:        testNodeName,
-		testInstanceIDIgnored: testNodeNameIgnored,
-	}
 
-	err := client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
+	err = client.handleMaintenanceEvents(context.Background(), eventChan, pollStartTime)
 	assert.NoError(t, err)
 
 	// Verify no events were received (as these should be filtered out)
