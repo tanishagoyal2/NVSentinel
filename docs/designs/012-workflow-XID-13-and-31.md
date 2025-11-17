@@ -4,7 +4,7 @@
 XID 13 and 31 are non-fatal and were getting ignored. We need to make our system smart enough to make decisions based on the history of events. We already have WORKFLOW_XID_13 and WORKFLOW_XID_31 defined as investigatory actions for XID 13 and 31 but not implemented yet in our application. In this document we have mentioned all the changes that would be required to implement these workflows.
 
 ## XID 13
-XID 13 (Graphics Engine Exception) logged for general user application faults. Typically this is an out-of-bounds error where the user has walked past the end of an array, but could also be an illegal instruction, illegal register, or other case.errors.
+[XID 13 (Graphics Engine Exception)](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html#:~:text=XID-,13,-ROBUST_CHANNEL_GR_EXCEPTION%20/%20ROBUST_CHANNEL_GR_ERROR_SW_NOTIFY) logged for general user application faults. Typically this is an out-of-bounds error where the user has walked past the end of an array, but could also be an illegal instruction, illegal register, or other case.errors.
 
 It can indicate different root causes depending on:
 - Whether they repeat on the same hardware components (GPC/TPC/SM)
@@ -46,7 +46,7 @@ NVRM: Xid (PCI:0002:00:00): 13, pid=2519562, name=python3, Graphics Exception: C
 
 ## XID 31
 
-XID 31 (MMU Fault) errors indicate memory management issues. This event is logged when a fault is reported by the MMU, such as when an illegal address access is made by an applicable unit on the chip. Typically these are application-level bugs, but can also be driver bugs or hardware bugs.
+[XID 31 (MMU Fault)](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html#:~:text=XID-,31,-ROBUST_CHANNEL_FIFO_ERROR_MMU_ERR_FLT) errors indicate memory management issues. This event is logged when a fault is reported by the MMU, such as when an illegal address access is made by an applicable unit on the chip. Typically these are application-level bugs, but can also be driver bugs or hardware bugs.
 
 The decision logic is based on:
 - Whether the same physical GPU (tracked by GPU_UUID) experiences repeated MMU faults
@@ -80,7 +80,7 @@ MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000.
 Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ
 ```
 
-**To determine if an MMU fault occurred on the same GPU, we can track the GPU_UUID which is added by the syslog health monitor to the health event.**
+To determine if an MMU fault occurred on the same GPU, we can track the GPU_UUID which is added by the syslog health monitor to the health event.
 
 ---
 
@@ -88,7 +88,9 @@ Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ
 
 We will split the implementation across two modules:
 
-**Syslog Health Monitor:** Fetches GPC, TPC and SM info required for XID 13
+**Syslog Health Monitor:** 
+1. Update parsing logic: update **csp parser** and **xid-analyzer parser** to parse hardware location info and to store it in metadata field of XIDDetails
+2. Send the Health Event with all affected entities data like GPC, TPC and SM (required for XID 13)
 
 **Health Events Analyzer:** Provides the correct recommended action by checking the history of XIDs
 
@@ -97,8 +99,7 @@ We will split the implementation across two modules:
 │  Syslog Health Monitor                                     │
 │  Role: Detection & Data Extraction                         │
 │  - Parse XID 13 from journal                               │
-│  - Extract: PCI, GPC, TPC, SM from message                 │
-│  - Send raw HealthEvent with metadata containing           |
+│  - Send raw HealthEvent with entities details like         |
 |      TPC, GPC AND SM│                                      |
 │  - NO decision logic or history tracking                   │
 └────────────────┬───────────────────────────────────────────┘
@@ -195,7 +196,7 @@ We will split the implementation across two modules:
       ┌───────────────────────────────┐
       │ Decision 2:                   │
       │ Check if repeated on          │
-      │ same GPU_UUID                 │
+      │ diff GPU_UUID                 │
       └───────┬───────────────────────┘
               │
               ├─ Found >=2 repeats? ─→ CHECK_APP_CUDA
@@ -246,55 +247,133 @@ type XIDDetails struct {
 ```
 ---
 
-### 1.2 Parse GPC/TPC/SM from API Response
-We need to update the parsing logic to fetch GPC, TPC and SM info and add them to XIDDetails metadata
+### 1.2 Parse GPC/TPC/SM in XID Analyzer Service
+We need to update the XID analyzer service (sidecar) to extract GPC, TPC and SM info from XID messages and return them in the metadata field.
 
-**File:** `/health-monitors/syslog-health-monitor/pkg/xid/parser/sidecar.go`
+**File:** [`xid-analyzer.py`](https://gitlab-master.nvidia.com/dgxcloud/mk8s/k8s-addons/nvidia-xid-analyzer/-/blob/main/nvidia_xid_analyzer.py?ref_type=heads)
 
-**Change:** Extract hardware location from the `context` field after API response
+**Change 1:** Add `metadata` field to `XIDEntry` dataclass
+
+```python
+@dataclass
+class XIDEntry:
+    """Structured class for storing and extracting NVIDIA XID error information"""
+    # ... existing fields ...
+    
+    vbios_version: Optional[str] = None  # GPU VBIOS version
+    mnemonic: Optional[str] = None  # Mnemonic from the XID catalog
+    
+    # NEW: Add metadata field for additional info like hardware location
+    metadata: Optional[dict[str, str]] = None  # Additional metadata (e.g., GPC, TPC, SM for XID 13)
+    
+    # ... rest of the code ...
+```
+
+**Change 2:** Add helper function to extract hardware location
+
+```python
+def fetch_XID_13_metadata_from_message(message):
+    """
+    Extract GPC, TPC, SM values from XID 13 message.
+    Example: "(GPC 1, TPC 3, SM 0)" -> gpc="1", tpc="3", sm="0"
+    Returns tuple of (gpc, tpc, sm) or (None, None, None) if pattern not found
+    """
+    pattern = re.compile(r'\(GPC\s+(\d+),\s*TPC\s+(\d+),\s*SM\s+(\d+)\)')
+    match = pattern.search(message)
+    
+    if match:
+        return match.group(1), match.group(2), match.group(3)
+    
+    return None, None, None
+```
+
+**Change 3:** Update Pattern 4 in `from_message` method to extract and populate metadata
+
+```python
+# Pattern 4: Simple XID message in dmesg
+pattern_dmesg = re.compile(
+    r'NVRM: Xid \(PCI:(?P<pcie_bdf>[^)]+)\): (?P<xid_number>\d+), pid=(?:\'[^\']*\'|[^,]*), name=[^,]*, (.*)'
+)
+match = pattern_dmesg.search(message)
+if match:
+    logging.debug(f'Matched pattern_dmesg')
+    xid_number = int(match.group("xid_number"))
+    
+    # NEW: Extract GPC/TPC/SM if present (particularly for XID 13)
+    if xid_number == 13 :
+        gpc, tpc, sm = fetch_XID_13_metadata_from_message(message)
+        metadata = None
+        if gpc and tpc and sm:
+                metadata = {
+                "GPC": gpc,
+                "TPC": tpc,
+                "SM": sm
+                }
+    
+    xid_entry = cls(
+        name='',
+        number=xid_number,
+        context=message,
+        driver=driver,
+        timestamp=timestamp if timestamp else None,
+        machine=machine,
+        pcie_bdf=match.group("pcie_bdf"),
+        metadata=metadata  # NEW: Add metadata field
+    )
+    xid_entry.parse_timestamp()
+    return xid_entry
+```
+
+**Alternative Implementation:** CSV Parser (fallback when sidecar is not enabled)
+
+**File:** `/health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
+
+The CSV parser also needs to extract hardware location for consistency:
 
 ```go
-func (p *SidecarParser) Parse(message string) (*Response, error) {
-	// ... existing API call and unmarshal code ...
+// parseStandardXID parses standard XID messages
+func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
+	// ... existing parsing code ...
 	
-	err = json.Unmarshal(bodyBytes, &xidResp)
-	if err != nil {
-		slog.Error("Error decoding XID response", "error", err.Error())
-		metrics.XidProcessingErrors.WithLabelValues("response_decoding_error", p.nodeName).Inc()
-		return nil, fmt.Errorf("error decoding xid response: %w", err)
-	}
+	metadata := make(map[string]string)
 
-	// NEW: Extract GPC/TPC/SM from context if present
-	if xidResp.Success && xidResp.Result.Context != "" {
-		gpc, tpc, sm := extractHardwareLocation(xidResp.Result.Context)
+	if xidCode == 13 {
+		gpc, tpc, sm := fetchXID13MetadataFromMessage(message)
 		if gpc != "" && tpc != "" && sm != "" {
-			xidResp.Result.Metadata = map[string]string{
+			metadata = map[string]string{
 				"GPC": gpc,
 				"TPC": tpc,
 				"SM":  sm,
 			}
 		}
 	}
+	xidDetails := XIDDetails{
+		DecodedXIDStr: fmt.Sprintf("%d", xidCode),
+		Driver:        "",
+		Mnemonic:      fmt.Sprintf("XID %d", xidCode),
+		Name:          fmt.Sprintf("%d", xidCode),
+		Number:        xidCode,
+		PCIE:          pciAddr,
+		Resolution:    recommendedAction.String(),
+		Metadata:      metadata,
+	}
 
-	return &xidResp, nil
+	return &Response{
+		Success: true,
+		Result:  xidDetails,
+		Error:   "",
+	}, nil
 }
-```
 
-**Add new helper function:**
-
-```go
-// extractHardwareLocation extracts GPC, TPC, SM values from XID message
-// Example: "(GPC 1, TPC 3, SM 0)" -> gpc="1", tpc="3", sm="0"
-// Returns empty strings if pattern not found
-func extractHardwareLocation(message string) (gpc, tpc, sm string) {
-	// Regex pattern: (GPC 1, TPC 3, SM 0)
+// fetchXID13MetadataFromMessage extracts GPC, TPC, SM values from XID message
+func fetchXID13MetadataFromMessage(message string) (string, string, string) {
 	re := regexp.MustCompile(`\(GPC\s+(\d+),\s*TPC\s+(\d+),\s*SM\s+(\d+)\)`)
 	matches := re.FindStringSubmatch(message)
-	
+
 	if len(matches) != 4 {
 		return "", "", ""
 	}
-	
+
 	return matches[1], matches[2], matches[3]
 }
 ```
@@ -305,7 +384,7 @@ func extractHardwareLocation(message string) (gpc, tpc, sm string) {
 
 **File:** `/health-monitors/syslog-health-monitor/pkg/xid/xid_handler.go`
 
-**Change:** Add GPC/TPC/SM to the metadata map in `createHealthEventFromResponse` method
+**Change:** Add GPC/TPC/SM to the metadata map in `createHealthEventFromResponse` method. The hardware location will be available from the parser response.
 
 ```go
 func (xidHandler *XIDHandler) createHealthEventFromResponse(
@@ -314,24 +393,31 @@ func (xidHandler *XIDHandler) createHealthEventFromResponse(
 ) *pb.HealthEvents {
 	normPCI := xidHandler.normalizePCI(xidResp.Result.PCIE)
 	
-	// ... existing code to get GPU UUID, etc. ...
-	
+        // extract GPC, TPC and SM info from xidResp
+	if xidResp.Result.Metadata != nil {
+		if gpc, ok := xidResp.Result.Metadata["GPC"]; ok {
+			entities = append(entities, &pb.Entity{
+				EntityType: "GPC", EntityValue: gpc,
+			})
+		}
+		if tpc, ok := xidResp.Result.Metadata["TPC"]; ok {
+			entities = append(entities, &pb.Entity{
+				EntityType: "TPC", EntityValue: tpc,
+			})
+		}
+		if sm, ok := xidResp.Result.Metadata["SM"]; ok {
+			entities = append(entities, &pb.Entity{
+				EntityType: "SM", EntityValue: sm,
+			})
+		}
+	}
+
+        // ... rest of the method ...
 	metadata := make(map[string]string)
-	metadata["pci_address"] = xidResp.Result.PCIE
-	metadata["xid_code"] = fmt.Sprintf("%d", xidResp.Result.Number)
-	metadata["decoded_xid"] = xidResp.Result.DecodedXIDStr
-	metadata["mnemonic"] = xidResp.Result.Mnemonic
-	
-	if gpuUUID != "" {
-		metadata["gpu_uuid"] = gpuUUID
+	if chassisSerial := xidHandler.metadataReader.GetChassisSerial(); chassisSerial != nil {
+		metadata["chassis_serial"] = *chassisSerial
 	}
 	
-	// NEW: Add hardware location information
-	metadata["gpc"] = xidResp.Result.Metadata["GPC"]  
-	metadata["tpc"] = xidResp.Result.Metadata["TPC"]
-	metadata["sm"] = xidResp.Result.Metadata["SM"]
-	
-	// ... rest of the method ...
 }
 ```
 
@@ -340,7 +426,7 @@ For the XID 13 journal entry:
 NVRM: Xid (PCI:0009:01:00): 13, Graphics SM Warp Exception on (GPC 0, TPC 3, SM 0): Out Of Range Address
 ```
 
-The HealthEvent will have data like this:
+The HealthEvent stored in MongoDB will have data like this:
 
 ```javascript
 {
@@ -350,13 +436,11 @@ The HealthEvent will have data like this:
     checkName: "SysLogsXIDError",
     entitiesimpacted: [
       {entitytype: "PCI", entityvalue: "0009:01:00"},
-      {entitytype: "GPU_UUID", entityvalue: "GPU-abc123"}
+      {entitytype: "GPU_UUID", entityvalue: "GPU-abc123"},
+      {entitytype: "GPC", entityvalue: "0"},
+      {entitytype: "TPC", entityvalue: "3"},
+      {entitytype: "SM", entityvalue: "0"},
     ],
-    metadata: {
-      "GPC": "0",
-      "TPC": "3",
-      "SM": "0"
-    },
     generatedtimestamp: {seconds: 1699900000},
     recommendedAction: "RESTART_APP"
   }
