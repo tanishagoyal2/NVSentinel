@@ -89,7 +89,7 @@ To determine if an MMU fault occurred on the same GPU, we can track the GPU_UUID
 We will split the implementation across two modules:
 
 **Syslog Health Monitor:** 
-1. Update parsing logic: update **csp parser** and **xid-analyzer parser** to parse hardware location info and to store it in metadata field of XIDDetails
+1. Update parsing logic: update **CSV parser** and **xid-analyzer parser** to parse hardware location info and to store it in metadata field of XIDDetails
 2. Send the Health Event with all affected entities data like GPC, TPC and SM (required for XID 13)
 
 **Health Events Analyzer:** Provides the correct recommended action by checking the history of XIDs
@@ -250,81 +250,7 @@ type XIDDetails struct {
 ### 1.2 Parse GPC/TPC/SM in XID Analyzer Service
 We need to update the XID analyzer service (sidecar) to extract GPC, TPC and SM info from XID messages and return them in the metadata field.
 
-**File:** [`xid-analyzer.py`](https://gitlab-master.nvidia.com/dgxcloud/mk8s/k8s-addons/nvidia-xid-analyzer/-/blob/main/nvidia_xid_analyzer.py?ref_type=heads)
-
-**Change 1:** Add `metadata` field to `XIDEntry` dataclass
-
-```python
-@dataclass
-class XIDEntry:
-    """Structured class for storing and extracting NVIDIA XID error information"""
-    # ... existing fields ...
-    
-    vbios_version: Optional[str] = None  # GPU VBIOS version
-    mnemonic: Optional[str] = None  # Mnemonic from the XID catalog
-    
-    # NEW: Add metadata field for additional info like hardware location
-    metadata: Optional[dict[str, str]] = None  # Additional metadata (e.g., GPC, TPC, SM for XID 13)
-    
-    # ... rest of the code ...
-```
-
-**Change 2:** Add helper function to extract hardware location
-
-```python
-def fetch_XID_13_metadata_from_message(message):
-    """
-    Extract GPC, TPC, SM values from XID 13 message.
-    Example: "(GPC 1, TPC 3, SM 0)" -> gpc="1", tpc="3", sm="0"
-    Returns tuple of (gpc, tpc, sm) or (None, None, None) if pattern not found
-    """
-    pattern = re.compile(r'\(GPC\s+(\d+),\s*TPC\s+(\d+),\s*SM\s+(\d+)\)')
-    match = pattern.search(message)
-    
-    if match:
-        return match.group(1), match.group(2), match.group(3)
-    
-    return None, None, None
-```
-
-**Change 3:** Update Pattern 4 in `from_message` method to extract and populate metadata
-
-```python
-# Pattern 4: Simple XID message in dmesg
-pattern_dmesg = re.compile(
-    r'NVRM: Xid \(PCI:(?P<pcie_bdf>[^)]+)\): (?P<xid_number>\d+), pid=(?:\'[^\']*\'|[^,]*), name=[^,]*, (.*)'
-)
-match = pattern_dmesg.search(message)
-if match:
-    logging.debug(f'Matched pattern_dmesg')
-    xid_number = int(match.group("xid_number"))
-    
-    # NEW: Extract GPC/TPC/SM if present (particularly for XID 13)
-    if xid_number == 13 :
-        gpc, tpc, sm = fetch_XID_13_metadata_from_message(message)
-        metadata = None
-        if gpc and tpc and sm:
-                metadata = {
-                "GPC": gpc,
-                "TPC": tpc,
-                "SM": sm
-                }
-    
-    xid_entry = cls(
-        name='',
-        number=xid_number,
-        context=message,
-        driver=driver,
-        timestamp=timestamp if timestamp else None,
-        machine=machine,
-        pcie_bdf=match.group("pcie_bdf"),
-        metadata=metadata  # NEW: Add metadata field
-    )
-    xid_entry.parse_timestamp()
-    return xid_entry
-```
-
-**Alternative Implementation:** CSV Parser (fallback when sidecar is not enabled)
+**CSV Parser Changes** (fallback when sidecar is not enabled) We need to update CSV parser also to fetch hardware location info and store it in metadata.
 
 **File:** `/health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
 
@@ -451,7 +377,7 @@ The HealthEvent stored in MongoDB will have data like this:
 ## Part 2: Health Events Analyzer Changes
 
 ### Responsibility
-**Analyze XID 13 patterns and determine intelligent recommended actions based on the history of events**
+Analyze XID 13 and XID 31 patterns and determine intelligent recommended actions based on the history of events
 
 ### 2.1 Create XID 13 Analysis Rules
 We need to add 3 new rules in the health-events-analyzer config to handle the following scenarios and provide better investigatory actions:
@@ -459,8 +385,8 @@ We need to add 3 new rules in the health-events-analyzer config to handle the fo
 | Pipeline Condition Check | Recommended Action |
 |--------------------------|-------------------|
 | **Repeat TPC and GPC** | `RUN_FIELDDIAG` |
-| **Solo, no burst** | `CHECK_APP_CUDA` |
-| **Not Repeat TPC and GPC** | `CHECK_APP_CUDA` |
+| **Solo, no burst** | `NONE` (CHECK_APP_CUDA) |
+| **Not Repeat TPC and GPC** | `NONE` (CHECK_APP_CUDA) |
 
 
 ### 2.2 Create XID 31 Analysis Rules
@@ -470,8 +396,8 @@ We need to add 3 new rules in the health-events-analyzer config to handle the fo
 | Pipeline Condition Check | Recommended Action |
 |--------------------------|-------------------|
 | **Repeat on Same GPU** | `RUN_DCGMEUD` |
-| **Solo, no burst** | `CHECK_APP_CUDA` |
-| **Repeat on diff GPU** | `CHECK_APP_CUDA` |
+| **Solo, no burst** | `NONE`(CHECK_APP_CUDA) |
+| **Repeat on diff GPU** | `NONE` (CHECK_APP_CUDA) |
 
 **Since "solo, no burst" is common for both XIDs, we can define a single rule for them. Therefore, a total of 5 new rules will be added to the health-events-analyzer.**
 
@@ -494,8 +420,7 @@ RecommendedAction_UNKNOWN         RecommendedAction = 99
 With the implementation of WORKFLOW_XID_13 and WORKFLOW_XID_31, we need to add the following new action enums:
 
 ```go
-RecommendedAction_CHECK_APP_CUDA       RecommendedAction = 26
 RecommendedAction_RUN_FIELDDIAG        RecommendedAction = 6
-RecommendedAction_RUN_DCGMEUD          RecommendedAction = 27
+RecommendedAction_RUN_DCGMEUD          RecommendedAction = 26
 ```
 ---
