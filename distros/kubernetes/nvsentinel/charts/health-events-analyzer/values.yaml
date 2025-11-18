@@ -69,7 +69,7 @@ config: |
   ]
 
   [[rules]]
-  name = "RepeatedXidError"
+  name = "RepeatedXidErrorOnSameGPU"
   description = "Detect occurrence of fatal XIDs 5 times within 24 hours (production: 86400s for real workloads)"
   recommended_action = "CONTACT_SUPPORT"
   stage = [
@@ -100,7 +100,7 @@ config: |
                       "input": {
                         "$filter": {
                           "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
-                          "cond": {"$eq": ["$$this.entitytype", "GPU"]}
+                          "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
                         }
                       },
                       "in": "$$this.entityvalue"
@@ -111,7 +111,7 @@ config: |
                       "input": {
                         "$filter": {
                           "input": "this.healthevent.entitiesimpacted",
-                          "cond": {"$eq": ["$$this.entitytype", "GPU"]}
+                          "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
                         }
                       },
                       "in": "$$this.entityvalue"
@@ -285,6 +285,81 @@ config: |
     }
     ''',
     '{"$match": {"count": {"$gte": 5}}}'
+  ]
+
+  [[rules]]
+  name = "RepeatedXidErrorOnDifferentGPU"
+  description = "Detect occurrence of XIDs on 5+ different GPUs within 24 hours"
+  recommended_action = "CHECK_APP_CUDA"
+  stage = [
+    '''
+    {
+      "$match": {
+        "$expr": {
+          "$gte": [
+            "$healthevent.generatedtimestamp.seconds",
+            {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+          ]
+        }
+      }
+    }
+    ''',
+    '''
+    {
+      "$match": {
+        "healthevent.ishealthy": false,
+        "healthevent.nodename": "this.healthevent.nodename",
+        "healthevent.errorcode": "this.healthevent.errorcode.0"
+      }
+    }
+    ''',
+    '''
+    {
+      "$addFields": {
+        "gpuUuid": {
+          "$let": {
+            "vars": {
+              "uuid": {
+                "$arrayElemAt": [
+                  {
+                    "$map": {
+                      "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}}},
+                      "in": "$$this.entityvalue"
+                    }
+                  },
+                  0
+                ]
+              }
+            },
+            "in": {
+              "$cond": [
+                {"$ne": ["$$uuid", null]},
+                "$$uuid",
+                null
+              ]
+            }
+          }
+        }
+      }
+    }
+    ''',
+    '''
+    {
+      "$group": {
+        "_id": null,
+        "uniqueGPUs": {"$addToSet": "$gpuUuid"}
+      }
+    }
+    ''',
+    '''
+    {
+      "$match": {
+        "$expr": {
+          "$gte": [{"$size": "$uniqueGPUs"}, 5]
+        }
+      }
+    }
+    '''
   ]
 
   [[rules]]

@@ -78,7 +78,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithComponentClass("GPU").
-		WithCheckName("RepeatedXidError")
+		WithCheckName("RepeatedXidErrorOnSameGPU")
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(testCtx.NodeName).
@@ -194,7 +194,7 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithHealthy(true).
 		WithFatal(false).
 		WithMessage("No health failures").
-		WithCheckName("RepeatedXidError")
+		WithCheckName("RepeatedXidErrorOnSameGPU")
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(nodeName).

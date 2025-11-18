@@ -37,7 +37,7 @@ data:
     ]
 
     [[rules]]
-    name = "RepeatedXidError"
+    name = "RepeatedXidErrorOnSameGPU"
     description = "Detect occurrence of fatal XIDs 2 times within 5 minutes (E2E test window) where the burst window is 10 seconds and sticky XIDs window is 20seconds"
     recommended_action = "CONTACT_SUPPORT"
     stage = [
@@ -68,7 +68,7 @@ data:
                         "input": {
                           "$filter": {
                             "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
-                            "cond": {"$eq": ["$$this.entitytype", "GPU"]}
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
                           }
                         },
                         "in": "$$this.entityvalue"
@@ -254,11 +254,88 @@ data:
       ''',
       '{"$match": {"count": {"$gte": 2}}}'
     ]
+
+    [[rules]]
+    name = "RepeatedXidErrorOnDifferentGPU"
+    description = "Detect occurrence of XIDs on 3+ different GPUs within 5 minutes"
+    message = "run CHECK_APP_CUDA"
+    recommended_action = "NONE"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 300]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "healthevent.ishealthy": false,
+          "healthevent.nodename": "this.healthevent.nodename",
+          "healthevent.errorcode": "this.healthevent.errorcode.0"
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "gpuUuid": {
+            "$let": {
+              "vars": {
+                "uuid": {
+                  "$arrayElemAt": [
+                    {
+                      "$map": {
+                        "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}}},
+                        "in": "$$this.entityvalue"
+                      }
+                    },
+                    0
+                  ]
+                }
+              },
+              "in": {
+                "$cond": [
+                  {"$ne": ["$$uuid", null]},
+                  "$$uuid",
+                  null
+                ]
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$group": {
+          "_id": null,
+          "uniqueGPUs": {"$addToSet": "$gpuUuid"}
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [{"$size": "$uniqueGPUs"}, 3]
+          }
+        }
+      }
+      '''
+    ]
     
     [[rules]]
     name = "XIDErrorOnSameGPCAndTPC"
     description = "Detect if XID error occurred 3 times on the same GPC and TPC within 2 minutes"
-    recommended_action = "RUN_FIELDDIAG"
+    message = "if pass run RUN_FIELDDIAGS" 
+    recommended_action = "RUN_DCGMEUD"
     stage = [
       '''
       {
@@ -534,7 +611,8 @@ data:
     [[rules]]
     name = "XIDErrorOnDifferentGPCAndTPC"
     description = "Detect if XID error occurred on 3+ different GPC and TPC combinations within 2 minutes"
-    recommended_action = "CHECK_APP_CUDA"
+    message = "run CHECK_APP_CUDA"
+    recommended_action = "NONE"
     stage = [
       '''
       {
@@ -653,7 +731,8 @@ data:
     [[rules]]
     name = "XIDErrorSoloNoBurst"
     description = "Detect if XID error occurred only once in the last burst within 2 minutes time window"
-    recommended_action = "CHECK_APP_CUDA"
+    message = "run CHECK_APP_CUDA"
+    recommended_action = "NONE"
     stage = [
       '''
       {

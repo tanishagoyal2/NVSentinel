@@ -47,8 +47,7 @@ const (
 	RecommendedAction_RESTART_VM      RecommendedAction = 15
 	RecommendedAction_RESTART_BM      RecommendedAction = 24
 	RecommendedAction_REPLACE_VM      RecommendedAction = 25
-	RecommendedAction_CHECK_APP_CUDA  RecommendedAction = 26
-	RecommendedAction_RUN_DCGMEUD     RecommendedAction = 27
+	RecommendedAction_RUN_DCGMEUD     RecommendedAction = 26
 	RecommendedAction_UNKNOWN         RecommendedAction = 99
 )
 
@@ -62,8 +61,7 @@ var (
 		15: "RESTART_VM",
 		24: "RESTART_BM",
 		25: "REPLACE_VM",
-		26: "CHECK_APP_CUDA",
-		27: "RUN_DCGMEUD",
+		26: "RUN_DCGMEUD",
 		99: "UNKNOWN",
 	}
 	RecommendedAction_value = map[string]int32{
@@ -74,8 +72,7 @@ var (
 		"RESTART_VM":      15,
 		"RESTART_BM":      24,
 		"REPLACE_VM":      25,
-		"CHECK_APP_CUDA":  26,
-		"RUN_DCGMEUD":     27,
+		"RUN_DCGMEUD":     26,
 		"UNKNOWN":         99,
 	}
 )
@@ -455,7 +452,7 @@ const file_health_event_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\">\n" +
 	"\x12BehaviourOverrides\x12\x14\n" +
 	"\x05force\x18\x01 \x01(\bR\x05force\x12\x12\n" +
-	"\x04skip\x18\x02 \x01(\bR\x04skip*\xbc\x01\n" +
+	"\x04skip\x18\x02 \x01(\bR\x04skip*\xa8\x01\n" +
 	"\x11RecommendedAction\x12\b\n" +
 	"\x04NONE\x10\x00\x12\x13\n" +
 	"\x0fCOMPONENT_RESET\x10\x02\x12\x13\n" +
@@ -466,9 +463,8 @@ const file_health_event_proto_rawDesc = "" +
 	"\n" +
 	"RESTART_BM\x10\x18\x12\x0e\n" +
 	"\n" +
-	"REPLACE_VM\x10\x19\x12\x12\n" +
-	"\x0eCHECK_APP_CUDA\x10\x1a\x12\x0f\n" +
-	"\vRUN_DCGMEUD\x10\x1b\x12\v\n" +
+	"REPLACE_VM\x10\x19\x12\x0f\n" +
+	"\vRUN_DCGMEUD\x10\x1a\x12\v\n" +
 	"\aUNKNOWN\x10c2`\n" +
 	"\x11PlatformConnector\x12K\n" +
 	"\x15HealthEventOccurredV1\x12\x18.datamodels.HealthEvents\x1a\x16.google.protobuf.Empty\"\x00B5Z3github.com/nvidia/nvsentinel/data-models/pkg/protosb\x06proto3"
