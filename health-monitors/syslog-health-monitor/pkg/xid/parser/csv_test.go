@@ -47,6 +47,7 @@ func TestCSVParser_Parse(t *testing.T) {
 		expectedAction    pb.RecommendedAction
 		expectedMnemonic  string
 		expectedErrorCode string
+		expectedMetadata  map[string]string
 	}{
 		{
 			name:              "NL5 XID",

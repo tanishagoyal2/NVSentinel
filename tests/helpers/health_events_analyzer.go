@@ -81,6 +81,15 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		WithCheckName("RepeatedXidError")
 	SendHealthEvent(ctx, t, event)
 
+	event = NewHealthEvent(testCtx.NodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("XID13OnSameGPCAndTPC")
+	SendHealthEvent(ctx, t, event)
+
 	t.Log("Backing up current health-events-analyzer configmap")
 
 	backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
@@ -186,6 +195,22 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithCheckName("RepeatedXidError")
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithCheckName("XIDErrorOnSameGPCAndTPC")
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithCheckName("XIDErrorOnDifferentGPCAndTPC")
 	SendHealthEvent(ctx, t, event)
 
 	SendHealthyEvent(ctx, t, nodeName)
