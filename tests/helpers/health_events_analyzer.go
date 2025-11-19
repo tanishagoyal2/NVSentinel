@@ -56,6 +56,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
 
 	gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))] // #nosec G404 - weak random acceptable for test node selection
+	gpuNodeName = "kwok-node-40"
 
 	testCtx := &HealthEventsAnalyzerTestContext{
 		TestNamespace: testNamespace,
@@ -71,6 +72,9 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		WithMessage("No health failures").
 		WithComponentClass("GPU").
 		WithCheckName("MultipleRemediations")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(testCtx.NodeName).
@@ -79,6 +83,8 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		WithMessage("No health failures").
 		WithComponentClass("GPU").
 		WithCheckName("RepeatedXidErrorOnSameGPU")
+
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(testCtx.NodeName).
@@ -87,7 +93,31 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithComponentClass("GPU").
-		WithCheckName("XID13OnSameGPCAndTPC")
+		WithCheckName("XIDErrorOnSameGPCAndTPC")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(testCtx.NodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("XIDErrorOnDifferentGPCAndTPC")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(testCtx.NodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("XIDErrorSoloNoBurst")
+
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	t.Log("Backing up current health-events-analyzer configmap")

@@ -84,6 +84,9 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 		var newCtx context.Context
 		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 
+		t.Log("Waiting 90 seconds for the MultipleRemediations rule time window to complete")
+		time.Sleep(90 * time.Second)
+
 		gpuNodeName := testCtx.NodeName
 
 		t.Logf("Injecting non-fatal events to node %s", gpuNodeName)
@@ -133,26 +136,20 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Log("Waiting 120 seconds for the RepeatedXidErrorOnSameGPU rule time window to complete")
-		time.Sleep(120 * time.Second)
 		_, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+
+		t.Log("Waiting 130 seconds for the RepeatedXidErrorOnSameGPU rule time window to complete")
+		time.Sleep(130 * time.Second)
+
 		return ctx
 	})
 
 	feature.Assess("Inject multiple XID errors and check if node condition is added if required", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
-		t.Logf("Cleaning up any existing node conditions for node %s", testCtx.NodeName)
-		// Note: Using default agent (gpu-health-monitor) instead of health-events-analyzer
-		// because the reconciler filters out events from health-events-analyzer to prevent infinite loops
-		errorsToInject := []string{helpers.ERRORCODE_119, helpers.ERRORCODE_120, helpers.ERRORCODE_48, helpers.ERRORCODE_79}
-		for _, xid := range errorsToInject {
-			event := helpers.NewHealthEvent(testCtx.NodeName).
-				WithCheckName("RepeatedXidErrorOnSameGPU").
-				WithHealthy(true).
-				WithFatal(false).
-				WithErrorCode(xid)
-			helpers.SendHealthEvent(ctx, t, event)
+
+		entities := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
 		}
 
 		// Sticky XIDs: "74", "79", "95", "109", "119"
@@ -161,12 +158,15 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		// Burst 1: 5 events within 10s gaps (same burst)
 		// Burst 1 contents: XID 119 (x2), 120, 48, 31
 		// Expectations: No trigger yet (need at least 2 bursts to trigger)
-		errorsToInject = []string{helpers.ERRORCODE_119, helpers.ERRORCODE_120, helpers.ERRORCODE_48, helpers.ERRORCODE_119, helpers.ERRORCODE_31}
+		errorsToInject := []string{helpers.ERRORCODE_119, helpers.ERRORCODE_120, helpers.ERRORCODE_48, helpers.ERRORCODE_119, helpers.ERRORCODE_31}
 		message := ""
 		for _, xid := range errorsToInject {
 			event := helpers.NewHealthEvent(testCtx.NodeName).
 				WithErrorCode(xid).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+				WithAgent("syslog-health-monitor").
+				WithCheckName("SysLogsXIDError").
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
+				WithEntities(entities)
 			helpers.SendHealthEvent(ctx, t, event)
 		}
 
@@ -182,10 +182,13 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		for _, xid := range errorsToInject {
 			event := helpers.NewHealthEvent(testCtx.NodeName).
 				WithErrorCode(xid).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+				WithAgent("syslog-health-monitor").
+				WithCheckName("SysLogsXIDError").
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
+				WithEntities(entities)
 			helpers.SendHealthEvent(ctx, t, event)
 		}
-		message = fmt.Sprintf("ErrorCode:%s GPU:0 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_120)
+		message = fmt.Sprintf("ErrorCode:%s GPU_UUID:GPU-1234567890 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_120)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidError",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
@@ -200,13 +203,16 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		for _, xid := range errorsToInject {
 			event := helpers.NewHealthEvent(testCtx.NodeName).
 				WithErrorCode(xid).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+				WithAgent("syslog-health-monitor").
+				WithCheckName("SysLogsXIDError").
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
+				WithEntities(entities)
 			helpers.SendHealthEvent(ctx, t, event)
 		}
 
 		t.Logf("Verifying RepeatedXidErrorOnSameGPU condition exists after events merged into Burst 2")
-		message += fmt.Sprintf("ErrorCode:%s GPU:0 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_119)
-		message += fmt.Sprintf("ErrorCode:%s GPU:0 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_48)
+		message += fmt.Sprintf("ErrorCode:%s GPU_UUID:GPU-1234567890 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_119)
+		message += fmt.Sprintf("ErrorCode:%s GPU_UUID:GPU-1234567890 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_48)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidError",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
@@ -220,7 +226,10 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		for _, xid := range errorsToInject {
 			event := helpers.NewHealthEvent(testCtx.NodeName).
 				WithErrorCode(xid).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+				WithAgent("syslog-health-monitor").
+				WithCheckName("SysLogsXIDError").
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
+				WithEntities(entities)
 			helpers.SendHealthEvent(ctx, t, event)
 		}
 		time.Sleep(5 * time.Second)
@@ -232,11 +241,14 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		for _, xid := range errorsToInject {
 			event := helpers.NewHealthEvent(testCtx.NodeName).
 				WithErrorCode(xid).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+				WithAgent("syslog-health-monitor").
+				WithCheckName("SysLogsXIDError").
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
+				WithEntities(entities)
 			helpers.SendHealthEvent(ctx, t, event)
 		}
 
-		message += fmt.Sprintf("ErrorCode:%s GPU:0 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_31)
+		message += fmt.Sprintf("ErrorCode:%s GPU_UUID:GPU-1234567890 if pass: RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnSameGPU",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
@@ -257,12 +269,23 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// t.Log("Waiting 90 seconds for the RepeatedXidErrorOnDifferentGPU rule time window to complete")
-		// time.Sleep(90 * time.Second)
 		_, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+
+		t.Log("Waiting 70 seconds for the RepeatedXidErrorOnDifferentGPU rule time window to complete")
+		time.Sleep(70 * time.Second)
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
+
+		entities := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+		}
+		entities1 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567891"},
+		}
+		entities2 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567892"},
+		}
 
 		// inject XID 31 on GPU-1234567890
 		event := helpers.NewHealthEvent(testCtx.NodeName).
@@ -270,7 +293,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890")
+			WithEntities(entities)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -282,7 +305,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890")
+			WithEntities(entities)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -296,7 +319,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567891")
+			WithEntities(entities1)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU")
@@ -310,7 +333,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567892")
+			WithEntities(entities2)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		return ctx
@@ -320,7 +343,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU", "ErrorCode:31 GPU:0 GPU_UUID:GPU-1234567892 run CHECK_APP_CUDA Recommended Action=NONE;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU", "ErrorCode:31 GPU_UUID:GPU-1234567892 run CHECK_APP_CUDA Recommended Action=NONE;")
 
 		return ctx
 	})
@@ -342,25 +365,59 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		var newCtx context.Context
 		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 
-		// t.Log("Waiting 90 seconds for the XIDErrorOnSameGPCAndTPC rule time window to complete")
-		// time.Sleep(90 * time.Second)
+		// t.Log("Waiting 130 seconds for the XIDErrorOnSameGPCAndTPC rule time window to complete")
+		// time.Sleep(130 * time.Second)
+
 		client, err := c.NewClient()
 		require.NoError(t, err)
+
+		entities1 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "0"},
+			{EntityType: "TPC", EntityValue: "1"},
+			{EntityType: "SM", EntityValue: "0"},
+		}
+		entities2 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "0"},
+			{EntityType: "TPC", EntityValue: "0"},
+			{EntityType: "SM", EntityValue: "1"},
+		}
+		entities3 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "1"},
+			{EntityType: "TPC", EntityValue: "1"},
+			{EntityType: "SM", EntityValue: "0"},
+		}
+		entities4 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "0"},
+			{EntityType: "TPC", EntityValue: "1"},
+			{EntityType: "SM", EntityValue: "1"},
+		}
+		entities5 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "1"},
+			{EntityType: "TPC", EntityValue: "0"},
+			{EntityType: "SM", EntityValue: "0"},
+		}
+		entities6 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "0"},
+			{EntityType: "TPC", EntityValue: "1"},
+			{EntityType: "SM", EntityValue: "2"},
+		}
 
 		// STEP 1: Inject two XID 13 errors on GPC:0, TPC:1, SM:0
 		// EXPECTED: This alone won't trigger the "same" rule yet as it needs multiple occurrences
 		// on the same GPC/TPC combination.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 1, SM: 0")
-
 		event := helpers.NewHealthEvent(testCtx.NodeName).
 			WithErrorCode(helpers.ERRORCODE_13).
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "0")
+			WithEntities(entities1)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		event = helpers.NewHealthEvent(testCtx.NodeName).
@@ -368,10 +425,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "0")
+			WithEntities(entities1)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -387,10 +441,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "0").
-			WithEntity("SM", "1")
+			WithEntities(entities2)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -411,13 +462,10 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "1").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "0")
+			WithEntities(entities3)
 		helpers.SendHealthEvent(ctx, t, event)
 
-		expectedMessage := "ErrorCode:13 GPU:0 GPU_UUID:GPU-1234567890 GPC:1 TPC:1 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
+		expectedMessage := "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:1 TPC:1 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -439,13 +487,10 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "1")
+			WithEntities(entities4)
 		helpers.SendHealthEvent(ctx, t, event)
 
-		expectedMessage = expectedMessage + "ErrorCode:13 GPU:0 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
+		expectedMessage = expectedMessage + "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
 
 		// EXPECTED: XIDErrorOnSameGPCAndTPC is not present yet.
@@ -474,13 +519,10 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "1").
-			WithEntity("TPC", "0").
-			WithEntity("SM", "0")
+			WithEntities(entities5)
 		helpers.SendHealthEvent(ctx, t, event)
 
-		expectedMessage = expectedMessage + "ErrorCode:13 GPU:0 GPU_UUID:GPU-1234567890 GPC:1 TPC:0 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
+		expectedMessage = expectedMessage + "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:1 TPC:0 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
 
 		t.Log("Waiting 5s to create burst gap")
@@ -500,10 +542,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "2")
+			WithEntities(entities6)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		return newCtx
@@ -513,7 +552,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC", "ErrorCode:13 GPU:0 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:2 Recommended Action=RUN_FIELDDIAG;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC", "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:2 if pass run RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;")
 
 		return ctx
 	})
@@ -542,18 +581,25 @@ func TestSoloNoBurstRule(t *testing.T) {
 		var newCtx context.Context
 		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 
-		// t.Log("Waiting 90 seconds for the XIDErrorSoloNoBurst rule time window to complete")
-		// time.Sleep(90 * time.Second)
+		t.Log("Waiting 70 seconds for the XIDErrorSoloNoBurst rule time window to complete")
+		time.Sleep(70 * time.Second)
+
+		entities := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+			{EntityType: "GPC", EntityValue: "0"},
+			{EntityType: "TPC", EntityValue: "1"},
+			{EntityType: "SM", EntityValue: "2"},
+		}
+		entities2 := []helpers.EntityImpacted{
+			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
+		}
 
 		event := helpers.NewHealthEvent(testCtx.NodeName).
 			WithErrorCode(helpers.ERRORCODE_13).
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "2")
+			WithEntities(entities)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		event = helpers.NewHealthEvent(testCtx.NodeName).
@@ -561,7 +607,7 @@ func TestSoloNoBurstRule(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890")
+			WithEntities(entities2)
 
 		helpers.SendHealthEvent(ctx, t, event)
 
@@ -573,10 +619,7 @@ func TestSoloNoBurstRule(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntity("GPU_UUID", "GPU-1234567890").
-			WithEntity("GPC", "0").
-			WithEntity("TPC", "1").
-			WithEntity("SM", "2")
+			WithEntities(entities)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		return newCtx
@@ -586,7 +629,7 @@ func TestSoloNoBurstRule(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorSoloNoBurst", "ErrorCode:13 GPU:0 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:2 run CHECK_APP_CUDA Recommended Action=NONE;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorSoloNoBurst", "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:2 run CHECK_APP_CUDA Recommended Action=NONE;")
 
 		return ctx
 	})

@@ -103,6 +103,13 @@ func (h *HealthEventTemplate) WithEntity(entityType, entityValue string) *Health
 	return h
 }
 
+// WithOnlyEntity replaces all entities with a single entity (doesn't append)
+func (h *HealthEventTemplate) WithEntities(entities []EntityImpacted) *HealthEventTemplate {
+	h.EntitiesImpacted = entities
+
+	return h
+}
+
 func (h *HealthEventTemplate) WithFatal(isFatal bool) *HealthEventTemplate {
 	h.IsFatal = isFatal
 	return h

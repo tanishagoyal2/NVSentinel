@@ -279,11 +279,17 @@ func (r *Reconciler) publishMatchedEvent(ctx context.Context,
 	slog.Info("Rule matched for event", "rule_name", rule.Name, "event", event)
 	ruleMatchedTotal.WithLabelValues(rule.Name, event.HealthEvent.NodeName).Inc()
 
-	actionVal := r.getRecommendedActionValue(rule.RecommendedAction, rule.Name)
+	// Get error code, default to empty string if not available
+	errorCode := ""
+	if len(event.HealthEvent.ErrorCode) > 0 {
+		errorCode = event.HealthEvent.ErrorCode[0]
+	}
+
+	actionVal, message := r.getRecommendedActionForEvent(rule, rule.Name, errorCode)
 
 	// No need to clone here - Publisher.Publish already clones the event
 	// The EventProcessor creates a fresh stack variable for each event, so no mutation risk
-	err := r.config.Publisher.Publish(ctx, event.HealthEvent, protos.RecommendedAction(actionVal), rule.Name, rule.Message)
+	err := r.config.Publisher.Publish(ctx, event.HealthEvent, protos.RecommendedAction(actionVal), rule.Name, message)
 	if err != nil {
 		slog.Error("Error in publishing the new fatal event", "error", err)
 		return fmt.Errorf("error in publishing the new fatal event: %w", err)
@@ -292,6 +298,43 @@ func (r *Reconciler) publishMatchedEvent(ctx context.Context,
 	slog.Info("New event successfully published for matching rule", "rule_name", rule.Name)
 
 	return nil
+}
+
+// getRecommendedActionForEvent determines the recommended action for an event
+// It first checks if there's a specific action mapping for the event's error code,
+// then falls back to the rule's default recommended action
+func (r *Reconciler) getRecommendedActionForEvent(rule config.HealthEventsAnalyzerRule, ruleName string,
+	errorCode string) (int32, string) {
+	// If no mappings defined, use defaults
+	if rule.RecommendedActionMappings == nil {
+		return r.getRecommendedActionValue(rule.RecommendedAction, ruleName), rule.Message
+	}
+
+	// Check if there's a mapping for this specific error code
+	if actionDetails, ok := rule.RecommendedActionMappings[errorCode]; ok && actionDetails["recommended_action"] != "" {
+		// Use mapped action
+		actionVal := r.getRecommendedActionValue(actionDetails["recommended_action"], ruleName)
+
+		// Use mapped message if provided, otherwise fall back to rule's default message
+		message := actionDetails["message"]
+		if message == "" {
+			message = rule.Message
+		}
+
+		slog.Info("Using error code specific action mapping",
+			"rule_name", ruleName,
+			"error_code", errorCode,
+			"recommended_action", actionDetails["recommended_action"],
+			"message", message)
+
+		return actionVal, message
+	}
+
+	slog.Debug("No action mapping found for error code, using default recommended action",
+		"error_code", errorCode,
+		"rule_name", ruleName)
+
+	return r.getRecommendedActionValue(rule.RecommendedAction, ruleName), rule.Message
 }
 
 // getRecommendedActionValue returns the action value, with fallback to RecommendedAction_CONTACT_SUPPORT if invalid
