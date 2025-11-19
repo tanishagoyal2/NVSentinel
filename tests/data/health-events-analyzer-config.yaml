@@ -501,6 +501,44 @@ data:
       ''',
       '''
       {
+        "$addFields": {
+          "gpcValue": {
+            "$arrayElemAt": [
+              {
+                "$map": {
+                  "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "GPC"]}}},
+                  "in": "$$this.entityvalue"
+                }
+              },
+              0
+            ]
+          },
+          "tpcValue": {
+            "$arrayElemAt": [
+              {
+                "$map": {
+                  "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "TPC"]}}},
+                  "in": "$$this.entityvalue"
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$and": [
+            {"gpcValue": {"$ne": null}},
+            {"tpcValue": {"$ne": null}}
+          ]
+        }
+      }
+      ''',
+      '''
+      {
         "$group": {
           "_id": {"burstId": "$burstId"},
           "uniqueXidsInBurst": {"$addToSet": {"$arrayElemAt": ["$healthevent.errorcode", 0]}},
@@ -510,58 +548,8 @@ data:
                 {
                   "$and": [
                     {"$eq": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "this.healthevent.errorcode.0"]},
-                    {
-                      "$eq": [
-                        {
-                          "$arrayElemAt": [
-                            {
-                              "$map": {
-                                "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "GPC"]}}},
-                                "in": "$$this.entityvalue"
-                              }
-                            },
-                            0
-                          ]
-                        },
-                        {
-                          "$arrayElemAt": [
-                            {
-                              "$map": {
-                                "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "GPC"]}}},
-                                "in": "$$this.entityvalue"
-                              }
-                            },
-                            0
-                          ]
-                        }
-                      ]
-                    },
-                    {
-                      "$eq": [
-                        {
-                          "$arrayElemAt": [
-                            {
-                              "$map": {
-                                "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "TPC"]}}},
-                                "in": "$$this.entityvalue"
-                              }
-                            },
-                            0
-                          ]
-                        },
-                        {
-                          "$arrayElemAt": [
-                            {
-                              "$map": {
-                                "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "TPC"]}}},
-                                "in": "$$this.entityvalue"
-                              }
-                            },
-                            0
-                          ]
-                        }
-                      ]
-                    }
+                    {"$eq": ["$gpcValue", "this.gpcValue"]},
+                    {"$eq": ["$tpcValue", "this.tpcValue"]}
                   ]
                 },
                 1,
@@ -708,6 +696,13 @@ data:
               }
             }
           }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "gpcTpcCombination": {"$ne": null}
         }
       }
       ''',
