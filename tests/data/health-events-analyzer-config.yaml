@@ -38,7 +38,7 @@ data:
 
     [[rules]]
     name = "RepeatedXidErrorOnSameGPU"
-    description = "Detect occurrence of fatal XIDs 2 times within 2 minutes where the burst window is 10 seconds and sticky XIDs window is 20seconds"
+    description = "Detect occurrence of fatal XIDs 2 times within 3 minutes where the burst window is 10 seconds and sticky XIDs window is 20seconds"
     recommended_action = "CONTACT_SUPPORT"
     recommended_action_mappings = { "31" = { recommended_action = "RUN_DCGMEUD", message = "if pass: RUN_FIELDDIAGS" } }
     
@@ -155,7 +155,7 @@ data:
                             ["74", "79", "95", "109", "119"]
                           ]
                         },
-                        {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 20]}
+                        {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 30]}
                       ]
                     }
                   }
@@ -188,7 +188,7 @@ data:
                       "then": 0,
                       "else": {
                         "$cond": {
-                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 10]},
+                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 20]},
                           "then": 1,
                           "else": 0
                         }
@@ -353,7 +353,7 @@ data:
     
     [[rules]]
     name = "XIDErrorOnSameGPCAndTPC"
-    description = "Detect if XID error occurred 2 or more times on the same GPC and TPC within 2 minutes"
+    description = "Detect if XID error occurred 2 or more times on the same GPC and TPC within 3 minutes"
     message = "if pass run RUN_FIELDDIAGS" 
     recommended_action = "RUN_DCGMEUD"
     stage = [
@@ -363,7 +363,7 @@ data:
           "$expr": {
             "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 120]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 180]}
             ]
           }
         }
@@ -469,7 +469,7 @@ data:
                             ["74", "79", "95", "109", "119"]
                           ]
                         },
-                        {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 20]}
+                        {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 30]}
                       ]
                     }
                   }
@@ -502,7 +502,7 @@ data:
                       "then": 0,
                       "else": {
                         "$cond": {
-                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 4]},
+                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 20]},
                           "then": 1,
                           "else": 0
                         }
