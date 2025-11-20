@@ -254,12 +254,30 @@ data:
         }
       }
       ''',
-      '{"$match": {"count": {"$gte": 2}}}'
+      '''
+      {
+      "$match": {
+          "$expr": {
+          "$gte": [
+              "$count",
+              {
+              "$switch": {
+                  "branches": [
+                  { "case": { "$eq": ["this.healthevent.errorcode.0", "31"] }, "then": 2 }
+                  ],
+                  "default": 2
+              }
+              }
+          ]
+          }
+      }
+      }
+      '''
     ]
 
     [[rules]]
     name = "RepeatedXidErrorOnDifferentGPU"
-    description = "Detect occurrence of XIDs on 3+ different GPUs within 1 minutes"
+    description = "Detect occurrence of XIDs on 2 or more different GPUs within 1 minutes"
     message = "run CHECK_APP_CUDA"
     recommended_action = "NONE"
     stage = [
@@ -326,7 +344,7 @@ data:
       {
         "$match": {
           "$expr": {
-            "$gte": [{"$size": "$uniqueGPUs"}, 3]
+            "$gte": [{"$size": "$uniqueGPUs"}, 2]
           }
         }
       }
@@ -335,7 +353,7 @@ data:
     
     [[rules]]
     name = "XIDErrorOnSameGPCAndTPC"
-    description = "Detect if XID error occurred 3 times on the same GPC and TPC within 2 minutes"
+    description = "Detect if XID error occurred 2 or more times on the same GPC and TPC within 2 minutes"
     message = "if pass run RUN_FIELDDIAGS" 
     recommended_action = "RUN_DCGMEUD"
     stage = [
@@ -548,8 +566,28 @@ data:
                 {
                   "$and": [
                     {"$eq": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "this.healthevent.errorcode.0"]},
-                    {"$eq": ["$gpcValue", "this.gpcValue"]},
-                    {"$eq": ["$tpcValue", "this.tpcValue"]}
+                    {"$eq": ["$gpcValue", {
+                      "$arrayElemAt": [
+                        {
+                          "$map": {
+                            "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "GPC"]}}},
+                            "in": "$$this.entityvalue"
+                          }
+                        },
+                        0
+                      ]
+                    }]},
+                    {"$eq": ["$tpcValue", {
+                      "$arrayElemAt": [
+                        {
+                          "$map": {
+                            "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "TPC"]}}},
+                            "in": "$$this.entityvalue"
+                          }
+                        },
+                        0
+                      ]
+                    }]}
                   ]
                 },
                 1,
@@ -595,12 +633,12 @@ data:
         }
       }
       ''',
-      '{"$match": {"count": {"$gte": 3}}}'
+      '{"$match": {"count": {"$gte": 2}}}'
     ]
     
     [[rules]]
     name = "XIDErrorOnDifferentGPCAndTPC"
-    description = "Detect if XID error occurred on 3+ different GPC and TPC combinations within 1.5 minutes"
+    description = "Detect if XID error occurred on 2 or more different GPC and TPC combinations within 1.5 minutes"
     message = "run CHECK_APP_CUDA"
     recommended_action = "NONE"
     stage = [
@@ -718,7 +756,7 @@ data:
       {
         "$match": {
           "$expr": {
-            "$gte": [{"$size": "$uniqueGPCAndTPCCombinations"}, 3]
+            "$gte": [{"$size": "$uniqueGPCAndTPCCombinations"}, 2]
           }
         }
       }
