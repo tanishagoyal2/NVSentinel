@@ -44,19 +44,22 @@ type HealthEventsAnalyzerTestContext struct {
 func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	t *testing.T,
 	c *envconf.Config,
-	configMapPath, testNamespace string) (
+	configMapPath, testNamespace string, testNodeName string) (
 	context.Context, *HealthEventsAnalyzerTestContext) {
 	t.Helper()
 
 	client, err := c.NewClient()
 	require.NoError(t, err)
+	gpuNodeName := ""
 
-	gpuNodes, err := GetAllNodesNames(ctx, client)
-	require.NoError(t, err, "failed to get nodes")
-	require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-
-	gpuNodeName := gpuNodes[rand.Intn(len(gpuNodes))] // #nosec G404 - weak random acceptable for test node selection
-	gpuNodeName = "kwok-node-40"
+	if testNodeName != "" {
+		gpuNodeName = testNodeName
+	} else {
+		gpuNodes, err := GetAllNodesNames(ctx, client)
+		require.NoError(t, err, "failed to get nodes")
+		require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
+		gpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))] // #nosec G404 - weak random acceptable for test node selection
+	}
 
 	testCtx := &HealthEventsAnalyzerTestContext{
 		TestNamespace: testNamespace,
