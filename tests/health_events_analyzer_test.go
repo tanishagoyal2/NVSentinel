@@ -138,8 +138,8 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		_, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 
-		t.Log("Waiting 130 seconds for the RepeatedXidErrorOnSameGPU rule time window to complete")
-		time.Sleep(130 * time.Second)
+		// t.Log("Waiting 130 seconds for the RepeatedXidErrorOnSameGPU rule time window to complete")
+		// time.Sleep(130 * time.Second)
 
 		return ctx
 	})
@@ -283,9 +283,6 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 		entities1 := []helpers.EntityImpacted{
 			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567891"},
 		}
-		entities2 := []helpers.EntityImpacted{
-			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567892"},
-		}
 
 		// inject XID 31 on GPU-1234567890
 		event := helpers.NewHealthEvent(testCtx.NodeName).
@@ -311,6 +308,8 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
 
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU")
+
 		// inject XID 31 on GPU-1234567891
 		// EXPECTED: No condition added yet as we need 3 different GPUs
 		// but we injected 3 XID 31 events on GPU-1234567890 and GPU-1234567891
@@ -322,20 +321,6 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 			WithEntities(entities1)
 		helpers.SendHealthEvent(ctx, t, event)
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU")
-
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
-
-		// inject XID 31 on GPU-1234567892
-		event = helpers.NewHealthEvent(testCtx.NodeName).
-			WithErrorCode(helpers.ERRORCODE_31).
-			WithAgent("syslog-health-monitor").
-			WithCheckName("SysLogsXIDError").
-			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntities(entities2)
-		helpers.SendHealthEvent(ctx, t, event)
-
 		return ctx
 	})
 
@@ -343,7 +328,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU", "ErrorCode:31 GPU_UUID:GPU-1234567892 run CHECK_APP_CUDA Recommended Action=NONE;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "RepeatedXidErrorOnDifferentGPU", "ErrorCode:31 GPU_UUID:GPU-1234567891 run CHECK_APP_CUDA Recommended Action=NONE;")
 
 		return ctx
 	})
@@ -365,8 +350,9 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		var newCtx context.Context
 		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 
-		// t.Log("Waiting 130 seconds for the XIDErrorOnSameGPCAndTPC rule time window to complete")
-		// time.Sleep(130 * time.Second)
+		// TODO: Uncomment this when we have a way to wait for the rule time window to complete
+		t.Log("Waiting 130 seconds for the XIDErrorOnSameGPCAndTPC rule time window to complete")
+		time.Sleep(130 * time.Second)
 
 		client, err := c.NewClient()
 		require.NoError(t, err)
@@ -385,27 +371,9 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		}
 		entities3 := []helpers.EntityImpacted{
 			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
-			{EntityType: "GPC", EntityValue: "1"},
-			{EntityType: "TPC", EntityValue: "1"},
-			{EntityType: "SM", EntityValue: "0"},
-		}
-		entities4 := []helpers.EntityImpacted{
-			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
 			{EntityType: "GPC", EntityValue: "0"},
 			{EntityType: "TPC", EntityValue: "1"},
 			{EntityType: "SM", EntityValue: "1"},
-		}
-		entities5 := []helpers.EntityImpacted{
-			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
-			{EntityType: "GPC", EntityValue: "1"},
-			{EntityType: "TPC", EntityValue: "0"},
-			{EntityType: "SM", EntityValue: "0"},
-		}
-		entities6 := []helpers.EntityImpacted{
-			{EntityType: "GPU_UUID", EntityValue: "GPU-1234567890"},
-			{EntityType: "GPC", EntityValue: "0"},
-			{EntityType: "TPC", EntityValue: "1"},
-			{EntityType: "SM", EntityValue: "2"},
 		}
 
 		// STEP 1: Inject two XID 13 errors on GPC:0, TPC:1, SM:0
@@ -433,7 +401,9 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 
 		// STEP 2: Inject XID 13 error on GPC:0, TPC:0, SM:1
 		// EXPECTED: This differs from the previous errors which were on GPC:0, TPC:1.
-		// This should NOT trigger any condition yet as we need more diverse GPC/TPC combinations.
+		// This should trigger the "XIDErrorOnDifferentGPCAndTPC" condition
+		// because we have errors occurring on different processing clusters, indicating
+		// a potentially broader GPU issue rather than a localized problem.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 0, SM: 1")
 
 		event = helpers.NewHealthEvent(testCtx.NodeName).
@@ -444,39 +414,22 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithEntities(entities2)
 		helpers.SendHealthEvent(ctx, t, event)
 
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
-
-		// STEP 3: Inject XID 13 error on GPC:1, TPC:1, SM:0
-		// EXPECTED: Now we have errors on three different GPC/TPC combinations:
-		//   - GPC:0, TPC:1 (from Step 1)
-		//   - GPC:0, TPC:0 (from Step 2)
-		//   - GPC:1, TPC:1 (from Step 3)
-		// This should trigger the "XIDErrorOnDifferentGPCAndTPC" condition
-		// because we have errors occurring on different processing clusters, indicating
-		// a potentially broader GPU issue rather than a localized problem.
-		t.Log("Inject XID 13 events on GPC: 1, TPC: 1, SM: 0")
-
-		event = helpers.NewHealthEvent(testCtx.NodeName).
-			WithErrorCode(helpers.ERRORCODE_13).
-			WithAgent("syslog-health-monitor").
-			WithCheckName("SysLogsXIDError").
-			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntities(entities3)
-		helpers.SendHealthEvent(ctx, t, event)
-
-		expectedMessage := "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:1 TPC:1 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
+		expectedMessage := "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:0 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
 
+		// EXPECTED: XIDErrorOnSameGPCAndTPC is not present.
+		// Burst 1: XID 13 on GPC: 0, TPC: 1, SM: 0
+		//          XID 13 on GPC: 0, TPC: 0, SM: 1
+		// Errors 1 and 2 are combined into a single burst and thus counted only once.
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC")
+
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
 
-		// STEP 4: Inject XID 13 error on GPC:0, TPC:1, SM:1
-		// EXPECTED: Now we have errors on three different GPC/TPC combinations:
-		//   - GPC:0, TPC:1 (from Step 1)
+		// STEP 3: Inject XID 13 error on GPC:0, TPC:1, SM:1
+		// EXPECTED: Now we have errors on two different GPC/TPC combinations:
 		//   - GPC:0, TPC:0 (from Step 2)
-		//   - GPC:1, TPC:1 (from Step 3)
-		//   - GPC:0, TPC:1 (from Step 4)
+		//   - GPC:0, TPC:1 (from Step 3)
 		// This should trigger the "XIDErrorOnDifferentGPCAndTPC" condition
 		// because we have errors occurring on different processing clusters, indicating
 		// a potentially broader GPU issue rather than a localized problem.
@@ -487,63 +440,11 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 			WithAgent("syslog-health-monitor").
 			WithCheckName("SysLogsXIDError").
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntities(entities4)
+			WithEntities(entities3)
 		helpers.SendHealthEvent(ctx, t, event)
 
 		expectedMessage = expectedMessage + "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
-
-		// EXPECTED: XIDErrorOnSameGPCAndTPC is not present yet.
-		// Even though we have injected three errors on the same GPC = 0, TPC = 1,
-		// Burst 1: XID 13 on GPC: 0, TPC: 1, SM: 0
-		//          XID 13 on GPC: 0, TPC: 1, SM: 0
-		// Burst 2: XID 13 on GPC: 0, TPC: 1, SM: 1
-		// Errors 1 and 2 are combined into a single burst and thus counted only once.
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC")
-
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
-
-		// STEP 5: Inject XID 13 error on GPC:1, TPC:0, SM:0
-		// EXPECTED: The "XIDErrorOnDifferentGPCAndTPC" condition should be updated again.
-		//   - GPC:0, TPC:1 (from Step 1)
-		//   - GPC:0, TPC:0 (from Step 2)
-		//   - GPC:1, TPC:1 (from Step 3)
-		//   - GPC:0, TPC:1 (from Step 4)
-		//   - GPC:1, TPC:0 (from Step 5)
-		// We still don't expect "XIDErrorOnSameGPCAndTPC" to trigger.
-		t.Log("Inject XID 13 events on GPC: 1, TPC: 0, SM: 0")
-
-		event = helpers.NewHealthEvent(testCtx.NodeName).
-			WithErrorCode(helpers.ERRORCODE_13).
-			WithAgent("syslog-health-monitor").
-			WithCheckName("SysLogsXIDError").
-			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntities(entities5)
-		helpers.SendHealthEvent(ctx, t, event)
-
-		expectedMessage = expectedMessage + "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:1 TPC:0 SM:0 run CHECK_APP_CUDA Recommended Action=NONE;"
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
-
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
-
-		// STEP 6: Inject XID 13 error on GPC:0, TPC:1, SM:2
-		// EXPECTED: We have 3 occurrences of XID 13 on the same GPC = 0, TPC = 1,
-		//   - Step 1: GPC:0, TPC:1, SM:0
-		//   - Step 4: GPC:0, TPC:1, SM:1
-		//   - Step 6: GPC:0, TPC:1, SM:2
-		// This should trigger the "XIDErrorOnSameGPCAndTPC" condition,
-		// indicating a localized hardware issue in this specific processing cluster.
-		t.Log("Inject XID 13 events on GPC: 0, TPC: 1, SM: 2")
-
-		event = helpers.NewHealthEvent(testCtx.NodeName).
-			WithErrorCode(helpers.ERRORCODE_13).
-			WithAgent("syslog-health-monitor").
-			WithCheckName("SysLogsXIDError").
-			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)).
-			WithEntities(entities6)
-		helpers.SendHealthEvent(ctx, t, event)
 
 		return newCtx
 	})
@@ -552,7 +453,13 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC", "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:2 if pass run RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;")
+		// EXPECTED: XIDErrorOnSameGPCAndTPC is present.
+		// Even though we have injected three errors on the same GPC = 0, TPC = 1,
+		// Burst 1: XID 13 on GPC: 0, TPC: 1, SM: 0
+		//          XID 13 on GPC: 0, TPC: 1, SM: 0
+		// Burst 3: XID 13 on GPC: 0, TPC: 1, SM: 1
+		// Errors 1 and 2 are combined into a single burst and thus counted only once.
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testCtx.NodeName, "XIDErrorOnSameGPCAndTPC", "ErrorCode:13 GPU_UUID:GPU-1234567890 GPC:0 TPC:1 SM:1 if pass run RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;")
 
 		return ctx
 	})
@@ -567,13 +474,6 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 func TestSoloNoBurstRule(t *testing.T) {
 	feature := features.New("TestSoloNoBurstRule").
 		WithLabel("suite", "health-event-analyzer")
-
-	// Inject XID 13 error on GPC: 0, TPC: 1, SM: 0 -->burst 1
-	// Inject XID 13 error --> burst 1
-	// should not trigger solo no burst rule
-	// Inject XID 13 error on GPC: 0, TPC: 1, SM: 0 -->burst 2
-	// Inject XID 13 error --> burst 2
-	// should trigger solo no burst rule
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 

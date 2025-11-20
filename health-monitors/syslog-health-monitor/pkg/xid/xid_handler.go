@@ -151,11 +151,13 @@ func (xidHandler *XIDHandler) createHealthEventFromResponse(
 				EntityType: "GPC", EntityValue: gpc,
 			})
 		}
+
 		if tpc, ok := xidResp.Result.Metadata["TPC"]; ok {
 			entities = append(entities, &pb.Entity{
 				EntityType: "TPC", EntityValue: tpc,
 			})
 		}
+
 		if sm, ok := xidResp.Result.Metadata["SM"]; ok {
 			entities = append(entities, &pb.Entity{
 				EntityType: "SM", EntityValue: sm,

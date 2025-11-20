@@ -103,7 +103,6 @@ func (h *HealthEventTemplate) WithEntity(entityType, entityValue string) *Health
 	return h
 }
 
-// WithOnlyEntity replaces all entities with a single entity (doesn't append)
 func (h *HealthEventTemplate) WithEntities(entities []EntityImpacted) *HealthEventTemplate {
 	h.EntitiesImpacted = entities
 
@@ -258,8 +257,8 @@ func sendHealthEventData(nodeNames []string, eventData []byte) error {
 
 func SendHealthEvent(ctx context.Context, t *testing.T, event *HealthEventTemplate) {
 	t.Helper()
-	t.Logf("Sending health event to node %s: checkName=%s, isFatal=%v",
-		event.NodeName, event.CheckName, event.IsFatal)
+	t.Logf("Sending health event to node %s: checkName=%s, isFatal=%v, errorCode=%v",
+		event.NodeName, event.CheckName, event.IsFatal, event.ErrorCode)
 
 	eventData, err := json.MarshalIndent(event, "", "    ")
 	require.NoError(t, err)

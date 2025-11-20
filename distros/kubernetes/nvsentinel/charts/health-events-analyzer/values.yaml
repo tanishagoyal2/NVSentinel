@@ -70,7 +70,7 @@ config: |
 
   [[rules]]
   name = "RepeatedXidErrorOnSameGPU"
-  description = "Detect occurrence of fatal XIDs 2 times within 2 minutes where the burst window is 10 seconds and sticky XIDs window is 20seconds"
+  description = "Detect occurrence of fatal XIDs within 24 hours where the burst window is 3 minutes and sticky XIDs window is 3 hours. Count threshold: 2 for XID-31, 5 for others"
   recommended_action = "CONTACT_SUPPORT"
   recommended_action_mappings = { "31" = { recommended_action = "RUN_DCGMEUD", message = "if pass: RUN_FIELDDIAGS" } }
 
@@ -81,7 +81,7 @@ config: |
           "$expr": {
           "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 120]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
           ]
           }
       }
@@ -187,7 +187,7 @@ config: |
                           ["74", "79", "95", "109", "119"]
                           ]
                       },
-                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 20]}
+                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 10800]}
                       ]
                   }
                   }
@@ -220,7 +220,7 @@ config: |
                       "then": 0,
                       "else": {
                       "$cond": {
-                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 10]},
+                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 180]},
                           "then": 1,
                           "else": 0
                       }
@@ -286,12 +286,30 @@ config: |
       }
       }
       ''',
-      '{"$match": {"count": {"$gte": 2}}}'
+      '''
+      {
+      "$match": {
+          "$expr": {
+          "$gte": [
+              "$count",
+              {
+              "$switch": {
+                  "branches": [
+                  { "case": { "$eq": ["this.healthevent.errorcode.0", "31"] }, "then": 2 }
+                  ],
+                  "default": 5
+              }
+              }
+          ]
+          }
+      }
+      }
+      '''
   ]
 
   [[rules]]
   name = "RepeatedXidErrorOnDifferentGPU"
-  description = "Detect occurrence of XIDs on 2+ different GPUs within 1 minutes"
+  description = "Detect occurrence of XIDs on 2 or more different GPUs within 24 hours"
   message = "run CHECK_APP_CUDA"
   recommended_action = "NONE"
   stage = [
@@ -301,7 +319,7 @@ config: |
           "$expr": {
           "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 60]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
           ]
           }
       }
@@ -367,7 +385,7 @@ config: |
 
   [[rules]]
   name = "XIDErrorOnSameGPCAndTPC"
-  description = "Detect if XID error occurred 2 times on the same GPC and TPC within 2 minutes"
+  description = "Detect if XID error occurred 2 or more times on the same GPC and TPC within 24 hours"
   message = "if pass run RUN_FIELDDIAGS" 
   recommended_action = "RUN_DCGMEUD"
   stage = [
@@ -377,7 +395,7 @@ config: |
           "$expr": {
           "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 120]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
           ]
           }
       }
@@ -483,7 +501,7 @@ config: |
                           ["74", "79", "95", "109", "119"]
                           ]
                       },
-                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 20]}
+                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 10800]}
                       ]
                   }
                   }
@@ -516,7 +534,7 @@ config: |
                       "then": 0,
                       "else": {
                       "$cond": {
-                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 4]},
+                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 180]},
                           "then": 1,
                           "else": 0
                       }
@@ -644,7 +662,7 @@ config: |
 
   [[rules]]
   name = "XIDErrorOnDifferentGPCAndTPC"
-  description = "Detect if XID error occurred on 2 different GPC and TPC combinations within 1.5 minutes"
+  description = "Detect if XID error occurred on 2 or more different GPC and TPC combinations within 24 hours"
   message = "run CHECK_APP_CUDA"
   recommended_action = "NONE"
   stage = [
@@ -654,7 +672,7 @@ config: |
           "$expr": {
           "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
           ]
           }
       }
@@ -764,7 +782,7 @@ config: |
 
   [[rules]]
   name = "XIDErrorSoloNoBurst"
-  description = "Detect if XID error occurred only once in the last burst within 1 minutes time window"
+  description = "Detect if XID error occurred only once in the last burst within 24 hours time window"
   message = "run CHECK_APP_CUDA"
   recommended_action = "NONE"
   stage = [
@@ -774,7 +792,7 @@ config: |
           "$expr": {
           "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 60]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
           ]
           }
       }
@@ -880,7 +898,7 @@ config: |
                           ["74", "79", "95", "109", "119"]
                           ]
                       },
-                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 20]}
+                      {"$lte": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$$prevEvent.healthevent.generatedtimestamp.seconds"]}, 10800]}
                       ]
                   }
                   }
@@ -913,7 +931,7 @@ config: |
                       "then": 0,
                       "else": {
                       "$cond": {
-                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 4]},
+                          "if": {"$gt": [{"$subtract": ["$healthevent.generatedtimestamp.seconds", "$prevTimestamp"]}, 180]},
                           "then": 1,
                           "else": 0
                       }

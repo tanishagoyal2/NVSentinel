@@ -120,6 +120,16 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
+	event = NewHealthEvent(testCtx.NodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXidErrorOnDifferentGPU")
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
 	t.Log("Backing up current health-events-analyzer configmap")
 
 	backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
@@ -218,6 +228,7 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithCheckName("MultipleRemediations").
 		WithErrorCode(xid)
 
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(nodeName).
@@ -225,6 +236,7 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithCheckName("RepeatedXidErrorOnSameGPU")
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(nodeName).
@@ -233,6 +245,7 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithCheckName("XIDErrorOnSameGPCAndTPC")
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	event = NewHealthEvent(nodeName).
@@ -241,6 +254,18 @@ func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
 		WithFatal(false).
 		WithMessage("No health failures").
 		WithCheckName("XIDErrorOnDifferentGPCAndTPC")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithCheckName("RepeatedXidErrorOnDifferentGPU")
+
+	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
 	SendHealthyEvent(ctx, t, nodeName)

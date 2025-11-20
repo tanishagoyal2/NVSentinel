@@ -161,6 +161,7 @@ func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
 			}
 		}
 	}
+
 	xidDetails := XIDDetails{
 		DecodedXIDStr: fmt.Sprintf("%d", xidCode),
 		Driver:        "",
