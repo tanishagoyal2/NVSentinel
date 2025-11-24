@@ -16,7 +16,8 @@ package helpers
 
 import (
 	"context"
-	"math/rand"
+	"crypto/rand"
+	"math/big"
 	"testing"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
@@ -59,7 +60,11 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		gpuNodes, err := GetAllNodesNames(ctx, client)
 		require.NoError(t, err, "failed to get nodes")
 		require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-		gpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))]
+
+		index, err := rand.Int(rand.Reader, big.NewInt(int64(len(gpuNodes))))
+		require.NoError(t, err, "failed to generate random index")
+
+		gpuNodeName = gpuNodes[index.Int64()]
 	}
 
 	testCtx := &HealthEventsAnalyzerTestContext{
