@@ -21,7 +21,6 @@ on:
   push:
     branches:
       - main
-      - feature/oidc-gcp
 
 permissions:
   contents: read
