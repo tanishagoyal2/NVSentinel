@@ -50,6 +50,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 	client, err := c.NewClient()
 	require.NoError(t, err)
+
 	gpuNodeName := ""
 
 	if testNodeName != "" {
@@ -66,72 +67,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		NodeName:      gpuNodeName,
 	}
 
-	t.Logf("Cleaning up any existing node conditions for node %s", testCtx.NodeName)
-	// Note: Using default agent (gpu-health-monitor) instead of health-events-analyzer
-	// because the reconciler filters out events from health-events-analyzer to prevent infinite loops
-	event := NewHealthEvent(testCtx.NodeName).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("MultipleRemediations")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(testCtx.NodeName).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("RepeatedXidErrorOnSameGPU")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(testCtx.NodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("XIDErrorOnSameGPCAndTPC")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(testCtx.NodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("XIDErrorOnDifferentGPCAndTPC")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(testCtx.NodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("XIDErrorSoloNoBurst")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(testCtx.NodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("RepeatedXidErrorOnDifferentGPU")
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
+	clearHealthEventsAnalyzerConditions(ctx, t, gpuNodeName)
 
 	t.Log("Backing up current health-events-analyzer configmap")
 
@@ -145,6 +81,87 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	require.NoError(t, err)
 
 	return ctx, testCtx
+}
+
+func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, nodeName string) {
+	t.Logf("Cleaning up any existing node conditions for node %s", nodeName)
+	// Note: Using default agent (gpu-health-monitor) instead of health-events-analyzer
+	// because the reconciler filters out events from health-events-analyzer to prevent infinite loops
+	event := NewHealthEvent(nodeName).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("MultipleRemediations")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXIDErrorOnSameGPU")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXID31OnSameGPU")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXID31OnDifferentGPU")
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXID13OnSameGPCAndTPC")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("RepeatedXID13OnDifferentGPCAndTPC")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("XIDErrorSoloNoBurst")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
 }
 
 func applyHealthEventsAnalyzerConfigAndRestart(
@@ -219,59 +236,10 @@ func waitForRemediationToComplete(ctx context.Context, t *testing.T, client klie
 }
 
 func TeardownHealthEventsAnalyzer(ctx context.Context, t *testing.T,
-	c *envconf.Config, nodeName string, configMapBackup []byte, xid string) context.Context {
+	c *envconf.Config, nodeName string, configMapBackup []byte) context.Context {
 	t.Logf("Starting cleanup for node %s", nodeName)
 
-	// Note: Using default agent (gpu-health-monitor) instead of health-events-analyzer
-	// because the reconciler filters out events from health-events-analyzer to prevent infinite loops
-	event := NewHealthEvent(nodeName).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithCheckName("MultipleRemediations").
-		WithErrorCode(xid)
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(nodeName).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithCheckName("RepeatedXidErrorOnSameGPU")
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(nodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithCheckName("XIDErrorOnSameGPCAndTPC")
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(nodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithCheckName("XIDErrorOnDifferentGPCAndTPC")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	event = NewHealthEvent(nodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithCheckName("RepeatedXidErrorOnDifferentGPU")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
-
-	SendHealthyEvent(ctx, t, nodeName)
+	clearHealthEventsAnalyzerConditions(ctx, t, nodeName)
 
 	restoreHealthEventsAnalyzerConfig(ctx, t, c, configMapBackup)
 
