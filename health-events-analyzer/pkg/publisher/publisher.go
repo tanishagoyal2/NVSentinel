@@ -101,8 +101,13 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent
 	newEvent.CheckName = ruleName
 	newEvent.RecommendedAction = recommendedAction
 	newEvent.IsHealthy = false
-	newEvent.IsFatal = true
 	newEvent.Message = message
+
+	if recommendedAction == protos.RecommendedAction_NONE {
+		newEvent.IsFatal = false
+	} else {
+		newEvent.IsFatal = true
+	}
 
 	req := &protos.HealthEvents{
 		Version: 1,

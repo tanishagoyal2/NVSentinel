@@ -313,7 +313,7 @@ config: |
   name = "RepeatedXID31OnSameGPU"
   description = "Detect if XID 31 occurred 2 or more times on the same GPU within 24 hours where the burst window is 3 minutes and sticky XIDs window is 3 hours"
   recommended_action = "RUN_DCGMEUD"
-  message = "if pass: RUN_FIELDDIAGS"
+  message = "if DCGM EUD tests passes, run field diagnostics"
   stage = [
     '''
     {
@@ -554,7 +554,7 @@ config: |
   [[rules]]
   name = "RepeatedXID31OnDifferentGPU"
   description = "Detect if XID 31 occurred 2 or more times on different GPUs within 24 hours"
-  message = "run CHECK_APP_CUDA"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
   recommended_action = "NONE"
   stage = [
     '''
@@ -642,7 +642,7 @@ config: |
   [[rules]]
   name = "RepeatedXID13OnSameGPCAndTPC"
   description = "Detect if XID 13 occurred 2 or more times on the same GPC and TPC within 24 hours"
-  message = "if pass run RUN_FIELDDIAGS" 
+  message = "if DCGM EUD tests passes, run field diagnostics"
   recommended_action = "RUN_DCGMEUD"
   stage = [
     '''
@@ -939,7 +939,7 @@ config: |
   [[rules]]
   name = "RepeatedXID13OnDifferentGPCAndTPC"
   description = "Detect if XID 13 occurred 2 or more times on different GPC and TPC combinations within 24 hours"
-  message = "run CHECK_APP_CUDA"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
   recommended_action = "NONE"
   stage = [
     '''
@@ -1078,7 +1078,7 @@ config: |
   [[rules]]
   name = "XIDErrorSoloNoBurst"
   description = "Detect if XID error occurred only once in the last burst within 24 hours time window"
-  message = "run CHECK_APP_CUDA"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
   recommended_action = "NONE"
   stage = [
     '''
