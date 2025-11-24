@@ -71,6 +71,17 @@ func TestCSVParser_Parse(t *testing.T) {
 			expectedMetadata:  map[string]string{"GPC": "1", "TPC": "3", "SM": "0"},
 		},
 		{
+			name:              "XID 13 with no GPC, TPC, or SM values",
+			message:           "NVRM: Xid (PCI:0000:b5:00): 13, pid='<unknown>', name=<unknown>, Graphics Exception: ESR 0x50df30=0x107000e 0x50df34=0x20 0x50df28=0xf81eb60 0x50df2c=0x1174",
+			expectedSuccess:   true,
+			expectedXIDCode:   13,
+			expectedPCIAddr:   "0000:b5:00",
+			expectedAction:    pb.RecommendedAction_RESTART_VM,
+			expectedMnemonic:  "XID 13",
+			expectedErrorCode: "13",
+			expectedMetadata:  map[string]string{},
+		},
+		{
 			name:              "Complex XID format with all fields",
 			message:           "NVRM: Xid (PCI:0000:66:00): 32, pid=2280636, name=train.3, Channel ID 0000000d intr0 00040000",
 			expectedSuccess:   true,

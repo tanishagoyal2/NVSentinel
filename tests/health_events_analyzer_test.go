@@ -68,7 +68,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_31)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -122,15 +122,15 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_31)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
+func TestRepeatedXIDOnSameGPU(t *testing.T) {
 	// Works with both MongoDB ($setWindowFields pipeline) and PostgreSQL (XidBurstDetector).
-	feature := features.New("TestRepeatedXIDRuleOnSameGPU").
+	feature := features.New("TestRepeatedXIDOnSameGPU").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -138,10 +138,8 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 	var syslogPod *v1.Pod
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		_, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
-
-		// t.Log("Waiting 190 seconds for the RepeatedXidErrorOnSameGPU rule time window to complete")
-		// time.Sleep(190 * time.Second)
+		t.Log("Waiting 190 seconds for the RepeatedXIDErrorOnSameGPU rule time window to complete")
+		time.Sleep(190 * time.Second)
 
 		return ctx
 	})
@@ -191,7 +189,7 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXidErrorOnSameGPU")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
 
 		t.Log("Waiting 12s to create burst gap")
 		time.Sleep(12 * time.Second)
@@ -206,7 +204,7 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
 		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_120)
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXidErrorOnSameGPU",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
 		t.Logf("Waiting 12s to create burst gap")
@@ -222,10 +220,10 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		}
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		t.Logf("Verifying RepeatedXidErrorOnSameGPU condition exists after events merged into Burst 2")
+		t.Logf("Verifying RepeatedXIDErrorOnSameGPU condition exists after events merged into Burst 2")
 		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_119)
 		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_48)
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXidErrorOnSameGPU",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
 		t.Logf("Waiting 12s to create burst gap")
@@ -244,14 +242,156 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 
 		// Burst 3 (continued): XID 13 arrives again after 5s gap (< 10s), stays in same burst
 		// Burst 3 final contents: XID 13 (x2), 31 (x1)
-		// Expectations: XID 13 will NOT trigger (only appears in Burst 3, and targetXidCount=2 in maxBurst)
+		// Expectations: XID 13 will NOT trigger (only appears in Burst 3, and targetXidCount=2 in maxBurst),
+		// 				 XID 31 will also not trigger as we are excluding XID 31 from RepeatedXIDErrorOnSameGPU rule
 		xidMessages = []string{
 			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid=3110652, name=pt_main_thread, Ch 00000008",
 		}
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if pass: RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXidErrorOnSameGPU",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU", message)
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
+			t.Log("Stopping port-forward")
+			close(stopChanVal.(chan struct{}))
+		}
+
+		client, err := c.NewClient()
+		if err != nil {
+			t.Logf("Warning: failed to create client for teardown: %v", err)
+			return ctx
+		}
+
+		nodeNameVal := ctx.Value(keyNodeName)
+		if nodeNameVal == nil {
+			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
+			return ctx
+		}
+		nodeName := nodeNameVal.(string)
+
+		podNameVal := ctx.Value(keySyslogPodName)
+		if podNameVal != nil {
+			podName := podNameVal.(string)
+			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
+			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
+			if err != nil {
+				t.Logf("Warning: failed to delete pod: %v", err)
+			} else {
+				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
+				require.Eventually(t, func() bool {
+					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
+						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
+					if err != nil {
+						return false
+					}
+					return condition != nil && condition.Status == v1.ConditionFalse
+				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
+			}
+		}
+
+		t.Logf("Cleaning up metadata from node %s", nodeName)
+		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
+
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
+func TestRepeatedXID31OnSameGPU(t *testing.T) {
+	feature := features.New("TestRepeatedXID31OnSameGPU").
+		WithLabel("suite", "health-event-analyzer")
+
+	var testCtx *helpers.HealthEventsAnalyzerTestContext
+	var testNodeName string
+	var syslogPod *v1.Pod
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+
+		t.Log("Waiting 130 seconds for the RepeatedXID31OnSameGPU rule time window to complete")
+		time.Sleep(130 * time.Second)
+
+		return ctx
+	})
+
+	feature.Assess("Inject multiple XID errors and check if node condition is added if required", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		assert.NoError(t, err, "failed to create client")
+
+		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
+		require.NoError(t, err, "failed to find syslog health monitor pod")
+		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+
+		testNodeName = syslogPod.Spec.NodeName
+		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
+
+		metadata := helpers.CreateTestMetadata(testNodeName)
+		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
+
+		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
+		stopChan, readyChan := helpers.PortForwardPod(
+			ctx,
+			client.RESTConfig(),
+			syslogPod.Namespace,
+			syslogPod.Name,
+			stubJournalHTTPPort,
+			stubJournalHTTPPort,
+		)
+		<-readyChan
+		t.Log("Port-forward ready")
+
+		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
+		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
+		ctx = context.WithValue(ctx, keyStopChan, stopChan)
+
+		// Burst 1: 5 events within 10s gaps (same burst)
+		// Burst 1 contents: XID 119, 31
+		// Expectations: No trigger yet (need at least 2 bursts to trigger)
+		xidMessages := []string{
+			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 119, pid=1512646, name=kit, Timeout after 45s of waiting for RPC response from GPU2 GSP! Expected function 10 (FREE) (0x5c00014d 0x0)\n",
+			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		}
+
+		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU")
+
+		t.Log("Waiting 12s to create burst gap")
+		time.Sleep(12 * time.Second)
+
+		// Burst 2: XID 31 (non-sticky) creates new burst after 12s gap
+		// Burst 2 initial contents: XID 31
+		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 2 but with different PCI addresses)
+		xidMessages = []string{
+			"kernel: [16450076.435595] NVRM: Xid (PCI:0002:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		}
+		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		message := fmt.Sprintf("ErrorCode:%s PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 run CHECK_APP_CUDA Recommended Action=NONE;", helpers.ERRORCODE_31)
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU", message)
+
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU")
+
+		t.Logf("Waiting 12s to create burst gap")
+		time.Sleep(12 * time.Second)
+
+		// Burst 3: XID 13 (non-sticky) creates new burst after 12s gap
+		// Burst 3 contents: XID 13, 31
+		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 3)
+		xidMessages = []string{
+			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid=3110652, name=pt_main_thread, Ch 00000008",
+			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		}
+		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		message = fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if pass: RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU",
 			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -299,14 +439,14 @@ func TestRepeatedXIDRuleOnSameGPU(t *testing.T) {
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
 
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_119)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
-	feature := features.New("TestRepeatedXIDRuleOnDifferentGPU").
+func TestRepeatedXID31OnDifferentGPU(t *testing.T) {
+	feature := features.New("TestRepeatedXID31OnDifferentGPU").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -315,7 +455,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 
-		t.Log("Waiting 70 seconds for the RepeatedXidErrorOnDifferentGPU rule time window to complete")
+		t.Log("Waiting 70 seconds for the RepeatedXID31OnDifferentGPU rule time window to complete")
 		time.Sleep(70 * time.Second)
 
 		client, err := c.NewClient()
@@ -356,7 +496,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXidErrorOnDifferentGPU")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU")
 
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
@@ -376,7 +516,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 
 		nodeName := ctx.Value(keyNodeName).(string)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, nodeName, "RepeatedXidErrorOnDifferentGPU", "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 run CHECK_APP_CUDA Recommended Action=NONE;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, nodeName, "RepeatedXID31OnDifferentGPU", "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 run CHECK_APP_CUDA Recommended Action=NONE;")
 
 		return ctx
 	})
@@ -423,7 +563,7 @@ func TestRepeatedXIDRuleOnDifferentGPU(t *testing.T) {
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
 
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_119)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -438,8 +578,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 	var syslogPod *v1.Pod
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when we have a way to wait for the rule time window to complete
-		t.Log("Waiting 190 seconds for the XIDErrorOnSameGPCAndTPC rule time window to complete")
+		t.Log("Waiting 190 seconds for the RepeatedXID13OnSameGPCAndTPC rule time window to complete")
 		time.Sleep(190 * time.Second)
 
 		client, err := c.NewClient()
@@ -483,14 +622,14 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		}
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XIDErrorOnDifferentGPCAndTPC")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID13OnDifferentGPCAndTPC")
 
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
 
 		// STEP 2: Inject XID 13 error on GPC:0, TPC:0, SM:1
 		// EXPECTED: This differs from the previous errors which were on GPC:0, TPC:1.
-		// This should trigger the "XIDErrorOnDifferentGPCAndTPC" condition
+		// This should trigger the "RepeatedXID13OnDifferentGPCAndTPC" condition
 		// because we have errors occurring on different processing clusters, indicating
 		// a potentially broader GPU issue rather than a localized problem.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 0, SM: 1")
@@ -501,13 +640,13 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
 		expectedMessage := "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:0 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnDifferentGPCAndTPC", expectedMessage)
 
-		// EXPECTED: XIDErrorOnSameGPCAndTPC is not present.
+		// EXPECTED: RepeatedXID13OnSameGPCAndTPC is not present.
 		// Burst 1: XID 13 on GPC: 0, TPC: 1, SM: 0
 		//          XID 13 on GPC: 0, TPC: 0, SM: 1
 		// Errors 1 and 2 are combined into a single burst and thus counted only once.
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XIDErrorOnSameGPCAndTPC")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC")
 
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
@@ -516,7 +655,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		// EXPECTED: Now we have errors on two different GPC/TPC combinations:
 		//   - GPC:0, TPC:0 (from Step 2)
 		//   - GPC:0, TPC:1 (from Step 3)
-		// This should trigger the "XIDErrorOnDifferentGPCAndTPC" condition
+		// This should trigger the "RepeatedXID13OnDifferentGPCAndTPC" condition
 		// because we have errors occurring on different processing clusters, indicating
 		// a potentially broader GPU issue rather than a localized problem.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 1, SM: 1")
@@ -527,22 +666,22 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
 		expectedMessage = expectedMessage + "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 run CHECK_APP_CUDA Recommended Action=NONE;"
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XIDErrorOnDifferentGPCAndTPC", expectedMessage)
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnDifferentGPCAndTPC", expectedMessage)
 
 		return ctx
 	})
 
-	feature.Assess("Check if XIDErrorOnSameGPCAndTPC node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if RepeatedXID13OnSameGPCAndTPC node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		// EXPECTED: XIDErrorOnSameGPCAndTPC is present.
+		// EXPECTED: RepeatedXID13OnSameGPCAndTPC is present.
 		// Even though we have injected three errors on the same GPC = 0, TPC = 1,
 		// Burst 1: XID 13 on GPC: 0, TPC: 1, SM: 0
 		//          XID 13 on GPC: 0, TPC: 1, SM: 0
 		// Burst 3: XID 13 on GPC: 0, TPC: 1, SM: 1
 		// Errors 1 and 2 are combined into a single burst and thus counted only once.
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XIDErrorOnSameGPCAndTPC", "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if pass run RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;")
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC", "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if pass run RUN_FIELDDIAGS Recommended Action=RUN_DCGMEUD;")
 
 		return ctx
 	})
@@ -589,7 +728,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
 
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_13)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -710,7 +849,7 @@ func TestSoloNoBurstRule(t *testing.T) {
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
 
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup, helpers.ERRORCODE_13)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
