@@ -37,7 +37,7 @@ data:
 
     [[rules]]
     name = "RepeatedXIDErrorOnSameGPU"
-    description = "Detect occurrence of fatal XIDs 2 times within 3 minutes where the burst window is 10 seconds and sticky XIDs window is 20seconds"
+    description = "Detect occurrence of fatal XIDs 2 times within 2 minutes where the burst window is 20 seconds and sticky XIDs window is 30seconds"
     recommended_action = "CONTACT_SUPPORT"
     stage = [
       '''
@@ -278,7 +278,7 @@ data:
 
     [[rules]]
     name = "RepeatedXID31OnSameGPU"
-    description = "Detect if XID 31 occurred 2 or more times on the same GPU within 2 minutes where the burst window is 10 seconds and sticky XIDs window is 20seconds"
+    description = "Detect if XID 31 occurred 2 or more times on the same GPU within 2 minutes where the burst window is 20 seconds and sticky XIDs window is 30seconds"
     recommended_action = "RUN_DCGMEUD"
     message = "if pass: RUN_FIELDDIAGS"
     stage = [
