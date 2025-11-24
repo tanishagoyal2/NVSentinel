@@ -294,7 +294,8 @@ func WaitForNodesWithLabel(
 	}, EventuallyWaitTimeout, WaitInterval, "all nodes should have label %s=%s", labelKey, expectedValue)
 }
 
-func WaitForNodeEvent(ctx context.Context, t *testing.T, c klient.Client, nodeName string, expectedEvent v1.Event) {
+func WaitForNodeEvent(ctx context.Context, t *testing.T, c klient.Client, nodeName string,
+	expectedEvent v1.Event) {
 	require.Eventually(t, func() bool {
 		fieldSelector := resources.WithFieldSelector(fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=Node", nodeName))
 
@@ -308,7 +309,19 @@ func WaitForNodeEvent(ctx context.Context, t *testing.T, c klient.Client, nodeNa
 
 		for _, event := range eventsForNode.Items {
 			if event.Type == expectedEvent.Type && event.Reason == expectedEvent.Reason {
+				if expectedEvent.Message != "" {
+					t.Logf("Matching message for event %v", expectedEvent.Type)
+					t.Logf("Event message: %s", event.Message)
+					t.Logf("Expected message: %s", expectedEvent.Message)
+
+					if event.Message != expectedEvent.Message {
+						t.Logf("Event message does not match expected message: %s != %s", event.Message, expectedEvent.Message)
+						continue
+					}
+				}
+
 				t.Logf("Matching event for node %s: %v", nodeName, event)
+
 				return true
 			}
 		}
@@ -1412,7 +1425,9 @@ func WaitForNodeConditionWithCheckName(
 		for _, condition := range node.Status.Conditions {
 			if condition.Status == v1.ConditionTrue &&
 				condition.Reason == checkName+"IsNotHealthy" {
-				t.Logf("Checking if message matches: expected message=%s, actual message=%s", message, condition.Message)
+				t.Logf("Matching message for node condition %s", condition.Type)
+				t.Logf("Condition message: %s", condition.Message)
+				t.Logf("Expected message : %s", message)
 
 				if message == condition.Message {
 					t.Logf("Found node condition: Type=%s, Reason=%s, Status=%s, Message=%s",
