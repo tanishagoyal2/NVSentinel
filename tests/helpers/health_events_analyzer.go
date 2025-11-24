@@ -59,7 +59,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 		gpuNodes, err := GetAllNodesNames(ctx, client)
 		require.NoError(t, err, "failed to get nodes")
 		require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
-		gpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))] // #nosec G404 - weak random acceptable for test node selection
+		gpuNodeName = gpuNodes[rand.Intn(len(gpuNodes))]
 	}
 
 	testCtx := &HealthEventsAnalyzerTestContext{
@@ -85,9 +85,9 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, nodeName string) {
 	t.Logf("Cleaning up any existing node conditions for node %s", nodeName)
-	// Note: Using default agent (gpu-health-monitor) instead of health-events-analyzer
-	// because the reconciler filters out events from health-events-analyzer to prevent infinite loops
+
 	event := NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
 		WithHealthy(true).
 		WithFatal(false).
 		WithMessage("No health failures").

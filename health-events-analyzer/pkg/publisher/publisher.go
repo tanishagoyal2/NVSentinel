@@ -104,10 +104,6 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent
 	newEvent.IsFatal = true
 	newEvent.Message = message
 
-	slog.Info("new event entities impacted", "entities", newEvent.EntitiesImpacted)
-
-	slog.Info("old event entities impacted", "entities", event.EntitiesImpacted)
-
 	req := &protos.HealthEvents{
 		Version: 1,
 		Events:  []*protos.HealthEvent{newEvent},

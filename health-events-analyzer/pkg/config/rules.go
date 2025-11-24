@@ -21,12 +21,11 @@ import (
 )
 
 type HealthEventsAnalyzerRule struct {
-	Name                      string                       `toml:"name"`
-	Description               string                       `toml:"description"`
-	Stage                     []string                     `toml:"stage"`
-	RecommendedAction         string                       `toml:"recommended_action"`
-	Message                   string                       `toml:"message"`
-	RecommendedActionMappings map[string]map[string]string `toml:"recommended_action_mappings"`
+	Name              string   `toml:"name"`
+	Description       string   `toml:"description"`
+	Stage             []string `toml:"stage"`
+	RecommendedAction string   `toml:"recommended_action"`
+	Message           string   `toml:"message"`
 }
 
 type TomlConfig struct {
