@@ -205,7 +205,7 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 
 		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_120)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
-			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
+			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
 
 		t.Logf("Waiting 12s to create burst gap")
 		time.Sleep(12 * time.Second)
@@ -224,7 +224,7 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_119)
 		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_48)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
-			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
+			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
 
 		t.Logf("Waiting 12s to create burst gap")
 		time.Sleep(12 * time.Second)
@@ -249,7 +249,8 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		}
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU", message)
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
+			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -376,7 +377,7 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID31OnDifferentGPU",
 			Reason:  "RepeatedXID31OnDifferentGPUIsNotHealthy",
-			Message: "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue Recommended Action=NONE;",
+			Message: "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
 		helpers.WaitForNodeEvent(ctx, t, client, testNodeName, expectedEvent)
@@ -397,7 +398,7 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 
 		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if DCGM EUD tests passes, run field diagnostics Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU",
-			message, "RepeatedXidErrorIsNotHealthy", v1.ConditionTrue)
+			message, "RepeatedXID31OnSameGPUIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -524,7 +525,7 @@ func TestRepeatedXID31OnDifferentGPU(t *testing.T) {
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID31OnDifferentGPU",
 			Reason:  "RepeatedXID31OnDifferentGPUIsNotHealthy",
-			Message: "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue Recommended Action=NONE;",
+			Message: "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
 		helpers.WaitForNodeEvent(ctx, t, client, nodeName, expectedEvent)
@@ -653,7 +654,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID13OnDifferentGPCAndTPC",
 			Reason:  "RepeatedXID13OnDifferentGPCAndTPCIsNotHealthy",
-			Message: "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:0 SM:1 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue Recommended Action=NONE;",
+			Message: "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:0 SM:1 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
 		helpers.WaitForNodeEvent(ctx, t, client, testNodeName, expectedEvent)
@@ -684,7 +685,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		expectedEvent = v1.Event{
 			Type:    "RepeatedXID13OnDifferentGPCAndTPC",
 			Reason:  "RepeatedXID13OnDifferentGPCAndTPCIsNotHealthy",
-			Message: "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue Recommended Action=NONE;",
+			Message: "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
 		helpers.WaitForNodeEvent(ctx, t, client, testNodeName, expectedEvent)
@@ -702,7 +703,9 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		//          XID 13 on GPC: 0, TPC: 1, SM: 0
 		// Burst 3: XID 13 on GPC: 0, TPC: 1, SM: 1
 		// Errors 1 and 2 are combined into a single burst and thus counted only once.
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC", "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if DCGM EUD tests passes, run field diagnostics Recommended Action=RUN_DCGMEUD;")
+		message := "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if DCGM EUD tests passes, run field diagnostics Recommended Action=RUN_DCGMEUD;"
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC",
+			message, "RepeatedXID13OnSameGPCAndTPCIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -826,7 +829,7 @@ func TestSoloNoBurstRule(t *testing.T) {
 		expectedEvent := v1.Event{
 			Type:    "XIDErrorSoloNoBurst",
 			Reason:  "XIDErrorSoloNoBurstIsNotHealthy",
-			Message: "ErrorCode:13 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue Recommended Action=NONE;",
+			Message: "ErrorCode:13 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
 		helpers.WaitForNodeEvent(ctx, t, client, nodeName, expectedEvent)

@@ -458,7 +458,8 @@ func (r *Reconciler) processXidBurstDetection(ctx context.Context, event *protos
 
 	// Use the publisher to create and publish the RepeatedXidError event
 	// The publisher will set agent, checkName, isHealthy, isFatal, and recommendedAction
-	err := r.config.Publisher.Publish(ctx, event, protos.RecommendedAction_CONTACT_SUPPORT, "RepeatedXidError")
+	err := r.config.Publisher.Publish(ctx, event, protos.RecommendedAction_CONTACT_SUPPORT, "RepeatedXidError",
+		event.Message)
 	if err != nil {
 		slog.Error("Failed to publish RepeatedXidError event",
 			"error", err,

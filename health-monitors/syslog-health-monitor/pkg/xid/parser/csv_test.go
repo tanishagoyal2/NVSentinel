@@ -170,6 +170,7 @@ func TestCSVParser_Parse(t *testing.T) {
 			expectedAction:    pb.RecommendedAction_COMPONENT_RESET,
 			expectedMnemonic:  "XID 154",
 			expectedErrorCode: "154",
+			expectedMetadata:  map[string]string{},
 		},
 	}
 

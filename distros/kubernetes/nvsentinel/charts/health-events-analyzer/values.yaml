@@ -554,7 +554,7 @@ config: |
   [[rules]]
   name = "RepeatedXID31OnDifferentGPU"
   description = "Detect if XID 31 occurred 2 or more times on different GPUs within 24 hours"
-  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
   stage = [
     '''
@@ -939,7 +939,7 @@ config: |
   [[rules]]
   name = "RepeatedXID13OnDifferentGPCAndTPC"
   description = "Detect if XID 13 occurred 2 or more times on different GPC and TPC combinations within 24 hours"
-  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
   stage = [
     '''
@@ -1078,7 +1078,7 @@ config: |
   [[rules]]
   name = "XIDErrorSoloNoBurst"
   description = "Detect if XID error occurred only once in the last burst within 24 hours time window"
-  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, report if driver issue"
+  message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
   stage = [
     '''
