@@ -313,7 +313,7 @@ config: |
   name = "RepeatedXID31OnSameGPU"
   description = "Detect if XID 31 occurred 2 or more times on the same GPU within 24 hours where the burst window is 3 minutes and sticky XIDs window is 3 hours"
   recommended_action = "RUN_DCGMEUD"
-  message = "if DCGM EUD tests passes, run field diagnostics"
+  message = "if DCGM EUD tests pass, run field diagnostics"
   stage = [
     '''
     {
@@ -642,7 +642,7 @@ config: |
   [[rules]]
   name = "RepeatedXID13OnSameGPCAndTPC"
   description = "Detect if XID 13 occurred 2 or more times on the same GPC and TPC within 24 hours"
-  message = "if DCGM EUD tests passes, run field diagnostics"
+  message = "if DCGM EUD tests pass, run field diagnostics"
   recommended_action = "RUN_DCGMEUD"
   stage = [
     '''

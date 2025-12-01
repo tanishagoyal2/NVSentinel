@@ -280,7 +280,7 @@ data:
     name = "RepeatedXID31OnSameGPU"
     description = "Detect if XID 31 occurred 2 or more times on the same GPU within 2 minutes where the burst window is 20 seconds and sticky XIDs window is 30 seconds"
     recommended_action = "RUN_DCGMEUD"
-    message = "if DCGM EUD tests passes, run field diagnostics"
+    message = "if DCGM EUD tests pass, run field diagnostics"
     stage = [
       '''
       {
@@ -520,7 +520,7 @@ data:
 
     [[rules]]
     name = "RepeatedXID31OnDifferentGPU"
-    description = "Detect if XID 31 occurred 2 or more times on different GPUs within 1 minutes"
+    description = "Detect if XID 31 occurred 2 or more times on different GPUs within 1 minute"
     message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
     recommended_action = "NONE"
     stage = [
@@ -609,7 +609,7 @@ data:
     [[rules]]
     name = "RepeatedXID13OnSameGPCAndTPC"
     description = "Detect if XID 13 occurred 2 or more times on the same GPC and TPC within 3 minutes"
-    message = "if DCGM EUD tests passes, run field diagnostics" 
+    message = "if DCGM EUD tests pass, run field diagnostics" 
     recommended_action = "RUN_DCGMEUD"
     stage = [
       '''
@@ -1044,7 +1044,7 @@ data:
     
     [[rules]]
     name = "XIDErrorSoloNoBurst"
-    description = "Detect if XID error occurred only once in the last burst within 1 minutes time window"
+    description = "Detect if XID error occurred only once in the last burst within 1 minute time window"
     message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
     recommended_action = "NONE"
     stage = [

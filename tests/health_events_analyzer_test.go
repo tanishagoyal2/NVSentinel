@@ -396,7 +396,7 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 		}
 		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
 
-		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if DCGM EUD tests passes, run field diagnostics Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
+		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if DCGM EUD tests pass, run field diagnostics Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU",
 			message, "RepeatedXID31OnSameGPUIsNotHealthy", v1.ConditionTrue)
 
@@ -703,7 +703,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		//          XID 13 on GPC: 0, TPC: 1, SM: 0
 		// Burst 3: XID 13 on GPC: 0, TPC: 1, SM: 1
 		// Errors 1 and 2 are combined into a single burst and thus counted only once.
-		message := "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if DCGM EUD tests passes, run field diagnostics Recommended Action=RUN_DCGMEUD;"
+		message := "ErrorCode:13 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 GPC:0 TPC:1 SM:1 if DCGM EUD tests pass, run field diagnostics Recommended Action=RUN_DCGMEUD;"
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC",
 			message, "RepeatedXID13OnSameGPCAndTPCIsNotHealthy", v1.ConditionTrue)
 
