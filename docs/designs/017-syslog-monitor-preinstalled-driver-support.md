@@ -32,65 +32,41 @@ Investigation of GKE environments with pre-installed drivers revealed:
 4. **Pods confirm driver availability**: The presence of device plugin pods in Ready state on a node indicates that:
    - GPU drivers are installed and functional on that node
    - The node is ready for GPU workloads
-   - Syslog monitoring can access driver logs
+   - Syslog monitor can access driver logs
+
+5. **GPU Operator Component Optionality**: The GPU Operator components are optional and can be disabled:
+   - **Device Plugin** ([`devicePlugin.enabled=false`]( https://github.com/NVIDIA/gpu-operator/blob/main/api/nvidia/v1/clusterpolicy_types.go#L723)): Can be disabled if using alternative device plugin or CSP-managed device plugin
+   - **Container Toolkit** ([`toolkit.enabled=false`](https://github.com/NVIDIA/gpu-operator/blob/main/api/nvidia/v1/clusterpolicy_types.go#L662)): Can be disabled if pre-installed on nodes
+   - **GPU Feature Discovery** ([`gfd.enabled=false`](https://github.com/NVIDIA/gpu-operator/blob/main/deployments/gpu-operator/values.yaml#L325)): Can be disabled if custom node labeling is preferred
+   - **Implication**: Cannot rely solely on GPU Operator component pods for driver detection across all deployment scenarios
 
 ## Proposed Solution
 
-We propose extending the labeler to detect when GPU drivers are installed on nodes, regardless of the installation method. Two approaches are evaluated below, with **Approach 2 (Container Toolkit Detection)** recommended for use.
+We propose extending the labeler to detect when GPU drivers are installed on nodes using a simple two-tier pod detection mechanism, with manual labeling as a fallback for edge cases.
 
-### Approach 1: GKE Driver Installer Pod Detection
-
-Extend the labeler to detect GKE driver installer pods as a fallback when operator-managed driver pods are not present.
+Extend the labeler to detect driver installer pods across different environments.
 
 **Detection tiers**:
 - **Tier 1**: Watch for `nvidia-driver-daemonset` pods in `gpu-operator` namespace (existing behavior)
-- **Tier 2**: Watch for `nvidia-driver-installer` pods in `kube-system` namespace
+- **Tier 2**: Watch for `nvidia-driver-installer` pods in `kube-system` namespace (for preinstalled drivers)
 
 **What this approach detects**:
-- Operator-managed driver installations (Tier 1)
-- GKE Container-Optimized OS (COS) and Ubuntu images with runtime driver installation (Tier 2)
+- GPU Operator-managed driver installations (Tier 1)
+- GKE managed operator with automatic driver installation for COS and Ubuntu images (Tier 2)
+
+**Scenarios requiring manual labeling**:
+- Custom machine images with pre-baked drivers (no installer pods)
+- GPU Operator with all components disabled
+
+**Pros**:
+- Simple, maintainable implementation
+- Covers primary use cases (NVIDIA managed Operator, GKE managed operator)
+- Clear signal of driver installation
 
 **Cons**:
-- Doesn't handle custom machine images with pre-baked drivers (no installer pods run)
-- Requires watching `kube-system` namespace (additional RBAC)
-- GKE-specific detection logic
+- Doesn't automatically handle custom images with pre-baked drivers (no installer pods run at runtime since drivers are already in the image)
 
-### Approach 2: Container Toolkit Pod Detection (Recommended)
-
-Extend the labeler to watch for **NVIDIA Container Toolkit pods** as a universal indicator that drivers are installed.
-
-**Detection tiers**:
-- **Tier 1**: Watch for `nvidia-driver-daemonset` pods in `gpu-operator` namespace (existing behavior for operator-managed drivers)
-- **Tier 2**: Watch for `nvidia-container-toolkit-daemonset` pods in `gpu-operator` namespace
-
-**What this approach detects**:
-- Operator-managed driver installations (Tier 1)
-- Any environment where GPU Operator deploys Container Toolkit (Tier 2):
-  - GKE COS/Ubuntu images with `nvidia-driver-installer`
-  - Custom machine images with pre-baked drivers
-  - Any other pre-installed driver scenario
-
----
-
-**Why Container Toolkit over Other Detection Methods?**
-
-Container Toolkit is the optimal detection mechanism because:
-
-1. **Deploys After Driver Installation**: GPU Operator deploys Container Toolkit **only after** drivers are confirmed to be present:
-   - In operator-managed scenarios: After `nvidia-driver-daemonset` completes
-   - In pre-installed driver scenarios: GPU Operator detects existing drivers and deploys Container Toolkit
-   
-2. **Universal Across Installation Methods**: Container Toolkit is deployed by GPU Operator in **all driver scenarios**:
-   - Operator-managed drivers (`driver.enabled=true`)
-   - Pre-installed drivers (`driver.enabled=false`)
-   - Custom machine images with pre-baked drivers
-   - GKE COS/Ubuntu images (after `nvidia-driver-installer` completes)
-
-3. **Container Toolkit Pod Running**: Indicates drivers are installed, GPU containers can be configured, syslog monitoring can access driver logs
-
-**Approach 2 (Container Toolkit Detection)** is recommended approach due to the presence of container toolkit pods in all types of images.
-
-### Detection Logic (Approach 2 - Container Toolkit)
+### Detection Logic
 
 ```
 Node with GPU
@@ -100,54 +76,79 @@ Labeler checks for driver installation
 ┌────────────────────────────────────────────┐
 │ 1. Are operator driver pods present?      │
 │    (nvidia-driver-daemonset)              │
-│    [Operator-managed installation]        │
+│    [GPU Operator-managed installation]    │
 └────────────────────────────────────────────┘
     ↓ YES                        ↓ NO
     ↓                            ↓
 Set label                 ┌─────────────────────────────────────────┐
-driver.installed=true     │ 2. Is Container Toolkit pod Running?    │
-                          │    (nvidia-container-toolkit-daemonset) │
-                          │    [Indicates drivers present]          │
+driver.installed=true     │ 2. Are GKE installer pods present?      │
+                          │    (nvidia-driver-installer in          │
+                          │     kube-system namespace)              │
+                          │    [GKE Standard COS/Ubuntu]            │
                           └─────────────────────────────────────────┘
                               ↓ YES              ↓ NO
                               ↓                  ↓
                        Set label          No label set
-                       driver.installed   (No drivers
-                       =true              detected)
+                       driver.installed   (Manual labeling
+                       =true              required, if needed)
 ```
 
 **What each tier detects**:
 - **Tier 1**: GPU Operator with `driver.enabled=true` - operator installs and manages drivers via `nvidia-driver-daemonset` pods
-- **Tier 2**: Container Toolkit presence - GPU Operator deploys this **only after** drivers are present (works for ALL driver sources):
-  * Operator-managed drivers
-  * GKE installer-managed drivers (COS/Ubuntu)
-  * Custom machine images with pre-baked drivers
-  * Any pre-installed driver scenario
+- **Tier 2**: GKE with automatic driver installation - GKE installs drivers via `nvidia-driver-installer` pods for COS/Ubuntu images
 
-## Implementation (Approach 2 - Container Toolkit)
 
-This section describes the implementation for the recommended Approach 2 using Container Toolkit pod detection.
+
+### Manual Labeling Procedure
+
+Admin must manually apply labels to GPU nodes for the following unsupported enviornments:
+
+1. **Custom Deployments with All GPU Operator Components Disabled**:
+   - When `driver.enabled=false`, `gfd.enabled=false`, `devicePlugin.enabled=false`, `toolkit.enabled=false` 
+   - No pods or labels available for detection
+
+2. **Custom Machine Images with Pre-baked Drivers**:
+   - Drivers pre-installed in the image during image creation
+   - No installer pods run at runtime
+
+Nodes can be labeled using the following commands:
+
+```bash
+# Label individual node
+kubectl label nodes <node-name> nvsentinel.dgxc.nvidia.com/driver.installed=true
+
+# Label multiple nodes matching criteria
+kubectl label nodes --selector=<node-selector> nvsentinel.dgxc.nvidia.com/driver.installed=true
+```
+
+## Implementation
+
+This section describes the implementation for the two-tier pod detection approach.
 
 ### Labeler Code Changes
 
 **File**: `labeler/pkg/labeler/labeler.go`
 
-1. **Add Configuration for Container Toolkit Pods**:
-   - Add new command-line flag: `--container-toolkit-app-label` (default: `nvidia-container-toolkit-daemonset`)
-   - Add new command-line flag: `--container-toolkit-namespace` (default: `gpu-operator`)
-   - Update `NewLabeler()` to accept these parameters and create pod informer for container toolkit pods
+1. **Add Configuration for GKE Driver Installer Pods**:
+   - Add new command-line flag: `--gke-installer-app-label` (default: `nvidia-driver-installer`)
+   - Update `NewLabeler()` to accept this parameter and create pod informer for GKE installer pods
 
-2. **Add Container Toolkit Pod Indexer**:
+2. **Add GKE Installer Pod Indexer**:
    ```go
    // Add to indexers in NewLabeler
-   const NodeContainerToolkitIndex = "nodeContainerToolkit"
+   const NodeGKEInstallerIndex = "nodeGKEInstaller"
    
-   NodeContainerToolkitIndex: func(obj any) ([]string, error) {
+   NodeGKEInstallerIndex: func(obj any) ([]string, error) {
        pod, ok := obj.(*v1.Pod)
        if !ok {
            return nil, fmt.Errorf("object is not a pod")
        }
-       if app, exists := pod.Labels["app"]; exists && app == containerToolkitApp {
+       // Check for "app" label (primary)
+       if app, exists := pod.Labels["app"]; exists && app == gkeInstallerApp {
+           return []string{pod.Spec.NodeName}, nil
+       }
+       // Also check for "name" label (used by some GKE installer variants)
+       if name, exists := pod.Labels["name"]; exists && name == gkeInstallerApp {
            return []string{pod.Spec.NodeName}, nil
        }
        return []string{}, nil
@@ -178,47 +179,47 @@ This section describes the implementation for the recommended Approach 2 using C
            }
        }
        
-       // Tier 2: Check for Container Toolkit pods (indicates drivers present)
-       containerToolkitObjs, err := l.containerToolkitInformer.GetIndexer().ByIndex(NodeContainerToolkitIndex, nodeName)
+       // Tier 2: Check for GKE installer pods in kube-system
+       gkeInstallerObjs, err := l.gkeInstallerInformer.GetIndexer().ByIndex(NodeGKEInstallerIndex, nodeName)
        if err != nil {
-           return "", fmt.Errorf("failed to get container toolkit pods: %w", err)
+           return "", fmt.Errorf("failed to get GKE installer pods: %w", err)
        }
        
-       for _, obj := range containerToolkitObjs {
+       for _, obj := range gkeInstallerObjs {
            pod, ok := obj.(*v1.Pod)
            if !ok {
                continue
            }
            if podutil.IsPodReady(pod) {
-               slog.Info("Found Container Toolkit pod (indicates drivers installed)", 
+               slog.Info("Found GKE driver installer pod", 
                    "node", nodeName, 
                    "pod", pod.Name, 
                    "namespace", pod.Namespace,
-                   "method", "tier2-container-toolkit",
-                   "note", "Container Toolkit presence indicates drivers are installed (operator/GKE/pre-baked)")
+                   "method", "tier2-gke-installer",
+                   "note", "Driver installed by GKE for COS/Ubuntu images")
                return LabelValueTrue, nil
            }
        }
        
        slog.Debug("No driver installation detected for node", 
            "node", nodeName,
-           "note", "Neither operator driver pods nor container toolkit pods are running")
+           "note", "Neither operator driver pods nor GKE installer pods found. Manual labeling may be required.")
        return "", nil
    }
    ```
 
-4. **Add Event Handlers for Container Toolkit Pods**:
-   - Register add/update/delete handlers for container toolkit pod informer
-   - Trigger node label reconciliation when container toolkit pods change state
-   - Monitor for pod readiness (indicates drivers and runtime configured)
+4. **Add Event Handlers for GKE Installer Pods**:
+   - Register add/update/delete handlers for GKE installer pod informer
+   - Trigger node label reconciliation when installer pods change state
+   - Monitor for installer pod completion (indicates drivers installed)
 
 5. **Handle Label Persistence**:
-   - The `driver.installed` label persists once set, even if container toolkit pods are later deleted or crash
-   - Label removal only happens when:
+   - The `driver.installed` label persists once set, even if installer pods complete and exit
+   - Label removal happens when:
      * The node is deleted entirely
-     * Operator explicitly uninstalls GPU components (driver daemonset removed)
-   - Rationale: Driver installation is persistent; pod deletion/crashes don't uninstall drivers
-   - **Critical for syslog monitoring**: We want to keep monitoring even if container toolkit pods restart
+     * Operator explicitly uninstalls GPU components (driver daemonset removed for sufficient duration)
+     * Installer pods are deleted AND do not return within a grace period (driver installer daemonset removed for sufficient duration)
+   - **Note**: Consider implementing a grace period (e.g., 5-10 minutes) before removing labels when installer pods are deleted, to distinguish between intentional removal and temporary pod disruption
 
 ### Helm Chart Updates
 
@@ -229,40 +230,41 @@ labeler:
   # App label for operator-managed driver pods (Tier 1)
   driverAppLabel: "nvidia-driver-daemonset"
   
-  # App label for Container Toolkit pods (Tier 2)
-  containerToolkitAppLabel: "nvidia-container-toolkit-daemonset"
+  # App label for GKE driver installer pods (Tier 2)
+  gkeInstallerAppLabel: "nvidia-driver-installer"
 ```
 
-**Note**: Event handlers for Container Toolkit pods and operator driver pods should both trigger node label reconciliation.
+### Alternative Approaches Considered
 
-### Syslog Health Monitor
+#### Container Toolkit Pod Detection
 
-**No changes required**:
-- Continues to use `nvsentinel.dgxc.nvidia.com/driver.installed=true` node selector
-- Works seamlessly with updated labeler logic
+Watch for `nvidia-container-toolkit-daemonset` pods in `gpu-operator` namespace as a universal indicator of driver installation.
 
-## Summary
+**Rejected Because**:
+- **Optional Component**: Container Toolkit can be disabled via `toolkit.enabled=false` (e.g., pre-installed on DGX systems)
+- **Not Universal**: CSP-managed environments may not deploy GPU Operator's Container Toolkit at all
+- **Cutom Image**: Custom images with pre installed drivers deoesn't contain toolkit pods
 
-The labeler will detect driver installation through a **two-tier detection mechanism** (Approach 2):
+#### Device Plugin Pod Detection
 
-1. **Primary Method (Tier 1)**: Operator-managed `nvidia-driver-daemonset` pods in `gpu-operator` namespace
-   - Standard GPU Operator installations with `driver.enabled=true`
-   - Detects when operator installs drivers
-   
-2. **Secondary Method (Tier 2)**: NVIDIA Container Toolkit `nvidia-container-toolkit-daemonset` pods in `gpu-operator` namespace
-   - Universal fallback that works for **all driver sources**:
-     * Operator-managed drivers (after `nvidia-driver-daemonset` completes)
-     * GKE installer-managed drivers (after `nvidia-driver-installer` in `kube-system` completes)
-     * Custom machine images with pre-baked drivers (GPU Operator detects existing drivers and deploys Container Toolkit)
-   - Indicates drivers are present and container runtime is configured
+Watch for `nvidia-device-plugin-daemonset` pods (GPU Operator) or `nvidia-gpu-device-plugin` pods (GKE) as indicators of driver installation.Device Plugin is required for GPU scheduling in Kubernetes and cannot function without drivers, making it a strong signal that drivers are installed.
 
-The `nvsentinel.dgxc.nvidia.com/driver.installed=true` label will be set when **either tier** detects driver installation.
+**Rejected Because**:
+- **Optional Component**: Device Plugin can be disabled via `devicePlugin.enabled=false` if using alternative device plugin solutions or CSP-managed device plugin
+- **Functionality vs Installation**: Device Plugin validates driver **functionality** (requires NVML queries to succeed), not just **installation**. For syslog monitoring, we want to detect installation even if drivers are broken, to capture error logs
 
-## References
+#### GPU Feature Discovery (GFD) Label Detection
 
+Check for `nvidia.com/gpu.present=true` node label set by GPU Feature Discovery as an indicator of driver installation.
+GFD detects GPU hardware and sets node labels, providing a simple check without pod watching complexity.
+
+**Rejected Because**:
+- **Optional Component**: GFD can be disabled via `gfd.enabled=false` if custom node labeling is preferred
+- **Same Issue as Device Plugin**: Misses broken driver scenarios where GFD cannot start but drivers are technically installed
+
+### References
 1. [NVIDIA GPU Operator - GKE with Google Driver Installer](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/google-gke.html#using-the-google-driver-installer)
 2. [GPU Operator with Preinstalled Drivers Support](https://developer.nvidia.com/blog/adding-mig-preinstalled-drivers-and-more-to-nvidia-gpu-operator/)
 3. [NVIDIA GPU Feature Discovery](https://github.com/NVIDIA/gpu-feature-discovery)
 4. [GPU Operator Architecture](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html)
 5. [NVIDIA Precompiled Driver Containers](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/precompiled-drivers.html)
-
