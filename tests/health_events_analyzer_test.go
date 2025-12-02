@@ -586,7 +586,7 @@ func TestRepeatedXID31OnDifferentGPU(t *testing.T) {
 }
 
 func TestXIDErrorOnGPCAndTPC(t *testing.T) {
-	feature := features.New("TestXIDErrorOnSameGPCAndTPC").
+	feature := features.New("TestXIDErrorOnGPCAndTPC").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
