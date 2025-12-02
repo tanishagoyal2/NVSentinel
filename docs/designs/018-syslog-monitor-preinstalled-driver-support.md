@@ -25,16 +25,11 @@ Investigation of GKE environments with pre-installed drivers revealed:
    - **Container-Optimized OS (COS)**: Standard GKE image; drivers installed at runtime by [`nvidia-driver-installer`](https://github.com/GoogleCloudPlatform/container-engine-accelerators/blob/master/nvidia-driver-installer/cos/daemonset-preloaded.yaml) pods
    - **Ubuntu with containerd**: Standard GKE image; drivers installed at runtime by [`nvidia-driver-installer`](https://github.com/GoogleCloudPlatform/container-engine-accelerators/blob/master/nvidia-driver-installer/ubuntu/daemonset.yaml) pods
 
-3. **Custom machine images with pre-baked drivers**: Some enterprises create custom GKE node images (based on GCP Accelerator-Optimized images, Deep Learning VMs, or customized standard images) where NVIDIA drivers are pre-installed during image creation. In these cases:
+3. **Custom machine images with pre-baked drivers**: Some enterprises create custom node images (based on GCP Accelerator-Optimized images, Deep Learning VMs, or customized standard images) where NVIDIA drivers are pre-installed during image creation. In these cases:
    - No driver installer pods run (drivers already in the image)
    - GPU Feature Discovery still detects functional drivers
 
-4. **Pods confirm driver availability**: The presence of device plugin pods in Ready state on a node indicates that:
-   - GPU drivers are installed and functional on that node
-   - The node is ready for GPU workloads
-   - Syslog monitor can access driver logs
-
-5. **GPU Operator Component Optionality**: The GPU Operator components are optional and can be disabled:
+4. **GPU Operator Component Optionality**: The GPU Operator components are optional and can be disabled:
    - **Device Plugin** ([`devicePlugin.enabled=false`]( https://github.com/NVIDIA/gpu-operator/blob/main/api/nvidia/v1/clusterpolicy_types.go#L723)): Can be disabled if using alternative device plugin or CSP-managed device plugin
    - **Container Toolkit** ([`toolkit.enabled=false`](https://github.com/NVIDIA/gpu-operator/blob/main/api/nvidia/v1/clusterpolicy_types.go#L662)): Can be disabled if pre-installed on nodes
    - **GPU Feature Discovery** ([`gfd.enabled=false`](https://github.com/NVIDIA/gpu-operator/blob/main/deployments/gpu-operator/values.yaml#L325)): Can be disabled if custom node labeling is preferred
@@ -48,7 +43,7 @@ Extend the labeler to detect driver installer pods across different environments
 
 **Detection tiers**:
 - **Tier 1**: Watch for `nvidia-driver-daemonset` pods in `gpu-operator` namespace (existing behavior)
-- **Tier 2**: Watch for `nvidia-driver-installer` pods in `kube-system` namespace (for preinstalled drivers)
+- **Tier 2**: Watch for `nvidia-driver-installer` pods in `kube-system` namespace (for GKE installed drivers)
 
 **What this approach detects**:
 - GPU Operator-managed driver installations (Tier 1)
@@ -68,7 +63,7 @@ Extend the labeler to detect driver installer pods across different environments
 
 ### Detection Logic
 
-```
+```plaintext
 Node with GPU
     ↓
 Labeler checks for driver installation
@@ -101,7 +96,7 @@ driver.installed=true     │ 2. Are GKE installer pods present?      │
 
 ### Manual Labeling Procedure
 
-Admin must manually apply labels to GPU nodes for the following unsupported enviornments:
+Admin must manually apply labels to GPU nodes for the following unsupported environments:
 
 1. **Custom Deployments with All GPU Operator Components Disabled**:
    - When `driver.enabled=false`, `gfd.enabled=false`, `devicePlugin.enabled=false`, `toolkit.enabled=false` 
@@ -143,8 +138,8 @@ This section describes the implementation for the two-tier pod detection approac
        if !ok {
            return nil, fmt.Errorf("object is not a pod")
        }
-       // Check for "app" label (primary)
-       if app, exists := pod.Labels["app"]; exists && app == gkeInstallerApp {
+       // Check for "k8s-app" label (primary)
+       if app, exists := pod.Labels["k8s-app"]; exists && app == gkeInstallerApp {
            return []string{pod.Spec.NodeName}, nil
        }
        // Also check for "name" label (used by some GKE installer variants)
@@ -221,19 +216,6 @@ This section describes the implementation for the two-tier pod detection approac
      * Installer pods are deleted AND do not return within a grace period (driver installer daemonset removed for sufficient duration)
    - **Note**: Consider implementing a grace period (e.g., 5-10 minutes) before removing labels when installer pods are deleted, to distinguish between intentional removal and temporary pod disruption
 
-### Helm Chart Updates
-
-**File**: `distros/kubernetes/nvsentinel/charts/labeler/values.yaml`
-
-```yaml
-labeler:
-  # App label for operator-managed driver pods (Tier 1)
-  driverAppLabel: "nvidia-driver-daemonset"
-  
-  # App label for GKE driver installer pods (Tier 2)
-  gkeInstallerAppLabel: "nvidia-driver-installer"
-```
-
 ### Alternative Approaches Considered
 
 #### Container Toolkit Pod Detection
@@ -243,7 +225,7 @@ Watch for `nvidia-container-toolkit-daemonset` pods in `gpu-operator` namespace 
 **Rejected Because**:
 - **Optional Component**: Container Toolkit can be disabled via `toolkit.enabled=false` (e.g., pre-installed on DGX systems)
 - **Not Universal**: CSP-managed environments may not deploy GPU Operator's Container Toolkit at all
-- **Cutom Image**: Custom images with pre installed drivers deoesn't contain toolkit pods
+- **Custom Image**: Custom images with pre-installed drivers don't contain toolkit pods
 
 #### Device Plugin Pod Detection
 
@@ -264,7 +246,7 @@ GFD detects GPU hardware and sets node labels, providing a simple check without 
 
 ### References
 1. [NVIDIA GPU Operator - GKE with Google Driver Installer](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/google-gke.html#using-the-google-driver-installer)
-2. [GPU Operator with Preinstalled Drivers Support](https://developer.nvidia.com/blog/adding-mig-preinstalled-drivers-and-more-to-nvidia-gpu-operator/)
+2. [GPU Operator with Pre-installed Drivers Support](https://developer.nvidia.com/blog/adding-mig-preinstalled-drivers-and-more-to-nvidia-gpu-operator/)
 3. [NVIDIA GPU Feature Discovery](https://github.com/NVIDIA/gpu-feature-discovery)
 4. [GPU Operator Architecture](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html)
 5. [NVIDIA Precompiled Driver Containers](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/precompiled-drivers.html)
