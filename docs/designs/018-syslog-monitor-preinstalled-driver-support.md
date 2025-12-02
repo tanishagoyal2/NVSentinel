@@ -212,9 +212,8 @@ This section describes the implementation for the two-tier pod detection approac
    - The `driver.installed` label persists once set, even if installer pods complete and exit
    - Label removal happens when:
      * The node is deleted entirely
-     * Operator explicitly uninstalls GPU components (driver daemonset removed for sufficient duration)
-     * Installer pods are deleted AND do not return within a grace period (driver installer daemonset removed for sufficient duration)
-   - **Note**: Consider implementing a grace period (e.g., 5-10 minutes) before removing labels when installer pods are deleted, to distinguish between intentional removal and temporary pod disruption
+     * Operator explicitly uninstalls GPU components
+     * Installer pods are deleted
 
 ### Alternative Approaches Considered
 
