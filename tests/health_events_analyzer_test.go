@@ -60,7 +60,6 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
 		helpers.SendHealthEvent(ctx, t, event)
 
-		// FIXME(dims): This is not happening correctly and causing failures in CI.
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, gpuNodeName, "MultipleRemediations",
 			"ErrorCode:31 GPU:0 Recommended Action=CONTACT_SUPPORT;", "MultipleRemediationsIsNotHealthy", v1.ConditionTrue)
 
@@ -68,6 +67,8 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		helpers.SendHealthyEvent(ctx, t, testCtx.NodeName)
+
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup)
 	})
 
@@ -122,6 +123,8 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		helpers.SendHealthyEvent(ctx, t, testCtx.NodeName)
+
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup)
 	})
 
