@@ -29,6 +29,7 @@ import (
 )
 
 func TestMultipleRemediationsCompleted(t *testing.T) {
+
 	feature := features.New("TestMultipleRemediationsCompleted").
 		WithLabel("suite", "health-event-analyzer")
 
