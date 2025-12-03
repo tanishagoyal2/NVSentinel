@@ -103,6 +103,11 @@ func (h *HealthEventTemplate) WithEntity(entityType, entityValue string) *Health
 	return h
 }
 
+func (h *HealthEventTemplate) WithEntitiesImpacted(entities []EntityImpacted) *HealthEventTemplate {
+	h.EntitiesImpacted = entities
+	return h
+}
+
 func (h *HealthEventTemplate) WithFatal(isFatal bool) *HealthEventTemplate {
 	h.IsFatal = isFatal
 	return h

@@ -34,6 +34,7 @@ const (
 	ERRORCODE_120                = "120"
 	ERRORCODE_79                 = "79"
 	HEALTH_EVENTS_ANALYZER_AGENT = "health-events-analyzer"
+	SYSLOG_HEALTH_MONITOR_AGENT  = "syslog-health-monitor"
 )
 
 type HealthEventsAnalyzerTestContext struct {

@@ -138,59 +138,81 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
-	var syslogPod *v1.Pod
+	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Log("Waiting 190 seconds for the RepeatedXIDErrorOnSameGPU rule time window to complete")
 		time.Sleep(190 * time.Second)
+		var newCtx context.Context
 
-		return ctx
+		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
+
+		testNodeName = testCtx.NodeName
+
+		return newCtx
 	})
 
 	feature.Assess("Inject multiple XID errors and check if node condition is added if required", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
-		require.NoError(t, err, "failed to find syslog health monitor pod")
-		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+		entities := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+		}
 
-		testNodeName = syslogPod.Spec.NodeName
-		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
-
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
-
-		metadata := helpers.CreateTestMetadata(testNodeName)
-		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
-
-		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
-		stopChan, readyChan := helpers.PortForwardPod(
-			ctx,
-			client.RESTConfig(),
-			syslogPod.Namespace,
-			syslogPod.Name,
-			stubJournalHTTPPort,
-			stubJournalHTTPPort,
-		)
-		<-readyChan
-		t.Log("Port-forward ready")
-
-		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keyStopChan, stopChan)
+		entitiesImpacted = append(entitiesImpacted, entities)
 
 		// Burst 1: 5 events within 10s gaps (same burst)
 		// Burst 1 contents: XID 119 (x2), 120, 48, 31
 		// Expectations: No trigger yet (need at least 2 bursts to trigger)
-		xidMessages := []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 119, pid=1512646, name=kit, Timeout after 45s of waiting for RPC response from GPU2 GSP! Expected function 10 (FREE) (0x5c00014d 0x0)\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 120, pid=3110652, name=pt_main_thread, Ch 00000005",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 48, pid=3110652, name=pt_main_thread, Ch 00000008",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 119, pid=1512646, name=kit, Timeout after 45s of waiting for RPC response from GPU2 GSP! Expected function 10 (FREE) (0x5c00014d 0x0)\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents := []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_119).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_120).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_48).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_119).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
 
@@ -200,11 +222,26 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		// Burst 2: XID 120 (non-sticky) creates new burst after 12s gap
 		// Burst 2 initial contents: XID 120, 79
 		// Expectations: XID 120 triggers (appears in Burst 1 and Burst 2)
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 120, pid=3110652, name=pt_main_thread, Ch 00000005",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 79, pid=3110652, name=pt_main_thread, Ch 00000008",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_120).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_79).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_120)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
@@ -217,11 +254,26 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		// because XID 79 (sticky) occurred 12s ago (within 20s window)
 		// Burst 2 final contents: XID 120, 79, 119, 48
 		// Expectations: 119 and 48 trigger (both appear in Burst 1 and Burst 2)
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 119, pid=1512646, name=kit, Timeout after 45s of waiting for RPC response from GPU2 GSP! Expected function 10 (FREE) (0x5c00014d 0x0)\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 48, pid=3110652, name=pt_main_thread, Ch 00000008",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_119).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_48).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		t.Logf("Verifying RepeatedXIDErrorOnSameGPU condition exists after events merged into Burst 2")
 		message += fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 Recommended Action=CONTACT_SUPPORT;", helpers.ERRORCODE_119)
@@ -235,11 +287,26 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		// Burst 3: XID 13 (non-sticky) creates new burst after 25s gap
 		// Burst 3 contents: XID 13, 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 3)
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid=3110652, name=pt_main_thread, Ch 00000008",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		time.Sleep(5 * time.Second)
 
@@ -247,10 +314,19 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		// Burst 3 final contents: XID 13 (x2), 31 (x1)
 		// Expectations: XID 13 will NOT trigger (only appears in Burst 3, and targetXidCount=2 in maxBurst),
 		// 				 XID 31 will also not trigger as we are excluding XID 31 from RepeatedXIDErrorOnSameGPU rule
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid=3110652, name=pt_main_thread, Ch 00000008",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
 			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
@@ -259,48 +335,19 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
-			t.Log("Stopping port-forward")
-			close(stopChanVal.(chan struct{}))
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SyslogXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-
-		client, err := c.NewClient()
-		if err != nil {
-			t.Logf("Warning: failed to create client for teardown: %v", err)
-			return ctx
-		}
-
-		nodeNameVal := ctx.Value(keyNodeName)
-		if nodeNameVal == nil {
-			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
-			return ctx
-		}
-		nodeName := nodeNameVal.(string)
-
-		podNameVal := ctx.Value(keySyslogPodName)
-		if podNameVal != nil {
-			podName := podNameVal.(string)
-			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
-			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
-			if err != nil {
-				t.Logf("Warning: failed to delete pod: %v", err)
-			} else {
-				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
-				require.Eventually(t, func() bool {
-					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
-					if err != nil {
-						return false
-					}
-					return condition != nil && condition.Status == v1.ConditionFalse
-				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
-			}
-		}
-
-		t.Logf("Cleaning up metadata from node %s", nodeName)
-		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
-
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -312,12 +359,16 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
-	var syslogPod *v1.Pod
+	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-
 		t.Log("Waiting 190 seconds for the RepeatedXID31OnSameGPU rule time window to complete")
 		time.Sleep(190 * time.Second)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
+
+		testNodeName = testCtx.NodeName
+		t.Logf("Using node: %s", testNodeName)
 
 		return ctx
 	})
@@ -326,43 +377,53 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
-		require.NoError(t, err, "failed to find syslog health monitor pod")
-		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+		entities1 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+		}
 
-		testNodeName = syslogPod.Spec.NodeName
-		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
+		entities2 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0002:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-22222222-2222-2222-2222-222222222222",
+			},
+		}
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
-
-		metadata := helpers.CreateTestMetadata(testNodeName)
-		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
-
-		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
-		stopChan, readyChan := helpers.PortForwardPod(
-			ctx,
-			client.RESTConfig(),
-			syslogPod.Namespace,
-			syslogPod.Name,
-			stubJournalHTTPPort,
-			stubJournalHTTPPort,
-		)
-		<-readyChan
-		t.Log("Port-forward ready")
-
-		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keyStopChan, stopChan)
+		entitiesImpacted = append(entitiesImpacted, entities1)
+		entitiesImpacted = append(entitiesImpacted, entities2)
 
 		// Burst 1: 5 events within 10s gaps (same burst)
 		// Burst 1 contents: XID 119, 31
 		// Expectations: No trigger yet (need at least 2 bursts to trigger)
-		xidMessages := []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 119, pid=1512646, name=kit, Timeout after 45s of waiting for RPC response from GPU2 GSP! Expected function 10 (FREE) (0x5c00014d 0x0)\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents := []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_119).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU")
 
@@ -372,10 +433,19 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 		// Burst 2: XID 31 (non-sticky) creates new burst after 25s gap
 		// Burst 2 initial contents: XID 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 2 but with different PCI addresses)
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0002:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities2).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID31OnDifferentGPU",
@@ -393,11 +463,26 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 		// Burst 3: XID 13 (non-sticky) creates new burst after 25s gap
 		// Burst 3 contents: XID 13, 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 3)
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid=3110652, name=pt_main_thread, Ch 00000008",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		message := fmt.Sprintf("ErrorCode:%s PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 if DCGM EUD tests pass, run field diagnostics Recommended Action=RUN_DCGMEUD;", helpers.ERRORCODE_31)
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU",
@@ -407,48 +492,19 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
-			t.Log("Stopping port-forward")
-			close(stopChanVal.(chan struct{}))
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SyslogXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		client, err := c.NewClient()
-		if err != nil {
-			t.Logf("Warning: failed to create client for teardown: %v", err)
-			return ctx
-		}
-
-		nodeNameVal := ctx.Value(keyNodeName)
-		if nodeNameVal == nil {
-			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
-			return ctx
-		}
-		nodeName := nodeNameVal.(string)
-
-		podNameVal := ctx.Value(keySyslogPodName)
-		if podNameVal != nil {
-			podName := podNameVal.(string)
-			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
-			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
-			if err != nil {
-				t.Logf("Warning: failed to delete pod: %v", err)
-			} else {
-				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
-				require.Eventually(t, func() bool {
-					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
-					if err != nil {
-						return false
-					}
-					return condition != nil && condition.Status == v1.ConditionFalse
-				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
-			}
-		}
-
-		t.Logf("Cleaning up metadata from node %s", nodeName)
-		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
-
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -460,61 +516,83 @@ func TestRepeatedXID31OnDifferentGPU(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
-	var syslogPod *v1.Pod
+	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-
 		t.Log("Waiting 70 seconds for the RepeatedXID31OnDifferentGPU rule time window to complete")
 		time.Sleep(70 * time.Second)
 
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
-		require.NoError(t, err, "failed to find syslog health monitor pod")
-		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
 
-		testNodeName = syslogPod.Spec.NodeName
-		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
+		testNodeName = testCtx.NodeName
+		t.Logf("Using node: %s", testNodeName)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
-
-		metadata := helpers.CreateTestMetadata(testNodeName)
-		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
-
-		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
-		stopChan, readyChan := helpers.PortForwardPod(
-			ctx,
-			client.RESTConfig(),
-			syslogPod.Namespace,
-			syslogPod.Name,
-			stubJournalHTTPPort,
-			stubJournalHTTPPort,
-		)
-		<-readyChan
-		t.Log("Port-forward ready")
-
-		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keyStopChan, stopChan)
-
-		xidMessages := []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 2): Out Of Range Address\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 31, pid=2079991, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		entities1 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+		}
+		entities2 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0002:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-22222222-2222-2222-2222-222222222222",
+			},
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		entitiesImpacted = append(entitiesImpacted, entities1)
+		entitiesImpacted = append(entitiesImpacted, entities2)
+
+		xidEvents := []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+		}
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU")
 
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
 
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0002:00:00): 31, pid=2079992, name=pt_main_thread, Ch 00000007, intr 00000000. MMU Fault: ENGINE GRAPHICS GPCCLIENT_T1_6 faulted @ 0x7f5a_e7504000. Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities2).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		return ctx
 	})
@@ -523,62 +601,31 @@ func TestRepeatedXID31OnDifferentGPU(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		nodeName := ctx.Value(keyNodeName).(string)
-
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID31OnDifferentGPU",
 			Reason:  "RepeatedXID31OnDifferentGPUIsNotHealthy",
 			Message: "ErrorCode:31 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
-		helpers.WaitForNodeEvent(ctx, t, client, nodeName, expectedEvent)
+		helpers.WaitForNodeEvent(ctx, t, client, testNodeName, expectedEvent)
 
 		return ctx
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
-			t.Log("Stopping port-forward")
-			close(stopChanVal.(chan struct{}))
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SyslogXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		client, err := c.NewClient()
-		if err != nil {
-			t.Logf("Warning: failed to create client for teardown: %v", err)
-			return ctx
-		}
-
-		nodeNameVal := ctx.Value(keyNodeName)
-		if nodeNameVal == nil {
-			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
-			return ctx
-		}
-		nodeName := nodeNameVal.(string)
-
-		podNameVal := ctx.Value(keySyslogPodName)
-		if podNameVal != nil {
-			podName := podNameVal.(string)
-			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
-			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
-			if err != nil {
-				t.Logf("Warning: failed to delete pod: %v", err)
-			} else {
-				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
-				require.Eventually(t, func() bool {
-					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
-					if err != nil {
-						return false
-					}
-					return condition != nil && condition.Status == v1.ConditionFalse
-				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
-			}
-		}
-
-		t.Logf("Cleaning up metadata from node %s", nodeName)
-		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
-
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -590,7 +637,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
-	var syslogPod *v1.Pod
+	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Log("Waiting 190 seconds for the RepeatedXID13OnSameGPCAndTPC rule time window to complete")
@@ -599,43 +646,108 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
-		require.NoError(t, err, "failed to find syslog health monitor pod")
-		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
 
-		testNodeName = syslogPod.Spec.NodeName
-		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
+		testNodeName = testCtx.NodeName
+		t.Logf("Using node: %s", testNodeName)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
+		entities1 := []helpers.EntityImpacted{
 
-		metadata := helpers.CreateTestMetadata(testNodeName)
-		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+			{
+				EntityType:  "GPC",
+				EntityValue: "0",
+			},
+			{
+				EntityType:  "TPC",
+				EntityValue: "1",
+			},
+			{
+				EntityType:  "SM",
+				EntityValue: "0",
+			},
+		}
+		entities2 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+			{
+				EntityType:  "GPC",
+				EntityValue: "0",
+			},
+			{
+				EntityType:  "TPC",
+				EntityValue: "0",
+			},
+			{
+				EntityType:  "SM",
+				EntityValue: "1",
+			},
+		}
 
-		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
-		stopChan, readyChan := helpers.PortForwardPod(
-			ctx,
-			client.RESTConfig(),
-			syslogPod.Namespace,
-			syslogPod.Name,
-			stubJournalHTTPPort,
-			stubJournalHTTPPort,
-		)
-		<-readyChan
-		t.Log("Port-forward ready")
+		entities3 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+			{
+				EntityType:  "GPC",
+				EntityValue: "0",
+			},
+			{
+				EntityType:  "TPC",
+				EntityValue: "1",
+			},
+			{
+				EntityType:  "SM",
+				EntityValue: "1",
+			},
+		}
 
-		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keyStopChan, stopChan)
+		entitiesImpacted = append(entitiesImpacted, entities1)
+		entitiesImpacted = append(entitiesImpacted, entities2)
+		entitiesImpacted = append(entitiesImpacted, entities3)
 
 		// STEP 1: Inject two XID 13 errors on GPC:0, TPC:1, SM:0
 		// EXPECTED: This alone won't trigger the "same" rule yet as it needs multiple occurrences
 		// on the same GPC/TPC combination.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 1, SM: 0")
-		xidMessages := []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 0): Out Of Range Address\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 0): Out Of Range Address\n",
+		xidEvents := []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_31).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID13OnDifferentGPCAndTPC")
 
@@ -648,11 +760,19 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		// because we have errors occurring on different processing clusters, indicating
 		// a potentially broader GPU issue rather than a localized problem.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 0, SM: 1")
-
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 0, SM 1): Out Of Range Address\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities2).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		expectedEvent := v1.Event{
 			Type:    "RepeatedXID13OnDifferentGPCAndTPC",
@@ -679,11 +799,19 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		// because we have errors occurring on different processing clusters, indicating
 		// a potentially broader GPU issue rather than a localized problem.
 		t.Log("Inject XID 13 events on GPC: 0, TPC: 1, SM: 1")
-
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 1): Out Of Range Address\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities3).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		expectedEvent = v1.Event{
 			Type:    "RepeatedXID13OnDifferentGPCAndTPC",
@@ -714,46 +842,17 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
-			t.Log("Stopping port-forward")
-			close(stopChanVal.(chan struct{}))
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SyslogXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-
-		client, err := c.NewClient()
-		if err != nil {
-			t.Logf("Warning: failed to create client for teardown: %v", err)
-			return ctx
-		}
-
-		nodeNameVal := ctx.Value(keyNodeName)
-		if nodeNameVal == nil {
-			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
-			return ctx
-		}
-		nodeName := nodeNameVal.(string)
-
-		podNameVal := ctx.Value(keySyslogPodName)
-		if podNameVal != nil {
-			podName := podNameVal.(string)
-			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
-			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
-			if err != nil {
-				t.Logf("Warning: failed to delete pod: %v", err)
-			} else {
-				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
-				require.Eventually(t, func() bool {
-					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
-					if err != nil {
-						return false
-					}
-					return condition != nil && condition.Status == v1.ConditionFalse
-				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
-			}
-		}
-
-		t.Logf("Cleaning up metadata from node %s", nodeName)
-		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
 
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
@@ -767,59 +866,91 @@ func TestSoloNoBurstRule(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
-	var syslogPod *v1.Pod
+	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-
 		t.Log("Waiting 70 seconds for the XIDErrorSoloNoBurst rule time window to complete")
 		time.Sleep(70 * time.Second)
 
-		client, err := c.NewClient()
-		require.NoError(t, err, "failed to create kubernetes client")
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
 
-		syslogPod, err = helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "syslog-health-monitor")
-		require.NoError(t, err, "failed to find syslog health monitor pod")
-		require.NotNil(t, syslogPod, "syslog health monitor pod should exist")
+		testNodeName = testCtx.NodeName
+		t.Logf("Using node: %s", testNodeName)
 
-		testNodeName = syslogPod.Spec.NodeName
-		t.Logf("Using syslog health monitor pod: %s on node: %s", syslogPod.Name, testNodeName)
-
-		_, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
-
-		metadata := helpers.CreateTestMetadata(testNodeName)
-		helpers.InjectMetadata(t, ctx, client, syslogPod.Namespace, testNodeName, metadata)
-
-		t.Logf("Setting up port-forward to pod %s on port %d", syslogPod.Name, stubJournalHTTPPort)
-		stopChan, readyChan := helpers.PortForwardPod(
-			ctx,
-			client.RESTConfig(),
-			syslogPod.Namespace,
-			syslogPod.Name,
-			stubJournalHTTPPort,
-			stubJournalHTTPPort,
-		)
-		<-readyChan
-		t.Log("Port-forward ready")
-
-		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keyStopChan, stopChan)
-
-		xidMessages := []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 2): Out Of Range Address\n",
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0001:00:00): 13, pid='<unknown>', name=<unknown>, Graphics SM Warp Exception on (GPC 0, TPC 1, SM 2): Out Of Range Address\n",
+		entities1 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0001:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+			{
+				EntityType:  "GPC",
+				EntityValue: "0",
+			},
+			{
+				EntityType:  "TPC",
+				EntityValue: "1",
+			},
+			{
+				EntityType:  "SM",
+				EntityValue: "2",
+			},
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		entities2 := []helpers.EntityImpacted{
+			{
+				EntityType:  "PCI",
+				EntityValue: "0002:00:00",
+			},
+			{
+				EntityType:  "GPU_UUID",
+				EntityValue: "GPU-22222222-2222-2222-2222-222222222222",
+			},
+		}
+
+		entitiesImpacted = append(entitiesImpacted, entities1)
+		entitiesImpacted = append(entitiesImpacted, entities2)
+
+		xidEvents := []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities1).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
+		}
+
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		t.Log("Waiting 5s to create burst gap")
 		time.Sleep(5 * time.Second)
 
-		xidMessages = []string{
-			"kernel: [16450076.435595] NVRM: Xid (PCI:0002:00:00): 13, pid='<unknown>', name=<unknown>, Graphics Exception: ESR 0x50df30=0x11f000e 0x50df34=0x20 0x50df28=0xf81eb60 0x50df2c=0x1174\n",
+		xidEvents = []*helpers.HealthEventTemplate{
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SyslogXIDError").
+				WithEntitiesImpacted(entities2).
+				WithFatal(true).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		for _, xidEvent := range xidEvents {
+			helpers.SendHealthEvent(ctx, t, xidEvent)
+		}
 
 		return ctx
 	})
@@ -827,7 +958,6 @@ func TestSoloNoBurstRule(t *testing.T) {
 	feature.Assess("Check if XIDErrorSoloNoBurst node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
-		nodeName := ctx.Value(keyNodeName).(string)
 
 		expectedEvent := v1.Event{
 			Type:    "XIDErrorSoloNoBurst",
@@ -835,54 +965,25 @@ func TestSoloNoBurstRule(t *testing.T) {
 			Message: "ErrorCode:13 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support Recommended Action=NONE;",
 		}
 
-		helpers.WaitForNodeEvent(ctx, t, client, nodeName, expectedEvent)
+		helpers.WaitForNodeEvent(ctx, t, client, testNodeName, expectedEvent)
 
 		return ctx
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		if stopChanVal := ctx.Value(keyStopChan); stopChanVal != nil {
-			t.Log("Stopping port-forward")
-			close(stopChanVal.(chan struct{}))
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SyslogXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		client, err := c.NewClient()
-		if err != nil {
-			t.Logf("Warning: failed to create client for teardown: %v", err)
-			return ctx
-		}
-
-		nodeNameVal := ctx.Value(keyNodeName)
-		if nodeNameVal == nil {
-			t.Log("Skipping teardown: nodeName not set (setup likely failed early)")
-			return ctx
-		}
-		nodeName := nodeNameVal.(string)
-
-		podNameVal := ctx.Value(keySyslogPodName)
-		if podNameVal != nil {
-			podName := podNameVal.(string)
-			t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
-			err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, podName)
-			if err != nil {
-				t.Logf("Warning: failed to delete pod: %v", err)
-			} else {
-				t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
-				require.Eventually(t, func() bool {
-					condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-						"SysLogsXIDError", "SysLogsXIDErrorIsHealthy")
-					if err != nil {
-						return false
-					}
-					return condition != nil && condition.Status == v1.ConditionFalse
-				}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "SysLogsXIDError condition should be cleared")
-			}
-		}
-
-		t.Logf("Cleaning up metadata from node %s", nodeName)
-		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
-
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, nodeName, testCtx.ConfigMapBackup)
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
