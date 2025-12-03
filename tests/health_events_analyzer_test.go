@@ -132,7 +132,6 @@ func TestMultipleRemediationsNotTriggered(t *testing.T) {
 }
 
 func TestRepeatedXIDOnSameGPU(t *testing.T) {
-
 	// Works with both MongoDB ($setWindowFields pipeline) and PostgreSQL (XidBurstDetector).
 	feature := features.New("TestRepeatedXIDOnSameGPU").
 		WithLabel("suite", "health-event-analyzer")
