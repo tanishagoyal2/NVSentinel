@@ -278,7 +278,7 @@ data:
 
     [[rules]]
     name = "RepeatedXID31OnSameGPU"
-    description = "Detect if XID 31 occurred 2 or more times on the same GPU within 2 minutes where the burst window is 20 seconds and sticky XIDs window is 30 seconds"
+    description = "Detect if XID 31 occurred 2 or more times on the same GPU within 3 minutes where the burst window is 20 seconds and sticky XIDs window is 30 seconds"
     recommended_action = "RUN_DCGMEUD"
     message = "if DCGM EUD tests pass, run field diagnostics"
     stage = [
@@ -288,7 +288,7 @@ data:
           "$expr": {
             "$gte": [
               "$healthevent.generatedtimestamp.seconds",
-              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 120]}
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 180]}
             ]
           }
         }

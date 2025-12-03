@@ -195,8 +195,8 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
 
-		t.Log("Waiting 12s to create burst gap")
-		time.Sleep(12 * time.Second)
+		t.Log("Waiting 25s to create burst gap")
+		time.Sleep(25 * time.Second)
 
 		// Burst 2: XID 120 (non-sticky) creates new burst after 12s gap
 		// Burst 2 initial contents: XID 120, 79
@@ -211,8 +211,8 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
 			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
 
-		t.Logf("Waiting 12s to create burst gap")
-		time.Sleep(12 * time.Second)
+		t.Logf("Waiting 20s to create burst gap")
+		time.Sleep(20 * time.Second)
 
 		// Burst 2 (continued): XID 119 (sticky) arrives but merges into existing Burst 2
 		// because XID 79 (sticky) occurred 12s ago (within 20s window)
@@ -230,10 +230,10 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU",
 			message, "RepeatedXIDErrorOnSameGPUIsNotHealthy", v1.ConditionTrue)
 
-		t.Logf("Waiting 12s to create burst gap")
-		time.Sleep(12 * time.Second)
+		t.Logf("Waiting 25s to create burst gap")
+		time.Sleep(25 * time.Second)
 
-		// Burst 3: XID 13 (non-sticky) creates new burst after 12s gap
+		// Burst 3: XID 13 (non-sticky) creates new burst after 25s gap
 		// Burst 3 contents: XID 13, 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 3)
 		xidMessages = []string{
@@ -244,7 +244,7 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 
 		time.Sleep(5 * time.Second)
 
-		// Burst 3 (continued): XID 13 arrives again after 5s gap (< 10s), stays in same burst
+		// Burst 3 (continued): XID 13 arrives again after 5s gap (< 20s), stays in same burst
 		// Burst 3 final contents: XID 13 (x2), 31 (x1)
 		// Expectations: XID 13 will NOT trigger (only appears in Burst 3, and targetXidCount=2 in maxBurst),
 		// 				 XID 31 will also not trigger as we are excluding XID 31 from RepeatedXIDErrorOnSameGPU rule
@@ -317,8 +317,8 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 
-		t.Log("Waiting 130 seconds for the RepeatedXID31OnSameGPU rule time window to complete")
-		time.Sleep(130 * time.Second)
+		t.Log("Waiting 190 seconds for the RepeatedXID31OnSameGPU rule time window to complete")
+		time.Sleep(190 * time.Second)
 
 		return ctx
 	})
@@ -367,10 +367,10 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnDifferentGPU")
 
-		t.Log("Waiting 12s to create burst gap")
-		time.Sleep(12 * time.Second)
+		t.Log("Waiting 25s to create burst gap")
+		time.Sleep(25 * time.Second)
 
-		// Burst 2: XID 31 (non-sticky) creates new burst after 12s gap
+		// Burst 2: XID 31 (non-sticky) creates new burst after 25s gap
 		// Burst 2 initial contents: XID 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 2 but with different PCI addresses)
 		xidMessages = []string{
@@ -388,10 +388,10 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID31OnSameGPU")
 
-		t.Logf("Waiting 12s to create burst gap")
-		time.Sleep(12 * time.Second)
+		t.Logf("Waiting 25s to create burst gap")
+		time.Sleep(25 * time.Second)
 
-		// Burst 3: XID 13 (non-sticky) creates new burst after 12s gap
+		// Burst 3: XID 13 (non-sticky) creates new burst after 25s gap
 		// Burst 3 contents: XID 13, 31
 		// Expectations: XID 31 triggers (appears in Burst 1 and Burst 3)
 		xidMessages = []string{
