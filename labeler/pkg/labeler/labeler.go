@@ -157,7 +157,6 @@ func NewLabeler(clientset kubernetes.Interface, resyncPeriod time.Duration,
 				return []string{}, nil
 			},
 		})
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to add indexer: %w", err)
 	}
@@ -167,7 +166,10 @@ func NewLabeler(clientset kubernetes.Interface, resyncPeriod time.Duration,
 		podInformer:          podInformer,
 		nodeInformer:         nodeInformer,
 		gkeInstallerInformer: gkeInstallerInformer,
-		informersSynced:      []cache.InformerSynced{podInformer.HasSynced, nodeInformer.HasSynced, gkeInstallerInformer.HasSynced},
+		informersSynced: []cache.InformerSynced{
+			podInformer.HasSynced,
+			nodeInformer.HasSynced,
+			gkeInstallerInformer.HasSynced},
 		ctx:                  context.Background(),
 		dcgmAppLabel:         dcgmApp,
 		driverAppLabel:       driverApp,
@@ -189,9 +191,8 @@ func NewLabeler(clientset kubernetes.Interface, resyncPeriod time.Duration,
 	return l, nil
 }
 
-// registerPodEventHandlers sets up event handlers for pod informer
-func (l *Labeler) registerPodEventHandlers() error {
-	eventHandlers := cache.ResourceEventHandlerFuncs{
+func (l *Labeler) getEventHandlers() cache.ResourceEventHandlerFuncs {
+	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			if err := l.handlePodEvent(obj); err != nil {
 				metrics.EventsProcessed.WithLabelValues(metrics.StatusFailed).Inc()
@@ -233,6 +234,11 @@ func (l *Labeler) registerPodEventHandlers() error {
 			}
 		},
 	}
+}
+
+// registerPodEventHandlers sets up event handlers for pod informer
+func (l *Labeler) registerPodEventHandlers() error {
+	eventHandlers := l.getEventHandlers()
 
 	_, err := l.podInformer.AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: func(obj any) bool {
@@ -295,6 +301,7 @@ func (l *Labeler) Run(ctx context.Context) error {
 	go l.podInformer.Run(ctx.Done())
 	go l.gkeInstallerInformer.Run(ctx.Done())
 	go l.nodeInformer.Run(ctx.Done())
+
 	slog.Info("Waiting for Labeler caches to sync...")
 
 	if ok := cache.WaitForCacheSync(ctx.Done(), l.informersSynced...); !ok {
@@ -357,7 +364,6 @@ func hasReadyDriverPod(objs []any, excludePod *v1.Pod) bool {
 
 // getDriverLabelForNode returns the expected driver label value for a specific node
 func (l *Labeler) getDriverLabelForNode(nodeName string) (string, error) {
-
 	objs, err := l.podInformer.GetIndexer().ByIndex(NodeDriverIndex, nodeName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get driver pods by node index for node %s: %w", nodeName, err)

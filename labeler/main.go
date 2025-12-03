@@ -102,7 +102,8 @@ func parseFlags() (kubeconfig, metricsPort, dcgmAppLabel, driverAppLabel, gkeIns
 	metricsPort = flag.String("metrics-port", "2112", "Port to expose Prometheus metrics on")
 	dcgmAppLabel = flag.String("dcgm-app-label", "nvidia-dcgm", "App label value for DCGM pods")
 	driverAppLabel = flag.String("driver-app-label", "nvidia-driver-daemonset", "App label value for driver pods")
-	gkeInstallerAppLabel = flag.String("gke-installer-app-label", "nvidia-driver-installer", "App label value for GKE driver installer pods")
+	gkeInstallerAppLabel = flag.String("gke-installer-app-label",
+		"nvidia-driver-installer", "App label value for GKE driver installer pods")
 	kataLabel = flag.String("kata-label", "",
 		fmt.Sprintf("Custom node label to check for Kata Containers support. If empty, uses default '%s'",
 			labeler.KataRuntimeDefaultLabel))
