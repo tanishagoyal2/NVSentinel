@@ -158,7 +158,7 @@ func TestLabeler_handlePodEvent(t *testing.T) {
 			name: "ready GKE driver installer pod adds driver label",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:   "driver-installler-pod",
+					Name:   "driver-installer-pod",
 					Labels: map[string]string{"k8s-app": "nvidia-driver-installer"},
 				},
 				Spec: corev1.PodSpec{
