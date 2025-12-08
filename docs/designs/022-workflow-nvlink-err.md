@@ -4,7 +4,7 @@
 
 WORKFLOW_NVLINK_ERR is a resolution workflow for XID 74 [(NVLink_ERROR)](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html) on **Hopper-based GPU architectures**. This workflow provides detailed bit-level analysis of NVLink error registers to determine the root cause and appropriate remediation action.
 
-The explaination of WORKFLOW_NVLINK_ERR in RAS Catalog doc is defined like this:
+The explanation of WORKFLOW_NVLINK_ERR in RAS Catalog doc is defined like this:
 
 ```text
  Extract the hex strings from the Xid error message. 
@@ -140,10 +140,10 @@ Register 0
     │   └─ Seen >2x on same link? → CONTACT_SUPPORT (ECC/Parity HW issue)
     │   
     ├─ Bits 8,9,12,16,17,24,28 set?
-    │   → CONTACT_SUPPORT (Check link mechanical connections, re-seat, run diags)
+    │   → CONTACT_SUPPORT (request to check link mechanical connections and run field diagnosis if issue persists)
     │
     ├─ Bits 21 or 22 set?
-    │   └─ Solo (only XID 74 with no other bits set)? → CONTACT_SUPPORT (Check connections, Field Diags)
+    │   └─ Solo (only XID 74 with no other bits set)? → CONTACT_SUPPORT (request to check link mechanical connections and run field diagnosis if issue persists)
     │
     └─ Bits 27, 29 set?
         └─ Seen repeatedly (2x or more) → CONTACT_SUPPORT
@@ -162,7 +162,7 @@ Register 2
     │   → CONTACT_SUPPORT
     │
     ├─ Bits 16, 19 set?
-    │   ├─ Seen repeatedly? → CONTACT_SUPPORT
+    │   ├─ Seen repeatedly? → CONTACT_SUPPORT (request for field diagnosis)
     │
     └─ Bits 17, 18 set?
         ├─ Seen repeatedly? → CONTACT_SUPPORT
@@ -186,7 +186,7 @@ Register 4
     │   ├─ Seen >2x on same link? → CONTACT_SUPPORT (ECC/Parity HW issue)
     │
     └─ Bits 20,23,26,29 set?
-        → NONE (run field diag)
+        → NONE (request for field diagnosis if required)
 ```
 ---
 
@@ -263,10 +263,7 @@ func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
     
     // NEW: XID 74 NVLink handling
     if xidCode == 74 {
-        nvLinkMetadata, err := fetchXID74NVLinkData(message)
-        if err != nil {
-            return nil, fmt.Errorf("failed to fetch XID 74 NVLink data: %w", err)
-        }
+        nvLinkMetadata := fetchXID74NVLinkData(message)
         
         // Merge NVLink metadata into main metadata map
         for k, v := range nvLinkMetadata {
@@ -307,7 +304,7 @@ func fetchXID74NVLinkData(message string) (map[string]string) {
     metadata["NVLINK"] = nvlink
 
     for i := 2; i < len(matches); i++ {
-      metadata[fmt.Sprintf("REG%d", i)] = convertHexToBinary32(matches[i])
+      metadata[fmt.Sprintf("REG%d", i-2)] = convertHexToBinary32(matches[i])
     }
 
     return metadata
@@ -367,7 +364,7 @@ The XID parser returns metadata that gets stored in the health event's `Entities
 
 We need to define new rules for WORKFLOW_NVLINK_ERR, where each rule performs necessary three-step check:
 
-1. **Architecture Check**: Verify GPU is Hopper based arch by checking the received event metadata field `metadata["device_name"]`. If it contains "H100", "H200", "GH100", or "GH200" substring then its a hoppers based arch.
+1. **Architecture Check**: Verify GPU is Hopper-based arch by checking the received event metadata field `metadata["device_name"]`. If it contains "H100", "H200", "GH100", or "GH200" substring then it's a Hopper-based arch.
 2. **XID Verification**: As this WORKFLOW_NVLINK_ERR is only recommended for XID 74 so, we need to run these rules only for XID 74. We need to check if `errorcode`in received event is "74" or not. If yes, then evaluate the rules by checking bits and registers.  
 3. **Bit Pattern Analysis**: Check specific bits in registers (REG0, REG2, REG3, REG4) from `entitiesimpacted[]` (as we have made changes in syslog monitor to store this info) and apply repetition checks (query last 24h) to determine repetition on same GPU+NVLink combination.
 
