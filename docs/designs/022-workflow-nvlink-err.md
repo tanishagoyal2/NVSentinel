@@ -93,7 +93,7 @@ The following diagram shows how health-events-analyzer processes XID 74 events t
 
 ### Detailed Register Analysis Flow
 
-#### **Register 0 (First Register) Decision Tree:**
+#### Register 0 (First Register) Decision Tree:
 
 ```
 Register 0
@@ -108,63 +108,63 @@ Register 0
     │
     ├─ Bits 4 or 5 set?
     |   Likely a HW issue with ECC/Parity.
-    │   └─ Seen >2x on same link?
+    │   └─ Seen >2x on same link and GPU?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "likely a HW issue with ECC/Parity"
     |        isFatal = true
     │   
     ├─ Bits 8, 9, 12, 16, 17, 24, 28 set?
     |   Could possibly be a HW issue.
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = "request to check link mechanical connections and run field diagnosis if issue persists"
+    |        message = "could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists"
     |        isFatal = true
     │
     ├─ Bits 21 or 22 set?
     |   Marginal channel SI issue. If accompanied by other errors, follow their resolution first.
     │   └─ Solo (only XID 74 occurred and no other bits are set)?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = "request to check link mechanical connections and run field diagnosis if issue persists"
+    |        message = "marginal SI issue, request to check link mechanical connections and run field diagnosis if issue persists"
     |        isFatal = true
     │
     └─ Bits 27, 29 set?
-         └─ Seen repeatedly (2x or more)?
+         └─ Seen repeated XID 74 with same bit (27, 29) set (2x or more on same GPU)?
               recommendedAction = CONTACT_SUPPORT
               message = ""
               isFatal = true
 
 ```
 
-#### **Register 2 (Third Register) Decision Tree:**
+#### Register 2 (Third Register) Decision Tree:
 
 ```
 Register 2
     │
     ├─ Bits 0, 1, 2, 6 set?
     |   Likely a HW issue with ECC/Parity.
-    │   └─ Seen >2x on same link?
+    │   └─ Seen >2x on same link and GPU?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "likely a HW issue with ECC/Parity, repeating on same NVLink"
     |        isFatal = true
     │
     ├─ Bit 13 set?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "unexpected error"
     |        isFatal = true
     │
     ├─ Bits 16, 19 set?
-    │   └─ Seen repeatedly?
+    │   └─ Seen repeated XID 74 with same bit (16, 19) set (2x or more on same GPU)?
     |        recommendedAction = CONTACT_SUPPORT
     |        message = "request for field diagnosis"
     |        isFatal = true
     │
     └─ Bits 17, 18 set?
-         └─ Seen repeatedly?
+         └─ Seen repeated XID 74 with same bit (17, 18) set (2x or more on same GPU)?
               recommendedAction = CONTACT_SUPPORT
               message = ""
               isFatal = true
 ```
 
-#### **Register 3 (Fourth Register) Decision Tree:**
+#### Register 3 (Fourth Register) Decision Tree:
 
 ```
 Register 3
@@ -185,16 +185,16 @@ Register 3
               isFatal = true
 ```
 
-#### **Register 4 (Fifth Register) Decision Tree:**
+#### Register 4 (Fifth Register) Decision Tree:
 
 ```
 Register 4
     │
     ├─ Bits 18, 19, 21, 22, 24, 25, 27, 28 set?
     |   Likely a HW issue with ECC/Parity.
-    │   └─ Seen >2x on same link?
+    │   └─ Seen >2x on same link and GPU?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "likely a HW issue with ECC/Parity, repeating on same NVLink"
     |        isFatal = true
     │
     └─ Bits 20, 23, 26, 29 set?
@@ -210,7 +210,7 @@ Register 4
 
 ### Architecture Detection Support
 
-#### **1. Add XID 74 NVLink Error Pattern** 
+#### 1. Add XID 74 NVLink Error Pattern 
 Extract NVLink ID and 7 register values
 
 **File:** `health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
@@ -235,7 +235,7 @@ var (
 )
 ```
 
-#### **2. Add XID 74 Metadata Extraction in parseStandardXID**
+#### 2. Add XID 74 Metadata Extraction in parseStandardXID
 
 **File:** `health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
 
@@ -264,7 +264,7 @@ func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
 }
 ```
 
-#### **3. Add Parsing Helper Functions**
+#### 3. Add Parsing Helper Functions
 
 1. **fetchXID74NVLinkData:** To fetch the NVLink ID and all registers data.
 
@@ -307,7 +307,7 @@ func convertHexToBinary32(hexStr string) string {
 ```
 **NOTE** Similar changes will be required in XID-analyzer script to parse NVLink ID and registers data. 
 
-#### **4. Health Event Structure**
+#### 4. Health Event Structure
 
 The XID parser returns metadata that gets stored in the health event's `EntitiesImpacted` field:
 
