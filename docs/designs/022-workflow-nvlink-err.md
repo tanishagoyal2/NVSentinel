@@ -2,14 +2,14 @@
 
 ## Overview
 
-WORKFLOW_NVLINK_ERR is a resolution workflow for XID 74 [(NVLink_ERROR)](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html) on **Hopper-based GPU architectures**. This workflow provides detailed bit-level analysis of NVLink error registers to determine the root cause and appropriate remediation action.
+WORKFLOW_NVLINK_ERR is a resolution workflow for XID 74 error [(NVLink_ERROR)](https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html). This workflow provides detailed bit-level analysis of NVLink error registers to determine the root cause and appropriate remediation action.
 
 The explanation of WORKFLOW_NVLINK_ERR in RAS Catalog doc is defined like this:
 
 ```text
  Extract the hex strings from the Xid error message. 
  Note that there should be seven fields in the Xid. Unused fields would expect to be 0x0 rather than a full DWORD of 0’s. 
- The first, third, fourth and fifth registers are valid for Hopper-based products. 
+ The first, third, fourth and fifth registers are valid for bits analysis. 
  Evaluate the populate(d) registers. If bits other than those specifically outlined below are seen, please report a bug. 
  First register:
  Bit 0, 23, 30: Can be safely ignored.
@@ -45,85 +45,50 @@ XID 74 is logged when the GPU detects a problem with a connection from the GPU t
 ```
 [449410.332316] NVRM: Xid (PCI:0003:00:00): 74, pid='<unknown>', name=<unknown>, NVLink: fatal error detected on link 14(0x0, 0x0, 0x10000, 0x0, 0x0, 0x0, 0x0)
 ```
-
 The error message contains **7 hex register values** in parentheses:
-
-**Note:** For Hopper-based products, only registers 0, 2, 3, and 4 (first, third, fourth, and fifth) contain valid diagnostic information. 
-
-## Applicability
-
-This workflow applies only to Hopper-based GPU architectures.
-
-**Hopper GPUs:**
-- H100 (all variants)
-- H200 (all variants)
-- GH100 series
-- GH200 Grace-Hopper series
-
-**Architecture Detection:**
-
-We use a device name substring matching approach:
-
-1. **Source**: GPU metadata collector provides `device_name` field (e.g., "NVIDIA H100 80GB HBM3")
-2. **Storage**: Syslog health monitor stores `device_name` in health event metadata
-3. **Detection**: Health-events-analyzer checks if device name contains: "H100", "H200", "GH100", or "GH200"
-4. **Decision**: 
-   - If Hopper → Apply WORKFLOW_NVLINK_ERR (bit-level register analysis)
-   - If non-Hopper → Skip `NVLink error` rule evaluation for the received event
 
 ## Decision Flow Diagram
 
 The following diagram shows how health-events-analyzer processes XID 74 events to find best remediation action by analyzing the bits and registers.
 
 ```
-┌─────────────────────────────────┐
-│   XID 74 Event Received         │
-└────────────┬────────────────────┘
-             │
-             ▼
-        ┌─────────┐
-        │ Is GPU  │
-        │ Hopper? │
-        └────┬────┘
-             │
-      ┌──────┴──────┐
-      │             │
-     No            Yes
-      │             │
-      ▼             ▼
-┌──────────┐  ┌──────────────────┐
-│ Contact  │  │ Analyze Register │
-│ Support  │  │ Bit Patterns     │
-└──────────┘  └────────┬─────────┘
-                       │
-           ┌───────────┼───────────┐
-           │           │           │
-           ▼           ▼           ▼
-      ┌─────────┐ ┌─────────┐ ┌─────────┐
-      │Register │ │Register │ │Register │
-      │   0     │ │   2     │ │  3 & 4  │
-      │Analysis │ │Analysis │ │Analysis │
-      └────┬────┘ └────┬────┘ └────┬────┘
-           │           │           │
-           └───────────┼───────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │ For "repeated" │
-              │ conditions:    │
-              │check repetition│
-              │   on same      |
-              |  GPU+NVLink    │
-              └────────┬───────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │ Apply Action   │
-              │ (CONTACT_      │
-              │  SUPPORT,      │
-              │  COMPONENT_    │
-              │  RESET, NONE)  │
-              └────────────────┘
+   ┌─────────────────────────────────┐
+   │     XID 74 Event Received       │
+   └────────────┬────────────────────┘
+                │
+       ┌──────────────────┐
+       │ Analyze Register │
+       │ Bit Patterns     │
+       └────────┬─────────┘
+                │
+    ┌───────────┼───────────┐
+    │           │           │
+    ▼           ▼           ▼
+┌─────────┐ ┌─────────┐ ┌─────────┐
+│Register │ │Register │ │Register │
+│   0     │ │   2     │ │  3 & 4  │
+│Analysis │ │Analysis │ │Analysis │
+└────┬────┘ └────┬────┘ └────┬────┘
+     │           │           │
+     └───────────┼───────────┘
+                 │
+                 ▼
+        ┌────────────────┐
+        │ For "repeated" │
+        │ conditions:    │
+        │check repetition│
+        │   on same      |
+        |  GPU+NVLink    │
+        └────────┬───────┘
+                 │
+                 ▼
+        ┌────────────────┐
+        │ Apply Action   │
+        │ (CONTACT_      │
+        │  SUPPORT,      │
+        │  COMPONENT_    │
+        │  RESET, NONE)  │
+        └────────────────┘
 ```
 
 ### Detailed Register Analysis Flow
@@ -133,20 +98,39 @@ The following diagram shows how health-events-analyzer processes XID 74 events t
 ```
 Register 0
     │
-    ├─ Bits 1, 20 set?
-    │   └─ Solo (only XID 74 with no other bits set)? → CONTACT_SUPPORT
+    ├─ Bits 1, 20 set? 
+    |   These are sympathetic errors (or secondary errors) that occur as a consequence or side effect of other primary errors, rather than being the root cause
+    |   themselves. If accompanied by other errors, follow their resolution first.
+    │   └─ Solo (only XID 74 occurred and no other bits are set)?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
     │
     ├─ Bits 4 or 5 set?
-    │   └─ Seen >2x on same link? → CONTACT_SUPPORT (ECC/Parity HW issue)
+    |   Likely a HW issue with ECC/Parity.
+    │   └─ Seen >2x on same link?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
     │   
-    ├─ Bits 8,9,12,16,17,24,28 set?
-    │   → CONTACT_SUPPORT (request to check link mechanical connections and run field diagnosis if issue persists)
+    ├─ Bits 8, 9, 12, 16, 17, 24, 28 set?
+    |   Could possibly be a HW issue.
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = "request to check link mechanical connections and run field diagnosis if issue persists"
+    |        isFatal = true
     │
     ├─ Bits 21 or 22 set?
-    │   └─ Solo (only XID 74 with no other bits set)? → CONTACT_SUPPORT (request to check link mechanical connections and run field diagnosis if issue persists)
+    |   Marginal channel SI issue. If accompanied by other errors, follow their resolution first.
+    │   └─ Solo (only XID 74 occurred and no other bits are set)?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = "request to check link mechanical connections and run field diagnosis if issue persists"
+    |        isFatal = true
     │
     └─ Bits 27, 29 set?
-        └─ Seen repeatedly (2x or more) → CONTACT_SUPPORT
+         └─ Seen repeatedly (2x or more)?
+              recommendedAction = CONTACT_SUPPORT
+              message = ""
+              isFatal = true
 
 ```
 
@@ -155,17 +139,29 @@ Register 0
 ```
 Register 2
     │
-    ├─ Bits 0,1,2,6 set?
-    │   ├─ Seen >2x on same link? → CONTACT_SUPPORT (ECC/Parity HW issue)
+    ├─ Bits 0, 1, 2, 6 set?
+    |   Likely a HW issue with ECC/Parity.
+    │   └─ Seen >2x on same link?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
     │
     ├─ Bit 13 set?
-    │   → CONTACT_SUPPORT
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
     │
     ├─ Bits 16, 19 set?
-    │   ├─ Seen repeatedly? → CONTACT_SUPPORT (request for field diagnosis)
+    │   └─ Seen repeatedly?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = "request for field diagnosis"
+    |        isFatal = true
     │
     └─ Bits 17, 18 set?
-        ├─ Seen repeatedly? → CONTACT_SUPPORT
+         └─ Seen repeatedly?
+              recommendedAction = CONTACT_SUPPORT
+              message = ""
+              isFatal = true
 ```
 
 #### **Register 3 (Fourth Register) Decision Tree:**
@@ -173,8 +169,20 @@ Register 2
 ```
 Register 3
     │
-    ├─ Bits 16, 17, 18 set?
-    │   └─ Solo (only XID 74 with no other bits set)? → CONTACT_SUPPORT (secondary error)
+    ├─ Bits 16, 17 set?
+    |   These are sympathetic errors (or secondary errors) that occur as a consequence or side effect of other primary errors, rather than being the root cause
+    |   themselves. If accompanied by other errors, follow their resolution first.
+    │   └─ If seen solo (only XID 74 occurred and no other bits are set)?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
+    │
+    └─ Bit 18 set?
+         These are sympathetic errors (or secondary errors) that occur as a consequence or side effect of other primary errors, rather than being the root cause themselves. If accompanied by other errors, follow their resolution first.
+         └─ If seen solo (only XID 74 occurred and no other bits are set)?
+              recommendedAction = CONTACT_SUPPORT
+              message = "request for reset of fabric"
+              isFatal = true
 ```
 
 #### **Register 4 (Fifth Register) Decision Tree:**
@@ -182,11 +190,19 @@ Register 3
 ```
 Register 4
     │
-    ├─ Bits 18,19,21,22,24,25,27,28 set?
-    │   ├─ Seen >2x on same link? → CONTACT_SUPPORT (ECC/Parity HW issue)
+    ├─ Bits 18, 19, 21, 22, 24, 25, 27, 28 set?
+    |   Likely a HW issue with ECC/Parity.
+    │   └─ Seen >2x on same link?
+    |        recommendedAction = CONTACT_SUPPORT
+    |        message = ""
+    |        isFatal = true
     │
-    └─ Bits 20,23,26,29 set?
-        → NONE (request for field diagnosis if required)
+    └─ Bits 20, 23, 26, 29 set?
+         These errors represent a threshold of ECC errors being exceeded. There was no uncorrectable error at this time. Continue operation.
+         If desired, Field Diags can be run to check for link integrity.
+              recommendedAction = NONE
+              message = "request for field diagnosis if required"
+              isFatal = false
 ```
 ---
 
@@ -194,39 +210,7 @@ Register 4
 
 ### Architecture Detection Support
 
-#### **1. Store Device Name in Metadata**
-
-**File:** `health-monitors/syslog-health-monitor/pkg/xid/xid_handler.go`
-
-Update the `createHealthEventFromResponse` method to include device name in metadata (e.g., "NVIDIA H100 80GB HBM3"):
-
-```go
-func (xidHandler *XIDHandler) createHealthEventFromResponse(
-	xidResp *parser.Response,
-	message string,
-) *pb.HealthEvents {
-	// ... existing code for entities ...
-	
-	metadata := make(map[string]string)
-	if chassisSerial := xidHandler.metadataReader.GetChassisSerial(); chassisSerial != nil {
-		metadata["chassis_serial"] = *chassisSerial
-	}
-	
-	// ADD THIS: Store device name for architecture detection
-	normPCI := xidHandler.normalizePCI(xidResp.Result.PCIE)
-	if gpuInfo, err := xidHandler.metadataReader.GetGPUByPCI(normPCI); err == nil && gpuInfo != nil {
-		if gpuInfo.DeviceName != "" {
-			metadata["device_name"] = gpuInfo.DeviceName
-		}
-	}
-	
-	// ... rest of health event creation ...
-}
-```
-
-**Purpose:** Makes GPU device name available to health-events-analyzer for Hopper architecture detection.
-
-#### **2. Add XID 74 NVLink Error Pattern** 
+#### **1. Add XID 74 NVLink Error Pattern** 
 Extract NVLink ID and 7 register values
 
 **File:** `health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
@@ -251,7 +235,7 @@ var (
 )
 ```
 
-#### **3. Add XID 74 Metadata Extraction in parseStandardXID**
+#### **2. Add XID 74 Metadata Extraction in parseStandardXID**
 
 **File:** `health-monitors/syslog-health-monitor/pkg/xid/parser/csv.go`
 
@@ -280,7 +264,7 @@ func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
 }
 ```
 
-#### **4. Add Parsing Helper Functions**
+#### **3. Add Parsing Helper Functions**
 
 1. **fetchXID74NVLinkData:** To fetch the NVLink ID and all registers data.
 
@@ -323,7 +307,7 @@ func convertHexToBinary32(hexStr string) string {
 ```
 **NOTE** Similar changes will be required in XID-analyzer script to parse NVLink ID and registers data. 
 
-#### **5. Health Event Structure**
+#### **4. Health Event Structure**
 
 The XID parser returns metadata that gets stored in the health event's `EntitiesImpacted` field:
 
@@ -344,10 +328,7 @@ The XID parser returns metadata that gets stored in the health event's `Entities
       {entitytype: "REG4", entityvalue: "00000000000000000000000000000000"},
       {entitytype: "REG5", entityvalue: "00000000000000000000000000000000"},
       {entitytype: "REG6", entityvalue: "00000000000000010000000000000000"},
-    ],
-    metadata: {
-      device_name: "NVIDIA H100 80GB HBM3",  // For architecture detection
-    },
+    ]
     generatedtimestamp: {seconds: 1699900000},
     recommendedAction: "RESTART_APP"
   }
@@ -355,7 +336,6 @@ The XID parser returns metadata that gets stored in the health event's `Entities
 ```
 
 **Key Fields:**
-- `metadata.device_name`: Used by health-events-analyzer to detect Hopper architecture
 - `entitiesimpacted[].NVLINK`: The NVLink ID to find the repetition on same NVLink
 - `entitiesimpacted[].REG0-REG6`: Binary representation of the 7 register values for bit-level analysis
 
@@ -364,9 +344,8 @@ The XID parser returns metadata that gets stored in the health event's `Entities
 
 We need to define new rules for WORKFLOW_NVLINK_ERR, where each rule performs necessary three-step check:
 
-1. **Architecture Check**: Verify GPU is Hopper-based arch by checking the received event metadata field `metadata["device_name"]`. If it contains "H100", "H200", "GH100", or "GH200" substring then it's a Hopper-based arch.
-2. **XID Verification**: As this WORKFLOW_NVLINK_ERR is only recommended for XID 74 so, we need to run these rules only for XID 74. We need to check if `errorcode`in received event is "74" or not. If yes, then evaluate the rules by checking bits and registers.  
-3. **Bit Pattern Analysis**: Check specific bits in registers (REG0, REG2, REG3, REG4) from `entitiesimpacted[]` (as we have made changes in syslog monitor to store this info) and apply repetition checks (query last 24h) to determine repetition on same GPU+NVLink combination.
+1. **XID Verification**: As this WORKFLOW_NVLINK_ERR is only recommended for XID 74 so, we need to run these rules only for XID 74. We need to check if `errorcode`in received event is "74" or not. If yes, then evaluate the rules by checking bits and registers.  
+2. **Bit Pattern Analysis**: Check specific bits in registers (REG0, REG2, REG3, REG4) from `entitiesimpacted[]` (as we have made changes in syslog monitor to store this info) and apply repetition checks (query last 24h) to determine repetition on same GPU+NVLink combination.
 
 Each rule maps to one specific scenario from the decision trees above (e.g., "REG0 bits 4/5 repeated >2x → CONTACT_SUPPORT", "REG4 bits 20/23/26/29 → NONE")
 
