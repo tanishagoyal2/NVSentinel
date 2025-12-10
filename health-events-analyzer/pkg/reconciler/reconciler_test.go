@@ -410,6 +410,33 @@ func TestHandleEvent(t *testing.T) {
 		mockClient.AssertNotCalled(t, "Aggregate")
 		mockPublisher.AssertNotCalled(t, "HealthEventOccurredV1")
 	})
+	t.Run("rule with EvaluateRule false is skipped", func(t *testing.T) {
+		mockClient := new(mockDatabaseClient)
+		mockPublisher := &mockPublisher{}
+
+		disabledRule := config.HealthEventsAnalyzerRule{
+			Name:              "disabled-rule",
+			Description:       "rule evaluation should be skipped",
+			Stage:             []string{`{"$match": {"healthevent.nodename": "this.healthevent.nodename"}}`},
+			RecommendedAction: "CONTACT_SUPPORT",
+			EvaluateRule:      false,
+		}
+
+		reconciler := &Reconciler{
+			config: HealthEventsAnalyzerReconcilerConfig{
+				HealthEventsAnalyzerRules: &config.TomlConfig{Rules: []config.HealthEventsAnalyzerRule{disabledRule}},
+				Publisher:                 publisher.NewPublisher(mockPublisher),
+			},
+			databaseClient: mockClient,
+		}
+
+		published, err := reconciler.handleEvent(ctx, &healthEvent_13)
+		assert.NoError(t, err)
+		assert.False(t, published)
+
+		mockClient.AssertNotCalled(t, "Aggregate")
+		mockPublisher.AssertNotCalled(t, "HealthEventOccurredV1")
+	})
 }
 
 func TestGetPipelineStages(t *testing.T) {
