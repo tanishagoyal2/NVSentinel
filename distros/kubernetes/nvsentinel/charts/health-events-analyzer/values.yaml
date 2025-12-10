@@ -42,6 +42,7 @@ config: |
   name = "MultipleRemediations"
   description = "Detect if multiple remediations are performed within 7 days on a node"
   recommended_action = "CONTACT_SUPPORT"
+  evaluate_rule = {{ if hasKey .Values "enableMultipleRemediationsRule" }}{{ .Values.enableMultipleRemediationsRule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -72,6 +73,7 @@ config: |
   name = "RepeatedXIDErrorOnSameGPU"
   description = "Detect occurrence of fatal XIDs 5 times within 24 hours where the burst window is 3 minutes and sticky XIDs window is 3 hours"
   recommended_action = "CONTACT_SUPPORT"
+  evaluate_rule = {{ if hasKey .Values "enableRepeatedXIDErrorOnSameGPURule" }}{{ .Values.enableRepeatedXIDErrorOnSameGPURule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -314,6 +316,7 @@ config: |
   description = "Detect if XID 31 occurred 2 or more times on the same GPU within 24 hours where the burst window is 3 minutes and sticky XIDs window is 3 hours"
   recommended_action = "RUN_DCGMEUD"
   message = "if DCGM EUD tests pass, run field diagnostics"
+  evaluate_rule = {{ if hasKey .Values "enableRepeatedXID31OnSameGPURule" }}{{ .Values.enableRepeatedXID31OnSameGPURule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -556,6 +559,7 @@ config: |
   description = "Detect if XID 31 occurred 2 or more times on different GPUs within 24 hours"
   message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
+  evaluate_rule = {{ if hasKey .Values "enableRepeatedXID31OnDifferentGPURule" }}{{ .Values.enableRepeatedXID31OnDifferentGPURule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -644,6 +648,7 @@ config: |
   description = "Detect if XID 13 occurred 2 or more times on the same GPC and TPC within 24 hours"
   message = "if DCGM EUD tests pass, run field diagnostics"
   recommended_action = "RUN_DCGMEUD"
+  evaluate_rule = {{ if hasKey .Values "enableRepeatedXID13OnSameGPCAndTPCRule" }}{{ .Values.enableRepeatedXID13OnSameGPCAndTPCRule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -941,6 +946,7 @@ config: |
   description = "Detect if XID 13 occurred 2 or more times on different GPC and TPC combinations within 24 hours"
   message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
+  evaluate_rule = {{ if hasKey .Values "enableRepeatedXID13OnDifferentGPCAndTPCRule" }}{{ .Values.enableRepeatedXID13OnDifferentGPCAndTPCRule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
@@ -1080,6 +1086,7 @@ config: |
   description = "Detect if XID error occurred only once in the last burst within 24 hours time window"
   message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
   recommended_action = "NONE"
+  evaluate_rule = {{ if hasKey .Values "enableXIDErrorSoloNoBurstRule" }}{{ .Values.enableXIDErrorSoloNoBurstRule }}{{ else }}true{{ end }}
   stage = [
     '''
     {
