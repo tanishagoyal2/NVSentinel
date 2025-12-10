@@ -609,7 +609,7 @@ data:
       }
       '''
     ]
-    
+
     [[rules]]
     name = "RepeatedXID13OnSameGPCAndTPC"
     description = "Detect if XID 13 occurred 2 or more times on the same GPC and TPC within 2 minutes (test config)"
@@ -907,7 +907,7 @@ data:
       ''',
       '{"$match": {"count": {"$gte": 2}}}'
     ]
-    
+
     [[rules]]
     name = "RepeatedXID13OnDifferentGPCAndTPC"
     description = "Detect if XID 13 occurred 2 or more times on different GPC and TPC combinations within 2 minutes (test config)"
@@ -1047,7 +1047,7 @@ data:
       }
       '''
     ]
-    
+
     [[rules]]
     name = "XIDErrorSoloNoBurst"
     description = "Detect if XID error occurred only once in the last burst within 1 minutes time window"
@@ -1263,4 +1263,918 @@ data:
         }
       }
       '''
+    ]
+
+    [[rules]]
+    name = "XID74Reg0Bits1Or20Set"
+    description = "Detect if XID 74 occurred with register 0 bits 1 or 20 set within a minute"
+    recommended_action = "CONTACT_SUPPORT"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 60]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$in": [
+              "this.healthevent.errorcode.0",
+              ["74"]
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG0", "00000000000000000000000000000010"]},
+                  {"$eq": ["$registers.REG0", "00000000000100000000000000000000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$lookup": {
+          "from": "HealthEvents",
+          "let": {
+            "currentEventId": "$_id",
+            "currentNodeName": "$healthevent.nodename",
+            "gpuUuid": {
+              "$arrayElemAt": [
+                {
+                  "$map": {
+                    "input": {
+                      "$filter": {
+                        "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                        "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                      }
+                    },
+                    "in": "$$this.entityvalue"
+                  }
+                },
+                0
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$and": [
+                    {"$ne": ["$_id", "$$currentEventId"]},
+                    {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
+                    {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
+                    {
+                      "$gt": [
+                        {
+                          "$size": {
+                            "$filter": {
+                              "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                              "cond": {
+                                "$and": [
+                                  {"$eq": ["$$this.entitytype", "GPU_UUID"]},
+                                  {"$eq": ["$$this.entityvalue", "$$gpuUuid"]}
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        0
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "$sort": {
+                "healthevent.generatedtimestamp.seconds": -1
+              }
+            },
+            {
+              "$group": {
+                "_id": {
+                  "$arrayElemAt": ["$healthevent.errorcode", 0]
+                },
+                "mostRecentEvent": {
+                  "$first": {
+                    "id": "$_id",
+                    "isHealthy": {"$ifNull": ["$healthevent.ishealthy", false]},
+                    "timestamp": "$healthevent.generatedtimestamp.seconds"
+                  }
+                }
+              }
+            },
+            {
+              "$match": {
+                "mostRecentEvent.isHealthy": false
+              }
+            }
+          ],
+          "as": "otherXidEvents"
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [{"$size": "$otherXidEvents"}, 0]
+          }
+        }
+      }
+      '''
+    ]
+
+    [[rules]]
+    name = "RepeatedXID74Reg0Bits4Or5"
+    description = "Detect if XID 74 with bits 4 or 5 set occurred 2 or more times on the same NVLink and GPU within 1.5 minutes"
+    recommended_action = "CONTACT_SUPPORT"
+    message = "likely a HW issue with ECC/Parity"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "this.healthevent.errorcode.0",
+              "74"
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "healthevent.ishealthy": false,
+          "healthevent.nodename": "this.healthevent.nodename",
+          "$expr": {
+            "$gt": [
+              {
+                "$size": {
+                  "$setIntersection": [
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    },
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": "this.healthevent.entitiesimpacted",
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    }
+                  ]
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG0", "00000000000000000000000000010000"]},
+                  {"$eq": ["$registers.REG0", "00000000000000000000000000100000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "nvlinkValue": {
+            "$arrayElemAt": [
+              {
+                "$map": {
+                  "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "NVLINK"]}}},
+                  "in": "$$this.entityvalue"
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "$nvlinkValue",
+              {
+                "$arrayElemAt": [
+                  {
+                    "$map": {
+                      "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "NVLINK"]}}},
+                      "in": "$$this.entityvalue"
+                    }
+                  },
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      }
+      ''',
+      '{"$count": "count"}',
+      '{"$match": {"count": {"$gte": 2}}}'
+    ]
+
+    [[rules]]
+    name = "RepeatedXID74Reg0HardwareIssue"
+    description = "Detect if XID 74 with register 0 bits (8, 9, 12, 16, 17, 24 or 28) set occurred 2 or more times on same GPU within 1.5 minutes"
+    recommended_action = "CONTACT_SUPPORT"
+    message = "could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "this.healthevent.errorcode.0",
+              "74"
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "healthevent.ishealthy": false,
+          "healthevent.nodename": "this.healthevent.nodename",
+          "$expr": {
+            "$gt": [
+              {
+                "$size": {
+                  "$setIntersection": [
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    },
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": "this.healthevent.entitiesimpacted",
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    }
+                  ]
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG0", "00000000000000000000000100000000"]},
+                  {"$eq": ["$registers.REG0", "00000000000000000000001000000000"]},
+                  {"$eq": ["$registers.REG0", "00000000000000000001000000000000"]},
+                  {"$eq": ["$registers.REG0", "00000000000000010000000000000000"]},
+                  {"$eq": ["$registers.REG0", "00000000000000100000000000000000"]},
+                  {"$eq": ["$registers.REG0", "00000001000000000000000000000000"]},
+                  {"$eq": ["$registers.REG0", "00010000000000000000000000000000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '{"$count": "count"}',
+      '{"$match": {"count": {"$gte": 2}}}'
+    ]
+
+    [[rules]]
+    name = "RepeatedXID74Reg0MarginalSIIssue"
+    description = "Detect if XID 74 with register 0 bits (21 or 22) set occurred on same GPU without any presence of any other error within 1.5 minutes"
+    recommended_action = "CONTACT_SUPPORT"
+    message = "marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "this.healthevent.errorcode.0",
+              "74"
+            ]
+          }
+        }
+      }
+      ''',
+     '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG0", "00000000001000000000000000000000"]},
+                  {"$eq": ["$registers.REG0", "00000000010000000000000000000000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$lookup": {
+          "from": "HealthEvents",
+          "let": {
+            "currentEventId": "$_id",
+            "currentNodeName": "$healthevent.nodename",
+            "gpuUuid": {
+              "$arrayElemAt": [
+                {
+                  "$map": {
+                    "input": {
+                      "$filter": {
+                        "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                        "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                      }
+                    },
+                    "in": "$$this.entityvalue"
+                  }
+                },
+                0
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$and": [
+                    {"$ne": ["$_id", "$$currentEventId"]},
+                    {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
+                    {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
+                    {
+                      "$gt": [
+                        {
+                          "$size": {
+                            "$filter": {
+                              "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                              "cond": {
+                                "$and": [
+                                  {"$eq": ["$$this.entitytype", "GPU_UUID"]},
+                                  {"$eq": ["$$this.entityvalue", "$$gpuUuid"]}
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        0
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "$sort": {
+                "healthevent.generatedtimestamp.seconds": -1
+              }
+            },
+            {
+              "$group": {
+                "_id": {
+                  "$arrayElemAt": ["$healthevent.errorcode", 0]
+                },
+                "mostRecentEvent": {
+                  "$first": {
+                    "id": "$_id",
+                    "isHealthy": {"$ifNull": ["$healthevent.ishealthy", false]},
+                    "timestamp": "$healthevent.generatedtimestamp.seconds"
+                  }
+                }
+              }
+            },
+            {
+              "$match": {
+                "mostRecentEvent.isHealthy": false
+              }
+            }
+          ],
+          "as": "otherXidEvents"
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [{"$size": "$otherXidEvents"}, 0]
+          }
+        }
+      }
+      '''
+    ]
+
+    [[rules]]
+    name = "RepeatedXID74Reg0Bits27Or29"
+    description = "Detect if XID 74 with register 0 bits (27 or 29) set occurred 2 or more times on same GPU within 1.5 minutes"
+    recommended_action = "CONTACT_SUPPORT"
+    message = ""
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "this.healthevent.errorcode.0",
+              "74"
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "healthevent.ishealthy": false,
+          "healthevent.nodename": "this.healthevent.nodename",
+          "$expr": {
+            "$gt": [
+              {
+                "$size": {
+                  "$setIntersection": [
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    },
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": "this.healthevent.entitiesimpacted",
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    }
+                  ]
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG0", "00001000000000000000000000000000"]},
+                  {"$eq": ["$registers.REG0", "00100000000000000000000000000000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '{"$count": "count"}',
+      '{"$match": {"count": {"$gte": 2}}}'
+    ]
+
+    [[rules]]
+    name = "RepeatedXID74Reg2HardwareIssue"
+    description = "Detect if XID 74 with register 1 bits (0, 1, 2 or 6) set occurred 2 or more times on same NVLink and same GPU within 1.5 minutes"
+    recommended_action = "CONTACT_SUPPORT"
+    message = "likely a HW issue with ECC/Parity, repeating on same NVLink"
+    stage = [
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$gte": [
+              "$healthevent.generatedtimestamp.seconds",
+              {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "this.healthevent.errorcode.0",
+              "74"
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "healthevent.ishealthy": false,
+          "healthevent.nodename": "this.healthevent.nodename",
+          "$expr": {
+            "$gt": [
+              {
+                "$size": {
+                  "$setIntersection": [
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": {"$ifNull": ["$healthevent.entitiesimpacted", []]},
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    },
+                    {
+                      "$map": {
+                        "input": {
+                          "$filter": {
+                            "input": "this.healthevent.entitiesimpacted",
+                            "cond": {"$eq": ["$$this.entitytype", "GPU_UUID"]}
+                          }
+                        },
+                        "in": "$$this.entityvalue"
+                      }
+                    }
+                  ]
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "registers": {
+            "$arrayToObject": {
+              "$map": {
+                "input": {
+                  "$filter": {
+                    "input": "$healthevent.entitiesimpacted",
+                    "cond": {
+                      "$in": ["$$this.entitytype", ["REG0", "REG1", "REG2", "REG3", "REG4", "REG5", "REG6"]]
+                    }
+                  }
+                },
+                "as": "reg",
+                "in": {
+                  "k": "$$reg.entitytype",
+                  "v": "$$reg.entityvalue"
+                }
+              }
+            }
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$and": [
+              {
+                "$or": [
+                  {"$eq": ["$registers.REG2", "00000000000000000000000000000001"]},
+                  {"$eq": ["$registers.REG2", "00000000000000000000000000000010"]},
+                  {"$eq": ["$registers.REG2", "00000000000000000000000000000100"]},
+                  {"$eq": ["$registers.REG2", "00000000000000000000000001000000"]}
+                ]
+              },
+              {"$eq": ["$registers.REG0", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$addFields": {
+          "nvlinkValue": {
+            "$arrayElemAt": [
+              {
+                "$map": {
+                  "input": {"$filter": {"input": {"$ifNull": ["$healthevent.entitiesimpacted", []]}, "cond": {"$eq": ["$$this.entitytype", "NVLINK"]}}},
+                  "in": "$$this.entityvalue"
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+      ''',
+      '''
+      {
+        "$match": {
+          "$expr": {
+            "$eq": [
+              "$nvlinkValue",
+              {
+                "$arrayElemAt": [
+                  {
+                    "$map": {
+                      "input": {"$filter": {"input": "this.healthevent.entitiesimpacted", "cond": {"$eq": ["$$this.entitytype", "NVLINK"]}}},
+                      "in": "$$this.entityvalue"
+                    }
+                  },
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      }
+      ''',
+      '{"$count": "count"}',
+      '{"$match": {"count": {"$gte": 2}}}'
     ]

@@ -33,6 +33,7 @@ const (
 	ERRORCODE_119                = "119"
 	ERRORCODE_120                = "120"
 	ERRORCODE_79                 = "79"
+	ERRORCODE_74                 = "74"
 	HEALTH_EVENTS_ANALYZER_AGENT = "health-events-analyzer"
 	SYSLOG_HEALTH_MONITOR_AGENT  = "syslog-health-monitor"
 )
@@ -46,7 +47,7 @@ type HealthEventsAnalyzerTestContext struct {
 func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	t *testing.T,
 	c *envconf.Config,
-	configMapPath, testNamespace string, testNodeName string) (
+	configMapPath, testNamespace string) (
 	context.Context, *HealthEventsAnalyzerTestContext) {
 	t.Helper()
 
@@ -159,6 +160,17 @@ func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, node
 		WithMessage("No health failures").
 		WithComponentClass("GPU").
 		WithCheckName("XIDErrorSoloNoBurst")
+
+	event.EntitiesImpacted = []EntityImpacted{}
+	SendHealthEvent(ctx, t, event)
+
+	event = NewHealthEvent(nodeName).
+		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
+		WithHealthy(true).
+		WithFatal(false).
+		WithMessage("No health failures").
+		WithComponentClass("GPU").
+		WithCheckName("XID74Reg0Bits1Or20Set")
 
 	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
