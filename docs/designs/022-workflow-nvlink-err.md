@@ -103,7 +103,7 @@ Register 0
     |   themselves. If accompanied by other errors, follow their resolution first.
     │   └─ Solo (only XID 74 occurred and no other bits are set)?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "unexpected error, please open NVBug"
     |        isFatal = true
     │
     ├─ Bits 4 or 5 set?
@@ -120,7 +120,7 @@ Register 0
     |        isFatal = true
     │
     ├─ Bits 21 or 22 set?
-    |   Marginal channel SI issue. If accompanied by other errors, follow their resolution first.
+    |   Marginal channel SI (signal integrity) issue. If accompanied by other errors, follow their resolution first.
     │   └─ Solo (only XID 74 occurred and no other bits are set)?
     |        recommendedAction = CONTACT_SUPPORT
     |        message = "marginal SI issue, request to check link mechanical connections and run field diagnosis if issue persists"
@@ -129,7 +129,7 @@ Register 0
     └─ Bits 27, 29 set?
          └─ Seen repeated XID 74 with same bit (27, 29) set (2x or more on same GPU)?
               recommendedAction = CONTACT_SUPPORT
-              message = ""
+              message = "unexpected error, please open NVBug"
               isFatal = true
 
 ```
@@ -148,7 +148,7 @@ Register 2
     │
     ├─ Bit 13 set?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = "unexpected error"
+    |        message = "unexpected error, please open NVBug"
     |        isFatal = true
     │
     ├─ Bits 16, 19 set?
@@ -160,12 +160,12 @@ Register 2
     └─ Bits 17, 18 set?
          └─ Seen repeated XID 74 with same bit (17, 18) set (2x or more on same GPU)?
               recommendedAction = CONTACT_SUPPORT
-              message = ""
+              message = "unexpected error, please open NVBug"
               isFatal = true
 ```
 
 #### Register 3 (Fourth Register) Decision Tree:
-
+,
 ```
 Register 3
     │
@@ -174,14 +174,14 @@ Register 3
     |   themselves. If accompanied by other errors, follow their resolution first.
     │   └─ If seen solo (only XID 74 occurred and no other bits are set)?
     |        recommendedAction = CONTACT_SUPPORT
-    |        message = ""
+    |        message = "unexpected error, please open NVBug"
     |        isFatal = true
     │
     └─ Bit 18 set?
          These are sympathetic errors (or secondary errors) that occur as a consequence or side effect of other primary errors, rather than being the root cause themselves. If accompanied by other errors, follow their resolution first.
          └─ If seen solo (only XID 74 occurred and no other bits are set)?
-              recommendedAction = CONTACT_SUPPORT
-              message = "request for reset of fabric"
+              recommendedAction = COMPONENT_RESET
+              message = "reset of fabric is required"
               isFatal = true
 ```
 
@@ -201,7 +201,7 @@ Register 4
          These errors represent a threshold of ECC errors being exceeded. There was no uncorrectable error at this time. Continue operation.
          If desired, Field Diags can be run to check for link integrity.
               recommendedAction = NONE
-              message = "request for field diagnosis if required"
+              message = "request for field diagnosis if user jobs are interrupted or error occurs repeatedly"
               isFatal = false
 ```
 ---
