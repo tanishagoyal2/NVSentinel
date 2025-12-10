@@ -168,6 +168,7 @@ var (
 				`{"$match": {"count": {"$gte": 5}}}`,
 			},
 			RecommendedAction: "CONTACT_SUPPORT",
+			EvaluateRule:      true,
 		},
 		{
 			Name:        "rule2",
@@ -180,6 +181,7 @@ var (
 			},
 			RecommendedAction: "CONTACT_SUPPORT",
 			Message:           "XID error occurred",
+			EvaluateRule:      true,
 		},
 		{
 			Name:        "rule3",
@@ -191,6 +193,7 @@ var (
 				`{"$match": {"count": {"$gte": 1}}}`,
 			},
 			RecommendedAction: "CONTACT_SUPPORT",
+			EvaluateRule:      true,
 		},
 	}
 	healthEvent_13 = datamodels.HealthEventWithStatus{
