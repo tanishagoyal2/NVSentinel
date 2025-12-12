@@ -916,31 +916,31 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000100000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<20),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -985,7 +985,6 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, xidEvent)
 		}
 
-		// case 3: xid 74 has occurred and bits 1 or 20 are set (xid 13 is present and all others bits are 0) (rule will not be triggered)
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0SoloNVLinkError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
@@ -1012,11 +1011,12 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 		}
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0SoloNVLinkError",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"REG0:00000000000100000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (1 or 20) is set in register 0, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (1 or 20) is set in register 0, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+				1<<20, 0, 0, 0, 0, 0, 0),
 			"XID74Reg0SoloNVLinkErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1045,10 +1045,6 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 	feature := features.New("TestXID74Reg0ECCParityError").
 		WithLabel("suite", "health-event-analyzer")
 
-	// Cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different NVLink and same GPU --> even though occurrence is 2 but it has occurred on diff nvlink --> rule should not be triggered
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
@@ -1083,31 +1079,31 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000010000",
+				EntityValue: fmt.Sprintf("%032b", 1<<4),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -1127,31 +1123,31 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000010000",
+				EntityValue: fmt.Sprintf("%032b", 1<<4),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -1207,11 +1203,12 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same NVLink and GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0ECCParityError",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000010000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (4 or 5) is set in register 0 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (4 or 5) is set in register 0 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+				1<<4, 0, 0, 0, 0, 0, 0),
 			"XID74Reg0ECCParityErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1242,9 +1239,6 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 	feature := features.New("TestRepeatedXID74Reg0HardwareIssueRule").
 		WithLabel("suite", "health-event-analyzer")
 
-	// Cases to cover
-	// 1. error has occurred only 1 time on the same GPU --> no rule should be triggered
-	// 2. error has occurred more than 1 time on the same GPU --> rule should be triggered
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
@@ -1279,31 +1273,31 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000001000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<12),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -1341,11 +1335,12 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg0HardwareIssue",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000001000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (8, 9, 12, 16, 17, 24 or 28) is set in register 0 and its repeating on same GPU, could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (8, 9, 12, 16, 17, 24 or 28) is set in register 0 and its repeating on same GPU, could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+				1<<12, 0, 0, 0, 0, 0, 0),
 			"RepeatedXID74Reg0HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1374,9 +1369,6 @@ func TestXID74Reg0SignalIntegrityErrorRule(t *testing.T) {
 	feature := features.New("TestXID74Reg0SignalIntegrityErrorRule").
 		WithLabel("suite", "health-event-analyzer")
 
-	// Cases to cover
-	// 1. error has occurred only 1 time on the same GPU --> no rule should be triggered
-	// 2. error has occurred more than 1 time on the same GPU --> rule should be triggered
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
@@ -1411,31 +1403,31 @@ func TestXID74Reg0SignalIntegrityErrorRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000001000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<21),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -1509,11 +1501,12 @@ func TestXID74Reg0SignalIntegrityErrorRule(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred without any other active error on the same GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0SignalIntegrityError",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000001000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (21 or 22) is set in register 0, could be a marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (21 or 22) is set in register 0, could be a marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+				1<<21, 0, 0, 0, 0, 0, 0),
 			"XID74Reg0SignalIntegrityErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1543,10 +1536,6 @@ func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
 	feature := features.New("TestXID74Reg0RepeatedLinkErrorule").
 		WithLabel("suite", "health-event-analyzer")
 
-	// Cases to cover
-	// 1. error has occurred only 1 time on the same GPU --> no rule should be triggered
-	// 2. error has occurred on different GPU --> rule should not be triggered
-	// 3. error has occurred more than 1 time on the same GPU --> rule should be triggered
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
@@ -1581,31 +1570,31 @@ func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00001000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<27),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -1623,31 +1612,31 @@ func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00001000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<27),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
@@ -1700,11 +1689,12 @@ func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0RepeatedLinkError",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00001000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (27 or 29) is set in register 0 and its repeating on same GPU, unexpected error please open NVBug Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (27 or 29) is set in register 0 and its repeating on same GPU, unexpected error please open NVBug Recommended Action=CONTACT_SUPPORT;",
+				1<<27, 0, 0, 0, 0, 0, 0),
 			"XID74Reg0RepeatedLinkErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1734,10 +1724,6 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 	feature := features.New("TestRepeatedXID74Reg2HardwareIssue").
 		WithLabel("suite", "health-event-analyzer")
 
-	// Cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different NVLink --> rule should not be triggered
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
@@ -1772,31 +1758,31 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000100",
+				EntityValue: fmt.Sprintf("%032b", 1<<2),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -1815,31 +1801,31 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000100",
+				EntityValue: fmt.Sprintf("%032b", 1<<2),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -1893,11 +1879,12 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same NVLink and GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg2HardwareIssue",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000100 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (0, 1, 2 or 6) is set in register 1 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (0, 1, 2 or 6) is set in register 2 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 1<<2, 0, 0, 0, 0),
 			"RepeatedXID74Reg2HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1958,31 +1945,31 @@ func TestXID74Reg2Bit13SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000010000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<13),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities)
@@ -2002,11 +1989,12 @@ func TestXID74Reg2Bit13SetRule(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred with bit 13 set")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg2Bit13Set",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000010000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 bit 13 is set in register 2, its an unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b bit 13 is set in register 2, its an unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 1<<13, 0, 0, 0, 0),
 			"XID74Reg2Bit13SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2040,10 +2028,6 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different GPU --> rule should not be triggered as GPU is different
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2074,31 +2058,31 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000010000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<16),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -2116,31 +2100,31 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000010000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<16),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
@@ -2190,11 +2174,12 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 		}
 		t.Log("Rule should be triggered as error has occurred with bit 16 or 19 set")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg2Bit16Or19Set",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000010000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (16 or 19) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (16 or 19) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 1<<16, 0, 0, 0, 0),
 			"RepeatedXID74Reg2Bit16Or19SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2228,10 +2213,6 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different GPU --> rule should not be triggered as GPU is different
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2262,31 +2243,31 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000001000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<18),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -2304,31 +2285,31 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000001000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<18),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
@@ -2378,11 +2359,12 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 		}
 		t.Log("Rule should be triggered as error has occurred with bit 16 or 19 set")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg2Bit17Or18Set",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000001000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (17 or 18) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (17 or 18) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 1<<18, 0, 0, 0, 0),
 			"RepeatedXID74Reg2Bit17Or18SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2416,11 +2398,6 @@ func TestXID74Reg3UnexpectedErrorRule(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. XID 31 has occurred on the same GPU
-	// 2. XID 74 has occurred on the same GPU with bits 16 or 17 set --> no rule should be triggered as there is active error present on same GPU
-	// 3. remove XID 31 by sending health event with healthy flag set to true
-	// 4. XID 74 has occurred on the same GPU with bits 16 or 17 set --> rule should be triggered as there is no active error present on same GPU
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg3UnexpectedErrorRule rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2451,31 +2428,31 @@ func TestXID74Reg3UnexpectedErrorRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000100000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<17),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 
@@ -2548,11 +2525,12 @@ func TestXID74Reg3UnexpectedErrorRule(t *testing.T) {
 		}
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg3UnexpectedError",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000100000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (16 or 17) is set in register 3, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (16 or 17) is set in register 3, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 0, 1<<17, 0, 0, 0),
 			"XID74Reg3UnexpectedErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2586,11 +2564,6 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. XID 31 has occurred on the same GPU
-	// 2. XID 74 has occurred on the same GPU with bits 18 or 19 set --> no rule should be triggered as there is active error present on same GPU
-	// 3. remove XID 31 by sending health event with healthy flag set to true
-	// 4. XID 74 has occurred on the same GPU with bits 18 set --> rule should be triggered as there is no active error present on same GPU
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg3Bit18SetRule rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2620,31 +2593,31 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000001000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<18),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -2715,11 +2688,12 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 		}
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg3Bit18Set",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000001000000000000000000 "+
-				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 bit 18 is set in register 3, reset of fabric is required Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b bit 18 is set in register 3, reset of fabric is required Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 0, 1<<18, 0, 0, 0),
 			"XID74Reg3Bit18SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2753,10 +2727,6 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different NVLink --> rule should not be triggered
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg4HardwareIssueRule rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2786,31 +2756,31 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000001000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<24),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -2828,31 +2798,31 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000001000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<24),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
@@ -2906,11 +2876,12 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same NVLink and GPU")
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg4HardwareIssue",
-			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
-				"REG4:00000001000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 one of the bits (18, 19, 21, 22, 24, 25, 27, 28) is set in register 4 and its repeating on same NVLink, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 REG0:%032b REG1:%032b "+
+				"REG2:%032b REG3:%032b "+
+				"REG4:%032b REG5:%032b "+
+				"REG6:%032b one of the bits (18, 19, 21, 22, 24, 25, 27, 28) is set in register 4 and its repeating on same NVLink, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+				0, 0, 0, 0, 1<<24, 0, 0),
 			"XID74Reg4HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2944,10 +2915,6 @@ func TestXID74Reg4ECCError(t *testing.T) {
 	var testNodeName string
 	var entitiesImpacted [][]helpers.EntityImpacted
 
-	// cases to cover
-	// 1. error has occurred only 1 time on the same NVLink and GPU --> no rule should be triggered
-	// 2. error has occurred on different NVLink --> rule should not be triggered
-	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Logf("Waiting 100 seconds for the XID74Reg4ECCError rule time window to complete")
 		time.Sleep(100 * time.Second)
@@ -2977,31 +2944,31 @@ func TestXID74Reg4ECCError(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000100000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<26),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entities2 := []helpers.EntityImpacted{
@@ -3019,31 +2986,31 @@ func TestXID74Reg4ECCError(t *testing.T) {
 			},
 			{
 				EntityType:  "REG0",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG1",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG2",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000100000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 1<<26),
 			},
 			{
 				EntityType:  "REG5",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 			{
 				EntityType:  "REG6",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: fmt.Sprintf("%032b", 0),
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
@@ -3096,11 +3063,12 @@ func TestXID74Reg4ECCError(t *testing.T) {
 		}
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same NVLink and GPU")
-		expectedMessage := "ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 " +
-			"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 " +
-			"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 " +
-			"REG4:00000100000000000000000000000000 REG5:00000000000000000000000000000000 " +
-			"REG6:00000000000000000000000000000000 one of the bits (20, 23, 26, 29) is set in register 4, request for field diagnosis if user jobs are interrupted or error occurs repeatedly Recommended Action=NONE;"
+		expectedMessage := fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+			"NVLINK:14 REG0:%032b REG1:%032b "+
+			"REG2:%032b REG3:%032b "+
+			"REG4:%032b REG5:%032b "+
+			"REG6:%032b one of the bits (20, 23, 26, 29) is set in register 4, request for field diagnosis if user jobs are interrupted or error occurs repeatedly Recommended Action=NONE;",
+			0, 0, 0, 0, 1<<26, 0, 0)
 
 		expectedEvent := v1.Event{
 			Type:    "XID74Reg4ECCError",

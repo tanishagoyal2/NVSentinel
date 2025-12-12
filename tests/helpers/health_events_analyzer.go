@@ -163,7 +163,6 @@ func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, node
 
 	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
-
 }
 
 func applyHealthEventsAnalyzerConfigAndRestart(
