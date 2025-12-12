@@ -1266,9 +1266,11 @@ data:
     ]
 
     [[rules]]
-    name = "XID74Reg0Bits1Or20Set"
+    name = "XID74Reg0SoloNVLinkError"
     description = "Detect if XID 74 occurred with register 0 bits 1 or 20 set within a minute"
     recommended_action = "CONTACT_SUPPORT"
+    message = "one of the bits (1 or 20) is set in register 0, unexpected error please open an NVBug"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -1436,10 +1438,11 @@ data:
     ]
 
     [[rules]]
-    name = "RepeatedXID74Reg0Bits4Or5"
+    name = "XID74Reg0ECCParityError"
     description = "Detect if XID 74 with bits 4 or 5 set occurred 2 or more times on the same NVLink and GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "likely a HW issue with ECC/Parity"
+    message = "one of the bits (4 or 5) is set in register 0 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -1600,7 +1603,8 @@ data:
     name = "RepeatedXID74Reg0HardwareIssue"
     description = "Detect if XID 74 with register 0 bits (8, 9, 12, 16, 17, 24 or 28) set occurred 2 or more times on same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    message = "one of the bits (8, 9, 12, 16, 17, 24 or 28) is set in register 0 and its repeating on same GPU, could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -1724,10 +1728,11 @@ data:
     ]
 
     [[rules]]
-    name = "RepeatedXID74Reg0MarginalSIIssue"
+    name = "XID74Reg0SignalIntegrityError"
     description = "Detect if XID 74 with register 0 bits (21 or 22) set occurred without any presence of any other error within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    message = "one of the bits (21 or 22) is set in register 0, could be a marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -1895,10 +1900,11 @@ data:
     ]
 
     [[rules]]
-    name = "RepeatedXID74Reg0Bits27Or29"
+    name = "XID74Reg0RepeatedLinkError"
     description = "Detect if XID 74 with register 0 bits (27 or 29) set occurred 2 or more times on same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = ""
+    message = "one of the bits (27 or 29) is set in register 0 and its repeating on same GPU, unexpected error please open NVBug"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2020,7 +2026,8 @@ data:
     name = "RepeatedXID74Reg2HardwareIssue"
     description = "Detect if XID 74 with register 1 bits (0, 1, 2 or 6) set occurred 2 or more times on same NVLink and same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "likely a HW issue with ECC/Parity, repeating on same NVLink"
+    message = "one of the bits (0, 1, 2 or 6) is set in register 1 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2183,7 +2190,8 @@ data:
     name = "XID74Reg2Bit13Set"
     description = "Detect if XID 74 with register 2 and bit 13 set occurred"
     recommended_action = "CONTACT_SUPPORT"
-    message = "unexpected error, please open NVBug"
+    message = "bit 13 is set in register 2, its an unexpected error please open an NVBug"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2245,7 +2253,8 @@ data:
     name = "RepeatedXID74Reg2Bit16Or19Set"
     description = "Detect if XID 74 with register 2 and bits (16 or 19) set occurred 2 or more times on same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "request for field diagnosis"
+    message = "one of the bits (16 or 19) is set in register 2 and its repeating on same GPU, request for field diagnosis"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2367,7 +2376,8 @@ data:
     name = "RepeatedXID74Reg2Bit17Or18Set"
     description = "Detect if XID 74 with register 2 and bits (27 or 29) set occurred 2 or more times on same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "request for field diagnosis"
+    message = "one of the bits (17 or 18) is set in register 2 and its repeating on same GPU, request for field diagnosis"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2486,10 +2496,11 @@ data:
     ]
 
     [[rules]]
-    name = "XID74Reg3Bit16Or17Set"
+    name = "XID74Reg3UnexpectedError"
     description = "Detect if XID 74 with register 3 and bits (16 or 17) set occurred without any presence of any other error within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "unexpected error, please open NVBug"
+    message = "one of the bits (16 or 17) is set in register 3, unexpected error please open an NVBug"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2660,7 +2671,8 @@ data:
     name = "XID74Reg3Bit18Set"
     description = "Detect if XID 74 with register 3 and bits (16 or 17) set occurred without any presence of any other error within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "reset of fabric is required"
+    message = "bit 18 is set in register 3, reset of fabric is required"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2830,7 +2842,8 @@ data:
     name = "XID74Reg4HardwareIssue"
     description = "Detect if XID 74 with register 4 bits (18, 19, 21, 22, 24, 25, 27, 28) set occurred more than 2 times on same NVLink and GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
-    message = "likely a HW issue with ECC/Parity, repeating on same NVLink"
+    message = "one of the bits (18, 19, 21, 22, 24, 25, 27, 28) is set in register 4 and its repeating on same NVLink, likely a HW issue with ECC/Parity"
+    evaluate_rule = true
     stage = [
       '''
       {
@@ -2995,9 +3008,10 @@ data:
 
     [[rules]]
     name = "XID74Reg4ECCError"
-    description = "Detect if XID 74 with register 5 bits (18, 19, 21, 22, 24, 25, 27, 28) set occurred more than 2 times on same NVLink and GPU within 1.5 minutes"
+    description = "Detect if XID 74 with register 5 bits (20, 23, 26, 29) set occurred more than 2 times on same NVLink and GPU within 1.5 minutes"
     recommended_action = "NONE"
-    message = "request for field diagnosis if user jobs are interrupted or error occurs repeatedly"
+    message = "one of the bits (20, 23, 26, 29) is set in register 4, request for field diagnosis if user jobs are interrupted or error occurs repeatedly"
+    evaluate_rule = true
     stage = [
       '''
       {
