@@ -147,12 +147,14 @@ func (xidHandler *XIDHandler) createHealthEventFromResponse(
 
 	if xidResp.Result.Metadata != nil {
 		var metadata []*pb.Entity
+
 		switch xidResp.Result.DecodedXIDStr {
 		case "13":
 			metadata = getXID13Metadata(xidResp.Result.Metadata)
 		case "74":
 			metadata = getXID74Metadata(xidResp.Result.Metadata)
 		}
+
 		entities = append(entities, metadata...)
 	}
 
@@ -209,6 +211,7 @@ func getXID13Metadata(metadata map[string]string) []*pb.Entity {
 			EntityType: "SM", EntityValue: sm,
 		})
 	}
+
 	return entities
 }
 
