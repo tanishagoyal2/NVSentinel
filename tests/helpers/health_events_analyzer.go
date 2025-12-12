@@ -164,16 +164,6 @@ func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, node
 	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
 
-	event = NewHealthEvent(nodeName).
-		WithAgent(HEALTH_EVENTS_ANALYZER_AGENT).
-		WithHealthy(true).
-		WithFatal(false).
-		WithMessage("No health failures").
-		WithComponentClass("GPU").
-		WithCheckName("XID74Reg0Bits1Or20Set")
-
-	event.EntitiesImpacted = []EntityImpacted{}
-	SendHealthEvent(ctx, t, event)
 }
 
 func applyHealthEventsAnalyzerConfigAndRestart(

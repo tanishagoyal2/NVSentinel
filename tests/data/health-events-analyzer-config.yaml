@@ -1843,7 +1843,7 @@ data:
                     {
                       "$gte": [
                         "$healthevent.generatedtimestamp.seconds",
-                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
                       ]
                     },
                     {"$ne": ["$_id", "$$currentEventId"]},
@@ -2617,7 +2617,7 @@ data:
                     {
                       "$gte": [
                         "$healthevent.generatedtimestamp.seconds",
-                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
                       ]
                     },
                     {"$ne": ["$_id", "$$currentEventId"]},
@@ -2746,14 +2746,10 @@ data:
         "$match": {
           "$expr": {
             "$and": [
-              {
-                "$or": [
-                  {"$eq": ["$registers.REG3", "00000000000001000000000000000000"]},
-                ]
-              },
               {"$eq": ["$registers.REG0", "00000000000000000000000000000000"]},
               {"$eq": ["$registers.REG1", "00000000000000000000000000000000"]},
               {"$eq": ["$registers.REG2", "00000000000000000000000000000000"]},
+              {"$eq": ["$registers.REG3", "00000000000001000000000000000000"]},
               {"$eq": ["$registers.REG4", "00000000000000000000000000000000"]},
               {"$eq": ["$registers.REG5", "00000000000000000000000000000000"]},
               {"$eq": ["$registers.REG6", "00000000000000000000000000000000"]}
@@ -2794,7 +2790,7 @@ data:
                     {
                       "$gte": [
                         "$healthevent.generatedtimestamp.seconds",
-                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 90]}
                       ]
                     },
                     {"$ne": ["$_id", "$$currentEventId"]},
