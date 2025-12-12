@@ -146,11 +146,14 @@ func (xidHandler *XIDHandler) createHealthEventFromResponse(
 	}
 
 	if xidResp.Result.Metadata != nil {
-		for k, v := range xidResp.Result.Metadata {
-			entities = append(entities, &pb.Entity{
-				EntityType: k, EntityValue: v,
-			})
+		var metadata []*pb.Entity
+		switch xidResp.Result.DecodedXIDStr {
+		case "13":
+			metadata = getXID13Metadata(xidResp.Result.Metadata)
+		case "74":
+			metadata = getXID74Metadata(xidResp.Result.Metadata)
 		}
+		entities = append(entities, metadata...)
 	}
 
 	metadata := make(map[string]string)
@@ -184,4 +187,81 @@ func (xidHandler *XIDHandler) createHealthEventFromResponse(
 		Version: 1,
 		Events:  []*pb.HealthEvent{event},
 	}
+}
+
+func getXID13Metadata(metadata map[string]string) []*pb.Entity {
+	entities := []*pb.Entity{}
+
+	if gpc, ok := metadata["GPC"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "GPC", EntityValue: gpc,
+		})
+	}
+
+	if tpc, ok := metadata["TPC"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "TPC", EntityValue: tpc,
+		})
+	}
+
+	if sm, ok := metadata["SM"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "SM", EntityValue: sm,
+		})
+	}
+	return entities
+}
+
+func getXID74Metadata(metadata map[string]string) []*pb.Entity {
+	entities := []*pb.Entity{}
+
+	if nvlink, ok := metadata["NVLINK"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "NVLINK", EntityValue: nvlink,
+		})
+	}
+
+	if reg0, ok := metadata["REG0"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG0", EntityValue: reg0,
+		})
+	}
+
+	if reg1, ok := metadata["REG1"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG1", EntityValue: reg1,
+		})
+	}
+
+	if reg2, ok := metadata["REG2"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG2", EntityValue: reg2,
+		})
+	}
+
+	if reg3, ok := metadata["REG3"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG3", EntityValue: reg3,
+		})
+	}
+
+	if reg4, ok := metadata["REG4"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG4", EntityValue: reg4,
+		})
+	}
+
+	if reg5, ok := metadata["REG5"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG5", EntityValue: reg5,
+		})
+	}
+
+	if reg6, ok := metadata["REG6"]; ok {
+		entities = append(entities, &pb.Entity{
+			EntityType: "REG6", EntityValue: reg6,
+		})
+	}
+
+	return entities
 }
