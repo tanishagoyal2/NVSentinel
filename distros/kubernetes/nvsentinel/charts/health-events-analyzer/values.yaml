@@ -1426,6 +1426,12 @@ config: |
               "$match": {
                 "$expr": {
                   "$and": [
+                    {
+                      "$gte": [
+                        "$healthevent.generatedtimestamp.seconds",
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                      ]
+                    },
                     {"$ne": ["$_id", "$$currentEventId"]},
                     {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
                     {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
@@ -1888,6 +1894,12 @@ config: |
               "$match": {
                 "$expr": {
                   "$and": [
+                    {
+                      "$gte": [
+                        "$healthevent.generatedtimestamp.seconds",
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                      ]
+                    },
                     {"$ne": ["$_id", "$$currentEventId"]},
                     {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
                     {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
@@ -2078,9 +2090,9 @@ config: |
 
     [[rules]]
     name = "RepeatedXID74Reg2HardwareIssue"
-    description = "Detect if XID 74 with register 1 bits (0, 1, 2 or 6) set occurred 2 or more times on same NVLink and same GPU within last 24 hours"
+    description = "Detect if XID 74 with register 2 bits (0, 1, 2 or 6) set occurred 2 or more times on same NVLink and same GPU within last 24 hours"
     recommended_action = "CONTACT_SUPPORT"
-    message = "one of the bits (0, 1, 2 or 6) is set in register 1 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity"
+    message = "one of the bits (0, 1, 2 or 6) is set in register 2 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity"
     evaluate_rule = {{.Values.enableRepeatedXID74Reg2HardwareIssueRule}}
     stage = [
       '''
@@ -2303,7 +2315,7 @@ config: |
       ''',
     ]
 
-    [[rules ]]
+    [[rules]]
     name = "RepeatedXID74Reg2Bit16Or19Set"
     description = "Detect if XID 74 with register 2 and bits (16 or 19) set occurred 2 or more times on same GPU within last 24 hours"
     recommended_action = "CONTACT_SUPPORT"
@@ -2428,7 +2440,7 @@ config: |
 
     [[rules]]
     name = "RepeatedXID74Reg2Bit17Or18Set"
-    description = "Detect if XID 74 with register 2 and bits (27 or 29) set occurred 2 or more times on same GPU within last 24 hours"
+    description = "Detect if XID 74 with register 2 and bits (17 or 18) set occurred 2 or more times on same GPU within last 24 hours"
     recommended_action = "CONTACT_SUPPORT"
     message = "one of the bits (17 or 18) is set in register 2 and its repeating on same GPU, request for field diagnosis"
     evaluate_rule = {{.Values.enableRepeatedXID74Reg2Bit17Or18SetRule}}
@@ -2656,6 +2668,12 @@ config: |
               "$match": {
                 "$expr": {
                   "$and": [
+                    {
+                      "$gte": [
+                        "$healthevent.generatedtimestamp.seconds",
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                      ]
+                    },
                     {"$ne": ["$_id", "$$currentEventId"]},
                     {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
                     {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
@@ -2723,7 +2741,7 @@ config: |
 
     [[rules]]
     name = "XID74Reg3Bit18Set"
-    description = "Detect if XID 74 with register 3 and bits (16 or 17) set occurred without any presence of any other error within last 24 hours"
+    description = "Detect if XID 74 with bit 18 set on register 3 is occurred without any presence of any other error within last 24 hours"
     recommended_action = "CONTACT_SUPPORT"
     message = "bit 18 is set in register 3, reset of fabric is required"
     evaluate_rule = {{.Values.enableXID74Reg3Bit18SetRule}}
@@ -2827,6 +2845,12 @@ config: |
               "$match": {
                 "$expr": {
                   "$and": [
+                    {
+                      "$gte": [
+                        "$healthevent.generatedtimestamp.seconds",
+                        {"$subtract": [{"$divide": [{"$toLong": "$$NOW"}, 1000]}, 86400]}
+                      ]
+                    },
                     {"$ne": ["$_id", "$$currentEventId"]},
                     {"$eq": ["$healthevent.nodename", "$$currentNodeName"]},
                     {"$ne": [{"$arrayElemAt": ["$healthevent.errorcode", 0]}, "74"]},
@@ -2894,7 +2918,7 @@ config: |
 
     [[rules]]
     name = "XID74Reg4HardwareIssue"
-    description = "Detect if XID 74 with register 4 bits (18, 19, 21, 22, 24, 25, 27, 28) set occurred more than 2 times on same NVLink and GPU within last 24 hours"
+    description = "Detect if XID 74 with register 4 bits (18, 19, 21, 22, 24, 25, 27, 28) set occurred 2 or more times on same NVLink and GPU within last 24 hours"
     recommended_action = "CONTACT_SUPPORT"
     message = "one of the bits (18, 19, 21, 22, 24, 25, 27, 28) is set in register 4 and its repeating on same NVLink, likely a HW issue with ECC/Parity"
     evaluate_rule = {{.Values.enableXID74Reg4HardwareIssueRule}}
@@ -3062,7 +3086,7 @@ config: |
 
     [[rules]]
     name = "XID74Reg4ECCError"
-    description = "Detect if XID 74 with register 5 bits (20, 23, 26, 29) set occurred more than 2 times on same NVLink and GPU within last 24 hours"
+    description = "Detect if XID 74 with register 4 bits (20, 23, 26, 29) set occurred 2 or more times on same NVLink and GPU within last 24 hours"
     recommended_action = "NONE"
     message = "one of the bits (20, 23, 26, 29) is set in register 4, request for field diagnosis if user jobs are interrupted or error occurs repeatedly"
     evaluate_rule = {{.Values.enableXID74Reg4ECCErrorRule}}

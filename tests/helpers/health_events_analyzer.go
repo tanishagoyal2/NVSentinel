@@ -56,9 +56,6 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 	gpuNodeName := ""
 
-	// if testNodeName != "" {
-	// 	gpuNodeName = testNodeName
-	// } else {
 	gpuNodes, err := GetAllNodesNames(ctx, client)
 	require.NoError(t, err, "failed to get nodes")
 	require.True(t, len(gpuNodes) > 0, "no gpu nodes found")
@@ -67,7 +64,6 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	require.NoError(t, err, "failed to generate random index")
 
 	gpuNodeName = gpuNodes[index.Int64()]
-	//}
 
 	testCtx := &HealthEventsAnalyzerTestContext{
 		TestNamespace: testNamespace,
