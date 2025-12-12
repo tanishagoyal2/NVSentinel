@@ -882,8 +882,8 @@ func TestXID13And31SoloNoBurstRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
-	feature := features.New("TestXID74Reg0Bits1Or20SetRule").
+func TestXID74Reg0SoloNVLinkError(t *testing.T) {
+	feature := features.New("TestXID74Reg0SoloNVLinkError").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -891,9 +891,8 @@ func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: uncomment this when the testing is completed
-		// t.Logf("Waiting 70 seconds for the XIDErrorSoloNoBurst rule time window to complete")
-		// time.Sleep(70 * time.Second)
+		t.Logf("Waiting 70 seconds for the XIDErrorSoloNoBurst rule time window to complete")
+		time.Sleep(70 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -906,7 +905,6 @@ func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		// case 2: only XID 74 but reg 2 has non-zero value (rule will not be triggered)
 		entities1 := []helpers.EntityImpacted{
 			{
 				EntityType:  "PCI",
@@ -988,7 +986,7 @@ func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
 		}
 
 		// case 3: xid 74 has occurred and bits 1 or 20 are set (xid 13 is present and all others bits are 0) (rule will not be triggered)
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0Bits1Or20Set")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0SoloNVLinkError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1013,13 +1011,13 @@ func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, xidEvent)
 		}
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0Bits1Or20Set",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0SoloNVLinkError",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"REG0:00000000000100000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 Recommended Action=CONTACT_SUPPORT;",
-			"XID74Reg0Bits1Or20SetIsNotHealthy", v1.ConditionTrue)
+				"REG6:00000000000000000000000000000000 one of the bits (1 or 20) is set in register 0, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+			"XID74Reg0SoloNVLinkErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -1043,8 +1041,8 @@ func TestXID74Reg0Bits1Or20SetRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
-	feature := features.New("TestRepeatedXID74Reg0Bits4Or5ule").
+func TestXID74Reg0ECCParityError(t *testing.T) {
+	feature := features.New("TestXID74Reg0ECCParityError").
 		WithLabel("suite", "health-event-analyzer")
 
 	// Cases to cover
@@ -1056,9 +1054,8 @@ func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0Bits4Or5 rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg0ECCParityError rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -1067,7 +1064,7 @@ func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if RepeatedXID74Reg0Bits4Or5 node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if XID74Reg0ECCParityError node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -1175,7 +1172,7 @@ func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should not be triggered as error has occurred only 1 time on the same NVLink and GPU")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits4Or5")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0ECCParityError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1192,7 +1189,7 @@ func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should not be triggered as error has occurred on different NVLink")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits4Or5")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0ECCParityError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1209,13 +1206,13 @@ func TestRepeatedXID74Reg0Bits4Or5Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same NVLink and GPU")
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits4Or5",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0ECCParityError",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"NVLINK:14 REG0:00000000000000000000000000010000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
-			"RepeatedXID74Reg0Bits4Or5IsNotHealthy", v1.ConditionTrue)
+				"REG6:00000000000000000000000000000000 one of the bits (4 or 5) is set in register 0 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
+			"XID74Reg0ECCParityErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -1253,9 +1250,8 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0HardwareIssue rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0HardwareIssue rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -1349,7 +1345,7 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000001000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 one of the bits (8, 9, 12, 16, 17, 24 or 28) is set in register 0 and its repeating on same GPU, could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
 			"RepeatedXID74Reg0HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -1374,8 +1370,8 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
-	feature := features.New("TestRepeatedXID74Reg0MarginalSIIssueRule").
+func TestXID74Reg0SignalIntegrityErrorRule(t *testing.T) {
+	feature := features.New("TestXID74Reg0SignalIntegrityErrorRule").
 		WithLabel("suite", "health-event-analyzer")
 
 	// Cases to cover
@@ -1386,9 +1382,8 @@ func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0MarginalSIIssue rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg0SignalIntegrityError rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -1397,7 +1392,7 @@ func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if RepeatedXID74Reg0MarginalSIIssue node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if XID74Reg0SignalIntegrityError node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -1487,7 +1482,7 @@ func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
 		}
 
 		t.Log("Rule should not be triggered as error has occurred with another error XID 31 on the same GPU")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0MarginalSIIssue")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0SignalIntegrityError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1513,13 +1508,13 @@ func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
 		}
 
 		t.Log("Rule should be triggered as error has occurred without any other active error on the same GPU")
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg0MarginalSIIssue",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0SignalIntegrityError",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"NVLINK:14 REG0:00000000001000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
-			"RepeatedXID74Reg0MarginalSIIssueIsNotHealthy", v1.ConditionTrue)
+				"REG6:00000000000000000000000000000000 one of the bits (21 or 22) is set in register 0, could be a marginal SI (signal integrity) issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
+			"XID74Reg0SignalIntegrityErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -1544,8 +1539,8 @@ func TestRepeatedXID74Reg0MarginalSIIssueRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
-	feature := features.New("TestRepeatedXID74Reg0Bits27Or29Rule").
+func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
+	feature := features.New("TestXID74Reg0RepeatedLinkErrorule").
 		WithLabel("suite", "health-event-analyzer")
 
 	// Cases to cover
@@ -1557,9 +1552,8 @@ func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0Bits27Or29 rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg0RepeatedLinkError rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -1568,7 +1562,7 @@ func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if RepeatedXID74Reg0Bits27Or29 node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if XID74Reg0RepeatedLinkError node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -1673,7 +1667,7 @@ func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should not be triggered as error has occurred on different GPU")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits27Or29")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0RepeatedLinkError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1689,7 +1683,7 @@ func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should not be triggered as error has occurred on different GPU")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits27Or29")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg0RepeatedLinkError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -1705,13 +1699,13 @@ func TestRepeatedXID74Reg0Bits27Or29Rule(t *testing.T) {
 		}
 
 		t.Log("Rule should be triggered as error has occurred more than 1 time on the same GPU")
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg0Bits27Or29",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0RepeatedLinkError",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"NVLINK:14 REG0:00001000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 Recommended Action=CONTACT_SUPPORT;",
-			"RepeatedXID74Reg0Bits27Or29IsNotHealthy", v1.ConditionTrue)
+				"REG6:00000000000000000000000000000000 one of the bits (27 or 29) is set in register 0 and its repeating on same GPU, unexpected error please open NVBug Recommended Action=CONTACT_SUPPORT;",
+			"XID74Reg0RepeatedLinkErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -1749,9 +1743,8 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the RepeatedXID74Reg2HardwareIssue rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg2HardwareIssue rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -1904,7 +1897,7 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000100 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 likely a HW issue with ECC/Parity, repeating on same NVLink Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 one of the bits (0, 1, 2 or 6) is set in register 1 and its repeating on same NVLink and GPU, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
 			"RepeatedXID74Reg2HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2013,7 +2006,7 @@ func TestXID74Reg2Bit13SetRule(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000010000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 unexpected error, please open NVBug Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 bit 13 is set in register 2, its an unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
 			"XID74Reg2Bit13SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2052,9 +2045,8 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 	// 2. error has occurred on different GPU --> rule should not be triggered as GPU is different
 	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -2202,7 +2194,7 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000010000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 one of the bits (16 or 19) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
 			"RepeatedXID74Reg2Bit16Or19SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2241,9 +2233,8 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 	// 2. error has occurred on different GPU --> rule should not be triggered as GPU is different
 	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -2391,7 +2382,7 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000001000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 one of the bits (17 or 18) is set in register 2 and its repeating on same GPU, request for field diagnosis Recommended Action=CONTACT_SUPPORT;",
 			"RepeatedXID74Reg2Bit17Or18SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2417,8 +2408,8 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
-	feature := features.New("TestXID74Reg3bIT16Or17SetRule").
+func TestXID74Reg3UnexpectedErrorRule(t *testing.T) {
+	feature := features.New("TestXID74Reg3UnexpectedErrorRule").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -2431,9 +2422,8 @@ func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
 	// 3. remove XID 31 by sending health event with healthy flag set to true
 	// 4. XID 74 has occurred on the same GPU with bits 16 or 17 set --> rule should be triggered as there is no active error present on same GPU
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg3bIT16Or17SetRule rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg3UnexpectedErrorRule rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -2442,7 +2432,7 @@ func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if XID74Reg3Bit16Or17SetRule node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if XID74Reg3UnexpectedErrorRule node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -2473,7 +2463,7 @@ func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000001000000000000000000",
+				EntityValue: "00000000000000100000000000000000",
 			},
 			{
 				EntityType:  "REG4",
@@ -2533,7 +2523,7 @@ func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, xidEvent)
 		}
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg3Bit16Or17Set")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "XID74Reg3UnexpectedError")
 
 		xidEvents = []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
@@ -2557,13 +2547,13 @@ func TestXID74Reg3Bit16Or17SetRule(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, xidEvent)
 		}
 
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg3Bit16Or17Set",
+		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg3UnexpectedError",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000001000000000000000000 "+
+				"REG2:00000000000000000000000000000000 REG3:00000000000000100000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 unexpected error, please open NVBug Recommended Action=CONTACT_SUPPORT;",
-			"XID74Reg3Bit16Or17SetIsNotHealthy", v1.ConditionTrue)
+				"REG6:00000000000000000000000000000000 one of the bits (16 or 17) is set in register 3, unexpected error please open an NVBug Recommended Action=CONTACT_SUPPORT;",
+			"XID74Reg3UnexpectedErrorIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
 	})
@@ -2602,9 +2592,8 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 	// 3. remove XID 31 by sending health event with healthy flag set to true
 	// 4. XID 74 has occurred on the same GPU with bits 18 set --> rule should be triggered as there is no active error present on same GPU
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg3Bit18SetRule rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg3Bit18SetRule rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -2643,11 +2632,11 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 			},
 			{
 				EntityType:  "REG3",
-				EntityValue: "00000000000000000000000000000000",
+				EntityValue: "00000000000001000000000000000000",
 			},
 			{
 				EntityType:  "REG4",
-				EntityValue: "00000001000000000000000000000000",
+				EntityValue: "00000000000000000000000000000000",
 			},
 			{
 				EntityType:  "REG5",
@@ -2675,7 +2664,7 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 			helpers.NewHealthEvent(testNodeName).
 				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
 				WithCheckName("SysLogsXIDError").
-				WithEntitiesImpacted(entities1).
+				WithEntitiesImpacted(entities2).
 				WithFatal(true).
 				WithErrorCode(helpers.ERRORCODE_13).
 				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
@@ -2708,6 +2697,15 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
 				WithCheckName("SysLogsXIDError").
 				WithEntitiesImpacted(entities2).
+				WithErrorCode(helpers.ERRORCODE_13).
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU"),
+			helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithCheckName("SysLogsXIDError").
+				WithEntitiesImpacted(entities1).
 				WithFatal(true).
 				WithErrorCode(helpers.ERRORCODE_74).
 				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
@@ -2719,9 +2717,9 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg3Bit18Set",
 			"ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
-				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
+				"REG2:00000000000000000000000000000000 REG3:00000000000001000000000000000000 "+
 				"REG4:00000000000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 reset of fabric is required Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 bit 18 is set in register 3, reset of fabric is required Recommended Action=CONTACT_SUPPORT;",
 			"XID74Reg3Bit18SetIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2760,9 +2758,8 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 	// 2. error has occurred on different NVLink --> rule should not be triggered
 	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg4HardwareIssueRule rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg4HardwareIssueRule rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -2913,7 +2910,7 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 				"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 "+
 				"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 "+
 				"REG4:00000001000000000000000000000000 REG5:00000000000000000000000000000000 "+
-				"REG6:00000000000000000000000000000000 likely a HW issue with ECC/Parity, repeating on same NVLink Recommended Action=CONTACT_SUPPORT;",
+				"REG6:00000000000000000000000000000000 one of the bits (18, 19, 21, 22, 24, 25, 27, 28) is set in register 4 and its repeating on same NVLink, likely a HW issue with ECC/Parity Recommended Action=CONTACT_SUPPORT;",
 			"XID74Reg4HardwareIssueIsNotHealthy", v1.ConditionTrue)
 
 		return ctx
@@ -2952,9 +2949,8 @@ func TestXID74Reg4ECCError(t *testing.T) {
 	// 2. error has occurred on different NVLink --> rule should not be triggered
 	// 3. error has occurred more than 1 time on the same NVLink and GPU --> rule should be triggered
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// TODO: Uncomment this when the testing is completed
-		// t.Logf("Waiting 100 seconds for the XID74Reg4ECCError rule time window to complete")
-		// time.Sleep(100 * time.Second)
+		t.Logf("Waiting 100 seconds for the XID74Reg4ECCError rule time window to complete")
+		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
 		testNodeName = testCtx.NodeName
@@ -3104,7 +3100,7 @@ func TestXID74Reg4ECCError(t *testing.T) {
 			"NVLINK:14 REG0:00000000000000000000000000000000 REG1:00000000000000000000000000000000 " +
 			"REG2:00000000000000000000000000000000 REG3:00000000000000000000000000000000 " +
 			"REG4:00000100000000000000000000000000 REG5:00000000000000000000000000000000 " +
-			"REG6:00000000000000000000000000000000 request for field diagnosis if user jobs are interrupted or error occurs repeatedly Recommended Action=NONE;"
+			"REG6:00000000000000000000000000000000 one of the bits (20, 23, 26, 29) is set in register 4, request for field diagnosis if user jobs are interrupted or error occurs repeatedly Recommended Action=NONE;"
 
 		expectedEvent := v1.Event{
 			Type:    "XID74Reg4ECCError",
