@@ -891,7 +891,7 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 70 seconds for the XIDErrorSoloNoBurst rule time window to complete")
+		t.Logf("Waiting 70 seconds for the XID74Reg0SoloNVLinkError rule time window to complete")
 		time.Sleep(70 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
@@ -901,7 +901,7 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if XID74Reg0Bits1Or20Set node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if XID74Reg0SoloNVLinkError node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -913,6 +913,10 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 			{
 				EntityType:  "GPU_UUID",
 				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
+			},
+			{
+				EntityType:  "NVLINK",
+				EntityValue: "14",
 			},
 			{
 				EntityType:  "REG0",
@@ -1012,6 +1016,7 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 
 		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "XID74Reg0SoloNVLinkError",
 			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
+				"NVLINK:14 "+
 				"REG0:%032b REG1:%032b "+
 				"REG2:%032b REG3:%032b "+
 				"REG4:%032b REG5:%032b "+
@@ -1227,9 +1232,7 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
-
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -1357,9 +1360,7 @@ func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
-
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -1524,16 +1525,15 @@ func TestXID74Reg0SignalIntegrityErrorRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
-	feature := features.New("TestXID74Reg0RepeatedLinkErrorule").
+func TestXID74Reg0RepeatedLinkErrorRule(t *testing.T) {
+	feature := features.New("TestXID74Reg0RepeatedLinkErrorRule").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -1712,9 +1712,8 @@ func TestXID74Reg0RepeatedLinkErrorule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -1902,9 +1901,8 @@ func TestRepeatedXID74Reg2HardwareIssue(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2012,9 +2010,8 @@ func TestXID74Reg2Bit13SetRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2029,7 +2026,7 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
+		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg2Bit16Or19Set rule time window to complete")
 		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
@@ -2039,7 +2036,7 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if XID74Reg2Bit16Or19SetRule node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if RepeatedXID74Reg2Bit16Or19Set node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -2197,9 +2194,8 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2214,7 +2210,7 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the XID74Reg2Bit16Or19SetRule rule time window to complete")
+		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg2Bit17Or18Set rule time window to complete")
 		time.Sleep(100 * time.Second)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
@@ -2224,7 +2220,7 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if XID74Reg2Bit16Or19SetRule node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Check if RepeatedXID74Reg2Bit17Or18Set node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -2382,9 +2378,8 @@ func TestXID74Reg2Bit17Or18SetRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2548,9 +2543,8 @@ func TestXID74Reg3UnexpectedErrorRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2711,9 +2705,7 @@ func TestXID74Reg3Bit18SetRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
-
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -2899,9 +2891,8 @@ func TestXID74Reg4HardwareIssueRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
@@ -3092,9 +3083,8 @@ func TestXID74Reg4ECCError(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-		helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 
-		return ctx
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
 	testEnv.Test(t, feature.Feature())
