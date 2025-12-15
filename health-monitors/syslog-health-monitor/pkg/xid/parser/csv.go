@@ -168,13 +168,9 @@ func (p *CSVParser) parseStandardXID(message string) (*Response, error) {
 	metadata := make(map[string]string)
 
 	if xidCode == 13 {
-		gpc, tpc, sm := fetchXID13MetadataFromMessage(message)
-		if gpc != "" && tpc != "" && sm != "" {
-			metadata = map[string]string{
-				"GPC": gpc,
-				"TPC": tpc,
-				"SM":  sm,
-			}
+		xid13Metadata := fetchXID13MetadataFromMessage(message)
+		for k, v := range xid13Metadata {
+			metadata[k] = v
 		}
 	}
 
@@ -294,14 +290,20 @@ func (p *CSVParser) doesXIDIntrInfoMatchRule(intrinfoBinaryPattern string, intrI
 	return true
 }
 
-func fetchXID13MetadataFromMessage(message string) (string, string, string) {
+func fetchXID13MetadataFromMessage(message string) map[string]string {
 	matches := reXid13Pattern.FindStringSubmatch(message)
 
 	if len(matches) != 4 {
-		return "", "", ""
+		return map[string]string{}
 	}
 
-	return matches[1], matches[2], matches[3]
+	metadata := map[string]string{
+		"GPC": matches[1],
+		"TPC": matches[2],
+		"SM":  matches[3],
+	}
+
+	return metadata
 }
 
 // fetchXID74NVLinkData extracts link number and registers value from XID 74 NVLink messages
@@ -310,7 +312,7 @@ func fetchXID74NVLinkData(message string) map[string]string {
 	matches := reXid74NVLinkPattern.FindStringSubmatch(message)
 
 	if len(matches) == 0 {
-		return nil // Not an XID 74 NVLink error
+		return map[string]string{} // Not an XID 74 NVLink error
 	}
 
 	metadata := make(map[string]string)

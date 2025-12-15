@@ -2687,7 +2687,7 @@ data:
 
     [[rules]]
     name = "XID74Reg3Bit18Set"
-    description = "Detect if XID 74 with bit 18 set on register 3 is occurred without any presence of any other error within 1.5 minutes"
+    description = "Detect if XID 74 with bit 18 set on register 3 occurred without any presence of any other error within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
     message = "bit 18 is set in register 3, reset of fabric is required"
     evaluate_rule = true

@@ -224,46 +224,13 @@ func getXID74Metadata(metadata map[string]string) []*pb.Entity {
 		})
 	}
 
-	if reg0, ok := metadata["REG0"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG0", EntityValue: reg0,
-		})
-	}
-
-	if reg1, ok := metadata["REG1"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG1", EntityValue: reg1,
-		})
-	}
-
-	if reg2, ok := metadata["REG2"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG2", EntityValue: reg2,
-		})
-	}
-
-	if reg3, ok := metadata["REG3"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG3", EntityValue: reg3,
-		})
-	}
-
-	if reg4, ok := metadata["REG4"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG4", EntityValue: reg4,
-		})
-	}
-
-	if reg5, ok := metadata["REG5"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG5", EntityValue: reg5,
-		})
-	}
-
-	if reg6, ok := metadata["REG6"]; ok {
-		entities = append(entities, &pb.Entity{
-			EntityType: "REG6", EntityValue: reg6,
-		})
+	for i := 0; i <= 6; i++ {
+		key := fmt.Sprintf("REG%d", i)
+		if reg, ok := metadata[key]; ok {
+			entities = append(entities, &pb.Entity{
+				EntityType: key, EntityValue: reg,
+			})
+		}
 	}
 
 	return entities
