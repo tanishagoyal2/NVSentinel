@@ -37,7 +37,7 @@ Dry run events will NOT trigger:
 
 ## Flow Diagrams
 
-```
+```plaintext
 ┌─────────────────────────────────────────────────────────────────┐
 │ Health Monitor                                                  │
 │ - Detects issue (XID error, CSP maintenance, etc.)              │
@@ -322,8 +322,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 		nonDryRunEvents = append(nonDryRunEvents, healthEvent)
 	}
 
-	// Process only non-dry-run events for node conditions and K8s events
-	// Rest of the existing code remains the same, using nonDryRunEvents instead of healthEvents.Events
+	// ... existing code
 }
 ```
 
