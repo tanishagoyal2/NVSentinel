@@ -1912,7 +1912,7 @@ data:
     ]
 
     [[rules]]
-    name = "XID74Reg0RepeatedLinkError"
+    name = "XID74Reg0Bit27Or29Set"
     description = "Detect if XID 74 with register 0 bits (27 or 29) set occurred 2 or more times on same GPU within 1.5 minutes"
     recommended_action = "CONTACT_SUPPORT"
     message = "one of the bits (27 or 29) is set in register 0 and its repeating on same GPU, unexpected error please open NVBug"
