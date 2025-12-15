@@ -22,12 +22,13 @@ import (
 	"testing"
 	"time"
 
+	"tests/helpers"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	"tests/helpers"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
