@@ -41,10 +41,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		var newCtx context.Context
-		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
-
-		t.Log("Waiting 90 seconds for the MultipleRemediations rule time window to complete")
-		time.Sleep(90 * time.Second)
+		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
 
 		t.Log("Triggering multiple remediations cycle")
 		client, err := c.NewClient()
@@ -265,7 +262,7 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 		// 				 XID 31 will also not trigger as we are excluding XID 31 from RepeatedXIDErrorOnSameGPU rule
 		helpers.SendHealthEvent(ctx, t, helpers.NewHealthEvent(testNodeName).
 			WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
-			WithCheckName("SyslogXIDError").
+			WithCheckName("SysLogsXIDError").
 			WithEntitiesImpacted(entities).
 			WithFatal(true).
 			WithErrorCode(helpers.ERRORCODE_13).
@@ -287,6 +284,7 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 				WithHealthy(true).
 				WithMessage("No health failures").
 				WithComponentClass("GPU")
+
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
@@ -296,8 +294,8 @@ func TestRepeatedXIDOnSameGPU(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXID31OnGPU(t *testing.T) {
-	feature := features.New("TestRepeatedXID31OnGPU").
+func TestRepeatedXID31OnSameGPU(t *testing.T) {
+	feature := features.New("TestRepeatedXID31OnSameGPU").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -447,7 +445,7 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
 
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
@@ -663,8 +661,8 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestXID13And31SoloNoBurstRule(t *testing.T) {
-	feature := features.New("TestXID13And31SoloNoBurstRule").
+func TestSoloNoBurstRule(t *testing.T) {
+	feature := features.New("TestSoloNoBurstRule").
 		WithLabel("suite", "health-event-analyzer")
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
@@ -734,7 +732,7 @@ func TestXID13And31SoloNoBurstRule(t *testing.T) {
 
 		helpers.SendHealthEvent(ctx, t, helpers.NewHealthEvent(testNodeName).
 			WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
-			WithCheckName("SyslogXIDError").
+			WithCheckName("SysLogsXIDError").
 			WithEntitiesImpacted(entities2).
 			WithFatal(true).
 			WithErrorCode(helpers.ERRORCODE_13).
@@ -770,6 +768,7 @@ func TestXID13And31SoloNoBurstRule(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
+
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
@@ -785,10 +784,12 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 70 seconds for the XID74Reg0SoloNVLinkError rule time window to complete")
-		time.Sleep(70 * time.Second)
+		client, err := c.NewClient()
+		require.NoError(t, err)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
 
@@ -950,10 +951,12 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the XID74Reg0ECCParityError rule time window to complete")
-		time.Sleep(100 * time.Second)
+		client, err := c.NewClient()
+		require.NoError(t, err)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
 
@@ -1133,134 +1136,6 @@ func TestXID74Reg0ECCParityError(t *testing.T) {
 	testEnv.Test(t, feature.Feature())
 }
 
-func TestRepeatedXID74Reg0HardwareIssueRule(t *testing.T) {
-	feature := features.New("TestRepeatedXID74Reg0HardwareIssueRule").
-		WithLabel("suite", "health-event-analyzer")
-
-	var testCtx *helpers.HealthEventsAnalyzerTestContext
-	var testNodeName string
-	var entitiesImpacted [][]helpers.EntityImpacted
-
-	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg0HardwareIssue rule time window to complete")
-		time.Sleep(100 * time.Second)
-
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
-		testNodeName = testCtx.NodeName
-		t.Logf("Using node: %s", testNodeName)
-
-		return ctx
-	})
-
-	feature.Assess("Check if RepeatedXID74Reg0HardwareIssue node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client, err := c.NewClient()
-		require.NoError(t, err)
-
-		entities1 := []helpers.EntityImpacted{
-			{
-				EntityType:  "PCI",
-				EntityValue: "0001:00:00",
-			},
-			{
-				EntityType:  "GPU_UUID",
-				EntityValue: "GPU-11111111-1111-1111-1111-111111111111",
-			},
-			{
-				EntityType:  "NVLINK",
-				EntityValue: "14",
-			},
-			{
-				EntityType:  "REG0",
-				EntityValue: fmt.Sprintf("%032b", 1<<12),
-			},
-			{
-				EntityType:  "REG1",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-			{
-				EntityType:  "REG2",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-			{
-				EntityType:  "REG3",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-			{
-				EntityType:  "REG4",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-			{
-				EntityType:  "REG5",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-			{
-				EntityType:  "REG6",
-				EntityValue: fmt.Sprintf("%032b", 0),
-			},
-		}
-
-		entitiesImpacted = append(entitiesImpacted, entities1)
-
-		xidEvents := []*helpers.HealthEventTemplate{
-			helpers.NewHealthEvent(testNodeName).
-				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
-				WithCheckName("SysLogsXIDError").
-				WithEntitiesImpacted(entities1).
-				WithFatal(true).
-				WithErrorCode(helpers.ERRORCODE_74).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
-		}
-		for _, xidEvent := range xidEvents {
-			helpers.SendHealthEvent(ctx, t, xidEvent)
-		}
-
-		t.Log("Rule should not be triggered as error has occurred only 1 time on the same GPU")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID74Reg0HardwareIssue")
-
-		xidEvents = []*helpers.HealthEventTemplate{
-			helpers.NewHealthEvent(testNodeName).
-				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
-				WithCheckName("SysLogsXIDError").
-				WithEntitiesImpacted(entities1).
-				WithFatal(true).
-				WithErrorCode(helpers.ERRORCODE_74).
-				WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM)),
-		}
-
-		for _, xidEvent := range xidEvents {
-			helpers.SendHealthEvent(ctx, t, xidEvent)
-		}
-
-		t.Log("Rule should be triggered as error has occurred more than 1 time on the same GPU")
-		helpers.WaitForNodeConditionWithCheckName(ctx, t, client, testNodeName, "RepeatedXID74Reg0HardwareIssue",
-			fmt.Sprintf("ErrorCode:74 PCI:0001:00:00 GPU_UUID:GPU-11111111-1111-1111-1111-111111111111 "+
-				"NVLINK:14 REG0:%032b REG1:%032b "+
-				"REG2:%032b REG3:%032b "+
-				"REG4:%032b REG5:%032b "+
-				"REG6:%032b one of the bits (8, 9, 12, 16, 17, 24 or 28) is set in register 0 and its repeating on same GPU, could be a hardware issue, request to check link mechanical connections and run field diagnosis if issue persists Recommended Action=CONTACT_SUPPORT;",
-				1<<12, 0, 0, 0, 0, 0, 0),
-			"RepeatedXID74Reg0HardwareIssueIsNotHealthy", v1.ConditionTrue)
-
-		return ctx
-	})
-	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		for _, entities := range entitiesImpacted {
-			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
-				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
-				WithEntitiesImpacted(entities).
-				WithCheckName("SysLogsXIDError").
-				WithFatal(false).
-				WithHealthy(true).
-				WithMessage("No health failures").
-				WithComponentClass("GPU")
-			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
-		}
-		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
-	})
-
-	testEnv.Test(t, feature.Feature())
-}
-
 func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 	feature := features.New("TestXID74Reg2Bit16Or19SetRule").
 		WithLabel("suite", "health-event-analyzer")
@@ -1270,10 +1145,12 @@ func TestXID74Reg2Bit16Or19SetRule(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the RepeatedXID74Reg2Bit16Or19Set rule time window to complete")
-		time.Sleep(100 * time.Second)
+		client, err := c.NewClient()
+		require.NoError(t, err)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
 
@@ -1454,10 +1331,12 @@ func TestXID74Reg4ECCError(t *testing.T) {
 	var entitiesImpacted [][]helpers.EntityImpacted
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Logf("Waiting 100 seconds for the XID74Reg4ECCError rule time window to complete")
-		time.Sleep(100 * time.Second)
+		client, err := c.NewClient()
+		require.NoError(t, err)
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test")
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
 

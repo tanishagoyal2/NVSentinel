@@ -47,7 +47,7 @@ type HealthEventsAnalyzerTestContext struct {
 func SetupHealthEventsAnalyzerTest(ctx context.Context,
 	t *testing.T,
 	c *envconf.Config,
-	configMapPath, testNamespace string) (
+	configMapPath, testNamespace string, testNodeName string) (
 	context.Context, *HealthEventsAnalyzerTestContext) {
 	t.Helper()
 
