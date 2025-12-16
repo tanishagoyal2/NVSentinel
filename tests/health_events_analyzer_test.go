@@ -445,7 +445,9 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
 
-		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", "")
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
@@ -550,8 +552,8 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID13OnDifferentGPCAndTPC")
 
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
+		t.Log("Waiting 17s to create burst gap (>15s required)")
+		time.Sleep(17 * time.Second)
 
 		// STEP 2: Inject XID 13 error on GPC:0, TPC:0, SM:1
 		// EXPECTED: This differs from the previous errors which were on GPC:0, TPC:1.
@@ -588,8 +590,8 @@ func TestXIDErrorOnGPCAndTPC(t *testing.T) {
 		// Errors on different GPC/TPC combinations.
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXID13OnSameGPCAndTPC")
 
-		t.Log("Waiting 5s to create burst gap")
-		time.Sleep(5 * time.Second)
+		t.Log("Waiting 17s to create burst gap (>15s required)")
+		time.Sleep(17 * time.Second)
 
 		// STEP 3: Inject XID 13 error on GPC:0, TPC:1, SM:1
 		// EXPECTED: This creates a third burst on GPC:0, TPC:1, the same GPC/TPC as Burst 1.
