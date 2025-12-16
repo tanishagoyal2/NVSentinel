@@ -563,4 +563,22 @@ Add command-line flag in health monitor with default value set to `false` (main.
 ```go
 dryRunFlag = flag.Bool("dry-run", false, "Run in dry run/audit mode")
 ```
+
+---
+
+## Alternatives Considered
+
+### Using Health Event Overrides
+
+We considered extending the existing health event override feature in platform-connector to support setting `isFatal=false` via CEL rules, instead of adding the flag at the health monitor level.
+
+**Why this was rejected:**
+
+1. Even when using health event overrides to mark events as non-fatal (`isFatal=false`), they still show up as Kubernetes node events. This creates confusion because:
+   - Operators see node events and don't understand why they're present
+   - NVBugs get open for node events
+   - External systems (like NVCF) alert on node/pod events
+
+2. Dry-run should be a property of the health monitors themselves. As new monitors are added, the health monitors should be able to clearly state that published events are for observation purpose and no module should take action on it.
+
 ---
