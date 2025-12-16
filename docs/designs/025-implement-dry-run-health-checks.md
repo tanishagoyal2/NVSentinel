@@ -4,9 +4,9 @@
 
 Currently, all health monitors publish events without dry-run mode, which causes other modules to perform operations that change the cluster state:
 1. Node conditions are created/updated
-2. Quarantine labels and annotations are applied (even if FQM is running in dry-run mode), creating confusion about why the node was not cordoned or why the remediation was not performed
-3. Nodes are drained by NDR
-4. Nodes are remediated by FRM
+2. Quarantine labels and annotations are applied (even if fault quarantine module is running in dry-run mode), creating confusion about why the node was not cordoned or why the remediation was not performed
+3. Nodes are drained by node drainer module
+4. Nodes are remediated by fault remediation
 
 We want to prevent affecting the cluster state and instead export events only for observability purposes. This is why we need dry-run mode for health events.
 
@@ -15,6 +15,7 @@ This feature will be implemented in all health monitors:
 2. Syslog Health Monitor
 3. CSP Health Monitor
 4. Kubernetes Object Monitor
+5. Health events analyzer
 
 When a health monitor is running with dry-run enabled, all published health events (fatal, non-fatal, healthy, unhealthy) will have the dry-run flag set to `true`.
 
@@ -28,10 +29,10 @@ Dry run events WILL be:
 Dry run events will NOT trigger:
 - Node condition creation/updates (Platform Connector skips)
 - Kubernetes event creation (Platform Connector skips)
-- Node quarantine (FQM skips - no taint, labels, or annotations)
-- Node draining (NDR won't see them - filtered by pipeline)
-- Remediation CR creation (FRM won't see them - filtered by pipeline)
-- Pattern analysis (HEA skips - no aggregated fatal events published)
+- Node quarantine (fault-quarantine skips - no taint, labels, or annotations)
+- Node draining (node-drainer module won't receive them - filtered by pipeline)
+- Remediation CR creation (fault-remediation module won't receive them - filtered by pipeline)
+- Pattern analysis (health-events-analyzer ignores incoming `dryRun=true` events for pattern detection and don't consider dryRun enabled events while running the query)
 
 ---
 
@@ -61,31 +62,28 @@ Dry run events will NOT trigger:
 │ - Change stream triggered                                       │
 └──┬──────────────────────┬────────────────────┬──────────────────┘
    ↓                      ↓                    ↓
-┌──────────────┐  ┌──────────────┐  ┌─────────────────┐
-│ HEA          │  │ FQM          │  │ Event Exporter  │
-│    SKIP      │  │    SKIP      │  │  Process event  │
-│ - Check      │  │ - Check      │  │ - Transform     │
-│   dryRun     │  │   dryRun     │  │   to CloudEvent │
-│   flag       │  │   flag       │  │ - Include       │
-│ - Skip       │  │ - Skip       │  │   dryRun field  │
-│   pattern    │  │   quarantine │  │ - Publish       │
-│   analysis   │  │ - NO taint   │  │   event         │
-│              │  │ - NO labels/ │  │                 │
-│              │  │   annotations│  │                 │
-│              │  │ - NO status  │  │                 │
-│              │  │   update     │  │                 │
-└──────────────┘  └──────────────┘  └─────────────────┘
+┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
+│ Health Events Analyzer │  │ Fault Quarantine       │  │ Event Exporter         │
+│ Filter + Process       │  │ Filter                 │  │ Process event          │
+│ - Change-stream filter │  │ - Change-stream filter │  │ - Transform            │
+│   excludes dryRun=true │  │   excludes dryRun=true │  │   to CloudEvent        │
+│ - Rule queries exclude │  │ - NO cordon/taints     │  │ - Include dryRun       │
+│   dryRun=true events   │  │ - NO labels/           │  │   field                │
+│ - If running in dryRun │  │   annotations          │  │ - Publish event        │
+│   mode: publish events │  │ - NO status update     │  │                        │
+│   with dryRun=true     │  │                        │  │                        │
+└────────────────────────┘  └────────────────────────┘  └────────────────────────┘
                          ↓
                   Database NOT Updated
                   (nodeQuarantined = null)
                          ↓
           ┌──────────────┴──────────────┐
           ↓                             ↓
-┌─────────────────┐          ┌─────────────────┐
-│ NDR             │          │     FRM         |
-│will not receive │          │will not receive │
-│    event        │          │    event        │
-└─────────────────┘          └─────────────────┘
+┌────────────────────────┐  ┌────────────────────────┐
+│ Node Drainer Module    │  │ Fault remediation      │
+│                        │  │ Module                 │
+│ will not receive event │  │ will not receive event │
+└────────────────────────┘  └────────────────────────┘
 ```
 ---
 
@@ -117,13 +115,6 @@ message HealthEvent {
   bool dryRun = 16;
 }
 ```
-
-**Commands:**
-```bash
-cd data-models
-make generate  # Regenerate Go code from protobuf
-```
-
 ---
 
 ### Step 2: Health Monitor Implementation
@@ -287,14 +278,14 @@ class PlatformConnectorEventProcessor:
         )
 ```
 
-GPU Health Monitor creates HealthEvent objects in 4 different places (lines ~104, 204, 267, 361). Add `dryRun=self._dry_run` to all 4 locations.
+GPU Health Monitor creates HealthEvent objects in 4 different places in this file. Add `dryRun=self._dry_run` to all 4 locations.
 
 ### Step 3: Platform Connector (Kubernetes)
 
-Platform connector receives health events BEFORE they're stored in the database and:
-- Creates/updates **node conditions** on Kubernetes nodes
-- Creates **Kubernetes events** for unhealthy, non-fatal events
-- Store events in mongodb
+Platform connector receives health events through the gRPC connection:
+- Store events in the database (MongoDB/PostgreSQL) for observability
+- Create/update **node conditions** on Kubernetes nodes
+- Create **Kubernetes events** for unhealthy, non-fatal events
 
 For events running in dry-run mode, the platform connector should:
 1. Store events in database (needed for observability)
@@ -303,7 +294,7 @@ For events running in dry-run mode, the platform connector should:
 
 File: `platform-connectors/pkg/connectors/kubernetes/process_node_events.go`
 
-Add skip logic in `processHealthEvents()` method:
+Add skip logic in `processHealthEvents()` method to skip adding node condition/event:
 
 ```go
 func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
@@ -316,7 +307,6 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 			slog.Info("Skipping dry run event (audit mode) - no node conditions or K8s events will be created",
 				"node", healthEvent.NodeName,
 				"checkName", healthEvent.CheckName)
-			metrics.DryRunEventsSkipped.Inc()  // Add this metric
 			continue  // Skip this event
 		}
 		nonDryRunEvents = append(nonDryRunEvents, healthEvent)
@@ -325,23 +315,6 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 	// ... existing code
 }
 ```
-
-File: `platform-connectors/pkg/connectors/kubernetes/metrics.go`
-
-```go
-var (
-	// ... existing metrics ...
-	
-	// NEW: Track dry run events skipped by platform connector
-	DryRunEventsSkipped = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "nvsentinel_platform_connector_dry_run_events_skipped_total",
-			Help: "Total number of dry run/audit events skipped (no node conditions/events created)",
-		},
-	)
-)
-```
-
 ---
 
 ### Step 4: Event Exporter
@@ -374,125 +347,186 @@ func ToCloudEvent(event *pb.HealthEvent, metadata map[string]string) (*CloudEven
 	// ... rest of method
 }
 ```
+---
 
-File: `event-exporter/pkg/metrics/metrics.go`
+### Step 5: Store Client 
+
+We need new methods in mongodb and postgres pipeline builder:
+1. `BuildNonDryRunHealthEventInsertsPipeline` which filters `dryRun=false` inserted events for fault-quarantine module
+2. `BuildNonDryRunNonFatalUnhealthyInsertsPipeline` which filters `dryRun=false`, non-fatal and unhealthy inserted events for health-events-analyzer module.
+
+File: `store-client/pkg/client/mongodb_pipeline_builder.go`
 
 ```go
-var (
-	// ... existing metrics ...
-	
-	// NEW: Track dry run events exported
-	DryRunEventsExported = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "nvsentinel_event_exporter_dry_run_events_exported_total",
-			Help: "Total number of dry run/audit events exported (for observability)",
-		},
+// BuildNonDryRunHealthEventInsertsPipeline creates a pipeline that watches for all non-dry-run health event inserts.
+func (b *MongoDBPipelineBuilder) BuildNonDryRunHealthEventInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", datastore.D(
+					datastore.E("$in", datastore.A("insert")),
+				)),
+				datastore.E("fullDocument.healthevent.dryrun", false),
+			)),
+		),
 	)
-)
+}
+
+// BuildNonDryRunNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
+// excluding dry-run (audit) events.
+func (b *MongoDBPipelineBuilder) BuildNonDryRunNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", "insert"),
+				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
+				datastore.E("fullDocument.healthevent.ishealthy", false),
+				datastore.E("fullDocument.healthevent.dryrun", false),
+			)),
+		),
+	)
+}
+
 ```
+
+Same method required in postgres builder
+
+File: `store-client/pkg/client/postgresql_pipeline_builder.go`
+
+```go
+// BuildNonDryRunHealthEventInsertsPipeline creates a pipeline that watches for health event inserts
+// excluding dry-run (audit) events.
+func (b *PostgreSQLPipelineBuilder) BuildNonDryRunHealthEventInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", datastore.D(
+					datastore.E("$in", datastore.A("insert")),
+				)),
+				datastore.E("fullDocument.healthevent.dryrun", false),
+			)),
+		),
+	)
+}
+
+// BuildNonDryRunNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
+// excluding dry-run (audit) events.
+func (b *PostgreSQLPipelineBuilder) BuildNonDryRunNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", datastore.D(datastore.E("$in", datastore.A("insert", "update")))),
+				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
+				datastore.E("fullDocument.healthevent.ishealthy", false),
+				datastore.E("fullDocument.healthevent.dryrun", false),
+			)),
+		),
+	)
+}
+
+``` 
 
 ---
 
-### Step 5: Fault Quarantine Manager (FQM)
+### Step 5: Fault Quarantine Module
 
 Update this module to skip processing dry-run events so that:
 - Node is not cordoned
 - Annotations and labels are not applied
 - `nodeQuarantined` status is not set (remains null)
 
-**Why skipping `nodeQuarantined` update matters:** FRM and NDR use pipeline filters that match on `nodeQuarantined` status. If this field is not set, their pipelines will exclude the event, and they won't see it.
+**Why skipping `nodeQuarantined` update matters:** fault-remediation and node-drainer module use pipeline filters that match on `nodeQuarantined` status. If this field is not set, their pipelines will exclude the event, and they won't see it.
 
-File: `fault-quarantine/pkg/reconciler/reconciler.go`
+File: `fault-quarantine/pkg/initializer/init.go`
 
-Add skip logic in `ProcessEvent()` method:
+Update the DB change stream pipeline to exclude dry-run events (so fault-quarantine never receives them):
 
 ```go
-func (r *Reconciler) ProcessEvent(
-	ctx context.Context,
-	event *model.HealthEventWithStatus,
-	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
-	rulesetsConfig rulesetsConfig,
-) *model.Status {
-	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {
-		return nil
-	}
+func InitializeAll(ctx context.Context, params InitializationParams) (*Components, error) {
+	// ...rest of the code
+	builder := client.GetPipelineBuilder()
+	
+	// call new created method which filters inserted events with dryRun false
+	pipeline := builder.BuildNonDryRunHealthEventInsertsPipeline() 
 
-	// NEW: Skip dry run events and update the metric
-	if event.HealthEvent != nil && event.HealthEvent.DryRun {
-		slog.Info("Skipping dry run event (audit mode) - no quarantine action will be taken",
-			"node", event.HealthEvent.NodeName,
-			"checkName", event.HealthEvent.CheckName,
-			"agent", event.HealthEvent.Agent)
-		metrics.DryRunEventsSkipped.Inc()
-		return nil  // No quarantine status set
-	}
-
-	slog.Debug("Processing event", "checkName", event.HealthEvent.CheckName)
-	isNodeQuarantined := r.handleEvent(ctx, event, ruleSetEvals, rulesetsConfig)
-	// ... rest of method
+	// ...rest of the code
 }
 ```
-File: `fault-quarantine/pkg/metrics/metrics.go`
 
-```go
-var (
-	// ... existing metrics ...
-	
-	// NEW: Track dry run events that were skipped
-	DryRunEventsSkipped = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "nvsentinel_fault_quarantine_dry_run_events_skipped_total",
-			Help: "Total number of dry run/audit events skipped by fault quarantine manager",
-		},
-	)
-)
-```
 
-**Note:** We don't need skip logic in NDR and FRM modules as they won't receive these events. Since FQM doesn't set the `nodeQuarantined` field for dry run events, the pipeline filters in NDR and FRM will exclude these events from their change streams. 
+**Note:** We don't need skip logic in node-drainer and fault-remediation modules as they won't receive these events. Since fault-quarantine won't act on dry-run events, it won't set `nodeQuarantined`, so downstream pipeline filters will exclude them.
 
 ---
 
-### Step 6: Health Events Analyzer (HEA)
+### Step 6: Health Events Analyzer
 
-Health Events Analyzer should skip processing dry run events so that:
-- No pipeline queries run for pattern detection
-- No aggregated fatal events are published
+Health Events Analyzer has two distinct dry-run concerns:
 
-File: `health-events-analyzer/pkg/reconciler/reconciler.go`
+1. **Incoming/historic events**: if an incoming (or historical) health event has `dryRun=true`, it should be ignored
+   by the analyzer for pattern detection (no queries/state transitions triggered by audit-only events).
+2. **Analyzer’s own dry-run mode**: if the analyzer itself is running with `--dry-run`, then any aggregated health events
+   it publishes must have `dryRun=true` enabled.
 
-Add skip logic in `processHealthEvent()` method (around line 136):
+**Skip processing dry run enabled events in events-analyzer** 
+
+Update the change-stream pipeline to exclude `dryRun=true` events, so the analyzer does not receive dry-run events for pattern detection.
+
+File: `health-events-analyzer/main.go`
 
 ```go
-func (r *Reconciler) processHealthEvent(ctx context.Context, event *datamodels.HealthEventWithStatus) error {
-	// ... existing logic
-
-	// NEW: Skip dry run events - no pattern analysis or event publishing
-	if event.HealthEvent.DryRun {
-		slog.Info("Skipping dry run event (audit mode) - no pattern analysis will occur",
-			"node", labelValue,
-			"checkName", event.HealthEvent.CheckName)
-		metrics.DryRunEventsSkipped.Inc()
-		return nil  // Skip processing, no aggregated event published
-	}
-
-	// ... rest of method
+func createPipeline() interface{} {
+	builder := client.GetPipelineBuilder()
+	// use new helper method which filter the fatal events with dryRun=false
+	return builder.BuildNonDryRunNonFatalUnhealthyInsertsPipeline()
 }
 ```
 
-File: `health-events-analyzer/pkg/reconciler/metrics.go`
+**Ignore dryRun marked event during mongo query**
+
+Update the default pipeline query to exclude `dryRun=true` events. We need this condition for every rule that's why we are adding it at code level instead of keeping it at config file level.  
+
+File: `health-events-analyzer/pkg/reconciler/reconciler.go`
 
 ```go
-var (
-	// ... existing metrics ...
-	
-	// NEW: Track dry run events skipped
-	DryRunEventsSkipped = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "nvsentinel_health_events_analyzer_dry_run_events_skipped_total",
-			Help: "Total number of dry run/audit events skipped by health events analyzer",
+func (r *Reconciler) getPipelineStages(
+	rule config.HealthEventsAnalyzerRule,
+	healthEventWithStatus datamodels.HealthEventWithStatus,
+) ([]map[string]interface{}, error) {
+	// CRITICAL: Always start with agent filter to exclude events from health-events-analyzer itself
+	// This prevents the analyzer from matching its own generated events, which would cause
+	// infinite loops and incorrect rule evaluations
+	pipeline := []map[string]interface{}{
+		{
+			"$match": map[string]interface{}{
+				"healthevent.agent":  map[string]interface{}{"$ne": "health-events-analyzer"},
+				"healthevent.dryrun": map[string]interface{}{"$eq": false}, // Add dryRun check by default for all queries
+			},
 		},
-	)
-)
+	}
+}
+```
+
+**health-events-analyzer running in dryRun mode**
+
+Update the publish function to set the `dryRun` field based on the mode that health-events-analyzer is running in.
+
+File: `health-events-analyzer/pkg/publisher/publisher.go`
+
+```go
+func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent,
+	recommendedAction protos.RecommendedAction, ruleName string, message string) error {
+	newEvent := proto.Clone(event).(*protos.HealthEvent)
+
+	newEvent.Agent = "health-events-analyzer"
+	newEvent.CheckName = ruleName
+	newEvent.RecommendedAction = recommendedAction
+	newEvent.IsHealthy = false
+	newEvent.Message = message
+
+	newEvent.DryRun = p.dryRun // update dryRun flag
+
+	// ...rest of the code
+}
 ```
 
 ---
@@ -505,13 +539,13 @@ Add to Helm values.yaml (for each health monitor):
 
 ```yaml
 syslogHealthMonitor:
-    dryRun: false  # Set to true to make ALL checks run in dry run mode
+    dryRun: true  # Set to true to make all checks run in dry run mode
 cspHealthMonitor:
-    dryRun: false  # Set to true to make ALL checks run in dry run mode
+    dryRun: true  # Set to true to make all checks run in dry run mode
 kubernetesObjectMonitor:
-    dryRun: false  # Set to true to make ALL checks run in dry run mode
+    dryRun: true  # Set to true to make all checks run in dry run mode
 gpuHealthMonitor:
-    dryRun: false  # Set to true to make ALL checks run in dry run mode
+    dryRun: true  # Set to true to make all checks run in dry run mode
 ```
 
 Update deployment template (add to container args in `_helpers.tpl` or `deployment.yaml`):
