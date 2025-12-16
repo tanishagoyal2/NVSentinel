@@ -426,7 +426,6 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 				WithComponentClass("GPU")
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
-
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
 
