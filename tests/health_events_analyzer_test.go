@@ -424,6 +424,7 @@ func TestRepeatedXID31OnSameGPU(t *testing.T) {
 				WithHealthy(true).
 				WithMessage("No health failures").
 				WithComponentClass("GPU")
+
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
