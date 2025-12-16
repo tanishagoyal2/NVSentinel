@@ -853,6 +853,7 @@ func TestXID74Reg0SoloNVLinkError(t *testing.T) {
 			},
 		}
 		entitiesImpacted = append(entitiesImpacted, entities1)
+		entitiesImpacted = append(entitiesImpacted, entities2)
 
 		xidEvents := []*helpers.HealthEventTemplate{
 			helpers.NewHealthEvent(testNodeName).
