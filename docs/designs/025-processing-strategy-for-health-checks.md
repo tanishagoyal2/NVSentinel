@@ -2,7 +2,7 @@
 
 ## Overview 
 
-Currently, all health monitors publish events that downstream modules process by default, which leads to the operations that affects the cluster state:
+Currently, all health monitors publish events that downstream modules EXECUTE_REMEDIATION by default, which leads to the operations that affects the cluster state:
 1. Node conditions are created/updated
 2. Quarantine labels and annotations are applied even when fault-handling modules are configured to be **observability-only** (i.e., not performing cluster actions), creating confusion about why the node was not cordoned or why the remediation was not performed
 3. Nodes are drained by node drainer module
@@ -17,69 +17,71 @@ This feature will be implemented in all health monitors:
 4. Kubernetes Object Monitor
 5. Health events analyzer
 
-When a health monitor wants observability-only behavior, it publishes health events with `processingStrategy=PERSIST_ONLY`.
+When a health monitor wants observability-only behavior, it publishes health events with `processingStrategy=STORE_ONLY`.
 
-### PROCESS Events Behaviour
-`PROCESS` means the default behavior: downstream modules process the event and also modify cluster state (e.g., create/update node conditions, create Kubernetes events, quarantine, drain, or remediate).
+### EXECUTE_REMEDIATION Events Behaviour
+`EXECUTE_REMEDIATION` means the default behavior: downstream modules EXECUTE_REMEDIATION the event and also modify cluster state (e.g., create/update node conditions, create Kubernetes events, quarantine, drain, or remediate).
 
-### PERSIST_ONLY Events Behavior
+### STORE_ONLY Events Behavior
 
-`PERSIST_ONLY` events WILL be:
+`STORE_ONLY` events WILL be:
 - Stored in database (for analysis)
-- Exported as metrics (for observability)
+- Exported as metrics to monitor which rule/policy is running in observability-only mode (STORE_ONLY):
+	 **kubernetes-object-monitor**: Export `k8s_object_monitor_health_events_processing_strategy_overrides_total` (labels: `policy_name`, `strategy`) to track policies overridden to `STORE_ONLY`.
+	**health-events-analyzer**: Export `health_event_analyzer_processing_strategy_overrides_total` (labels: `rule_name`, `strategy`) to track rules overridden to `STORE_ONLY`.
 - Exported by event exporter (for external monitoring)
 
-`PERSIST_ONLY` events will NOT trigger:
+`STORE_ONLY` events will NOT trigger:
 - Node condition creation/updates (Platform Connector skips)
 - Kubernetes event creation (Platform Connector skips)
 - Node quarantine (fault-quarantine skips - no taint, labels, or annotations)
 - Node draining (node-drainer module won't receive them - filtered by pipeline)
 - Remediation CR creation (fault-remediation module won't receive them - filtered by pipeline)
-- Pattern analysis (health-events-analyzer ignores incoming `processingStrategy=PERSIST_ONLY` events for pattern detection and does not consider them while running the query)
+- Pattern analysis (health-events-analyzer ignores incoming `processingStrategy=STORE_ONLY` events for pattern detection and does not consider them while running the query)
 
 ---
 
 ## Flow Diagrams
 
 ```plaintext
-┌─────────────────────────────────────────────────────────────────┐
-│ Health Monitor                                                  │
-│ - Detects issue (XID error, CSP maintenance, etc.)              │
-│ - Selects processingStrategy (PROCESS or PERSIST_ONLY)          │
-│ - Creates HealthEvent with processingStrategy = PERSIST_ONLY    │
-└────────────────────────┬────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ Platform Connector                                              │
-│ - Receives event via gRPC                                       │
-│ - Runs pipeline transformers (overrides, metadata)              │
-│ - Checks processingStrategy                                     │
-│ -    SKIP node conditions (PERSIST_ONLY)                        │
-│ -    SKIP Kubernetes events (PERSIST_ONLY)                      │
-│ -    Stores in database (for observability)                     │
-└────────────────────────┬────────────────────────────────────────┘
-                         ↓
-┌────────────────────────────────────────────────────────────────────────────┐
-│ Database (MongoDB/PostgreSQL)                                              │
-│ - Event stored with processingStrategy = PERSIST_ONLY                      │
-│ - Change stream triggered                                       			 │
-└────────────────┬──────────────────────┬───────────────────────────┬────────┘
-   		         ↓                      ↓                           ↓
+			┌─────────────────────────────────────────────────────────────────┐
+			│ Health Monitor                                                  │
+			│ - Detects issue (XID error, CSP maintenance, etc.)              │
+			│ - Selects processingStrategy (EXECUTE_REMEDIATION or STORE_ONLY)│
+			│ - Creates HealthEvent with processingStrategy = STORE_ONLY      │
+			└────────────────────────┬────────────────────────────────────────┘
+									 ↓
+			┌─────────────────────────────────────────────────────────────────┐
+			│ Platform Connector                                              │
+			│ - Receives event via gRPC                                       │
+			│ - Runs pipeline transformers (overrides, metadata)              │
+			│ - Checks processingStrategy                                     │
+			│ -    SKIP node conditions (STORE_ONLY)                          │
+			│ -    SKIP Kubernetes events (STORE_ONLY)                        │
+			│ -    Stores in database (for observability)                     │
+			└────────────────────────┬────────────────────────────────────────┘
+									 ↓
+			┌────────────────────────────────────────────────────────────────────────────┐
+			│ Database (MongoDB/PostgreSQL)                                              │
+			│ - Event stored with processingStrategy = STORE_ONLY                        │
+			│ - Change stream triggered                                       			 │
+			└─────────┬──────────────────────┬───────────────────────────┬───────────────┘
+					  ↓                      ↓                           ↓
 ┌────────────────────────────┐  ┌────────────────────────────┐  ┌────────────────────────────┐
 │ Health Events Analyzer     │  │ Fault Quarantine           │  │ Event Exporter             │
 │ Filter + Process           │  │ Filter                     │  │ Process event              │
 │ - Change-stream filter     │  │ - Change-stream filter     │  │ - Transform to CloudEvent  │
-│   excludes PERSIST_ONLY    │  │   excludes PERSIST_ONLY    │  │ - Include                  │
+│   excludes STORE_ONLY      │  │   excludes STORE_ONLY      │  │ - Include                  │
 │ - Rule queries exclude     │  │ - NO cordon/taints         │  │   processingStrategy       │
-│   PERSIST_ONLY events      │  │ - NO labels/annotations    │  │ - Publish event            │
+│   STORE_ONLY events        │  │ - NO labels/annotations    │  │ - Publish event            │
 │ - If publishing as         │  │ - NO status update         │  │                            │
-│   PERSIST_ONLY: publish    │  │                            │  │                            │
-│   events with PERSIST_ONLY │  │                            │  │                            │
+│   STORE_ONLY: publish      │  │                            │  │                            │
+│   events with STORE_ONLY   │  │                            │  │                            │
 └────────────────────────────┘  └────────────────────────────┘  └────────────────────────────┘
 											↓
 									Database NOT Updated
 									(nodeQuarantined = null)
-											↓
+										   ↓
 							┌──────────────┴──────────────┐
 							↓                             ↓
 					┌────────────────────────┐  ┌────────────────────────┐
@@ -97,8 +99,8 @@ When a health monitor wants observability-only behavior, it publishes health eve
 
 ```protobuf
 enum ProcessingStrategy {
-  PROCESS = 0;
-  PERSIST_ONLY = 1;
+  EXECUTE_REMEDIATION = 0;
+  STORE_ONLY = 1;
 }
 
 message HealthEvent {
@@ -119,7 +121,7 @@ message HealthEvent {
   BehaviourOverrides drainOverrides = 15;
   
   // NEW: Client-requested processing strategy.
-  // PERSIST_ONLY means the event is for observability only - no cluster resources should be modified.
+  // STORE_ONLY means the event is for observability only - no cluster resources should be modified.
   ProcessingStrategy processingStrategy = 16;
 }
 ```
@@ -136,7 +138,7 @@ Health monitors read the `--processingStrategy` flag (or equivalent config) and 
 ```go
 // Parse the flag/config
 flag.Parse()
-processingStrategy := *processingStrategyFlag // PROCESS or PERSIST_ONLY
+processingStrategy := *processingStrategyFlag // EXECUTE_REMEDIATION or STORE_ONLY
 
 // Pass processingStrategy to ALL handler initializations
 xidHandler := xid.NewXIDHandler(nodeName, agentName, componentClass, 
@@ -156,7 +158,7 @@ File: `health-monitors/syslog-health-monitor/pkg/xid/xid_handler.go` (and simila
 ```go
 type XIDHandler struct {
 	// ... existing fields ...
-	processingStrategy string // NEW: Store processingStrategy (PROCESS or PERSIST_ONLY)
+	processingStrategy string // NEW: Store processingStrategy (EXECUTE_REMEDIATION or STORE_ONLY)
 }
 
 func NewXIDHandler(..., processingStrategy string) (*XIDHandler, error) {
@@ -180,8 +182,8 @@ Apply to all handlers: XIDHandler, SXIDHandler, GPUFallenHandler (syslog-health-
 **Kubernetes Object Monitor**
 
 Kubernetes Object Monitor can set `processingStrategy` in two ways:
-1. **Module level**: all events it publishes should have `processingStrategy=PERSIST_ONLY`.
-2. **Rule level**: the monitor itself may run in standard mode, but a rule can be defined with `PERSIST_ONLY` strategy; any event published for a match on that rule should use `PERSIST_ONLY`.
+1. **Module level**: all events it publishes should have `processingStrategy=STORE_ONLY`.
+2. **Rule level**: the monitor itself may run in standard mode, but a rule can be defined with `STORE_ONLY` strategy; any event published for a match on that rule should use `STORE_ONLY`.
 
 Add an optional `processingStrategy` field to the policy health event config (TOML):
 
@@ -206,7 +208,7 @@ isFatal = false
 message = "Example message"
 recommendedAction = "NONE"
 errorCode = ["0"]
-processingStrategy = "PERSIST_ONLY" # optional; overrides module default for this policy
+processingStrategy = "STORE_ONLY" # optional; overrides module default for this policy
 ```
 
 File: `health-monitors/kubernetes-object-monitor/pkg/publisher/publisher.go`
@@ -214,7 +216,7 @@ File: `health-monitors/kubernetes-object-monitor/pkg/publisher/publisher.go`
 ```go
 type Publisher struct {
 	pcClient pb.PlatformConnectorClient
-	defaultProcessingStrategy string // NEW: Module-level default (PROCESS or PERSIST_ONLY)
+	defaultProcessingStrategy string // NEW: Module-level default (EXECUTE_REMEDIATION or STORE_ONLY)
 }
 
 func New(client pb.PlatformConnectorClient, defaultProcessingStrategy string) *Publisher {
@@ -254,7 +256,7 @@ type Engine struct {
 	store      datastore.Store
 	udsClient  pb.PlatformConnectorClient
 	config     *config.Config
-	processingStrategy string // NEW: Store processing strategy (PROCESS or PERSIST_ONLY)
+	processingStrategy string // NEW: Store processing strategy (EXECUTE_REMEDIATION or STORE_ONLY)
 	// ... other fields ...
 }
 
@@ -286,8 +288,8 @@ File: `health-monitors/gpu-health-monitor/gpu_health_monitor/cli.py`
 ```python
 @click.command()
 # ... existing options ...
-@click.option("--processingStrategy", type=str, default="PROCESS",
-              help="Event processing strategy: PROCESS or PERSIST_ONLY", required=False)
+@click.option("--processingStrategy", type=str, default="EXECUTE_REMEDIATION",
+              help="Event processing strategy: EXECUTE_REMEDIATION or STORE_ONLY", required=False)
 def cli(dcgm_addr, config_file, port, verbose, state_file, 
         dcgm_k8s_service_enabled, metadata_path, processingStrategy):
     # ... existing code ...
@@ -307,7 +309,7 @@ File: `health-monitors/gpu-health-monitor/gpu_health_monitor/platform_connector/
 class PlatformConnectorEventProcessor:
     def __init__(self, socket_path, node_name, exit, dcgm_errors_info_dict,
                  state_file_path, dcgm_health_conditions_categorization_mapping_config,
-                 metadata_path, processing_strategy="PROCESS"):  # NEW: Add parameter
+                 metadata_path, processing_strategy="EXECUTE_REMEDIATION"):  # NEW: Add parameter
         # ... existing fields ...
         self._processing_strategy = processing_strategy  # NEW: Store strategy
     
@@ -331,7 +333,7 @@ Platform connector receives health events through the gRPC connection:
 - Create/update **node conditions** on Kubernetes nodes
 - Create **Kubernetes events** for unhealthy, non-fatal events
 
-For `processingStrategy=PERSIST_ONLY` events, the platform connector should:
+For `processingStrategy=STORE_ONLY` events, the platform connector should:
 1. Store events in database (needed for observability)
 2. Not create node conditions
 3. Not create Kubernetes events
@@ -344,11 +346,11 @@ Add skip logic in `processHealthEvents()` method to skip adding node condition/e
 func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
 	var nodeConditions []corev1.NodeCondition
 
-	// NEW: Filter out PERSIST_ONLY events - they should not modify node conditions or create K8s events
+	// NEW: Filter out STORE_ONLY events - they should not modify node conditions or create K8s events
 	var processableEvents []*protos.HealthEvent
 	for _, healthEvent := range healthEvents.Events {
-		if healthEvent.ProcessingStrategy == protos.PERSIST_ONLY {
-			slog.Info("Skipping PERSIST_ONLY event - no node conditions or K8s events will be created",
+		if healthEvent.ProcessingStrategy == protos.STORE_ONLY {
+			slog.Info("Skipping STORE_ONLY event - no node conditions or K8s events will be created",
 				"node", healthEvent.NodeName,
 				"checkName", healthEvent.CheckName)
 			continue  // Skip this event
@@ -366,7 +368,7 @@ External systems need to know which `processingStrategy` was requested for prope
 
 File: `event-exporter/pkg/transformer/cloudevents.go`
 
-Update `ToCloudEvent()` function to add a `processingStrategy` field so that from the metrics we can tell which events were published for observability only (`PERSIST_ONLY`):
+Update `ToCloudEvent()` function to add a `processingStrategy` field so that from the metrics we can tell which events were published for observability only (`STORE_ONLY`):
 
 ```go
 func ToCloudEvent(event *pb.HealthEvent, metadata map[string]string) (*CloudEvent, error) {
@@ -396,8 +398,8 @@ func ToCloudEvent(event *pb.HealthEvent, metadata map[string]string) (*CloudEven
 ### Step 5: Store Client 
 
 We need new methods in mongodb and postgres pipeline builder:
-1. `BuildProcessableHealthEventInsertsPipeline` which filters `processingStrategy=PROCESS` inserted events for fault-quarantine module
-2. `BuildProcessableNonFatalUnhealthyInsertsPipeline` which filters `processingStrategy=PROCESS`, non-fatal and unhealthy inserted events for health-events-analyzer module.
+1. `BuildProcessableHealthEventInsertsPipeline` which filters `processingStrategy=EXECUTE_REMEDIATION` inserted events for fault-quarantine module
+2. `BuildProcessableNonFatalUnhealthyInsertsPipeline` which filters `processingStrategy=EXECUTE_REMEDIATION`, non-fatal and unhealthy inserted events for health-events-analyzer module.
 
 File: `store-client/pkg/client/mongodb_pipeline_builder.go`
 
@@ -410,14 +412,14 @@ func (b *MongoDBPipelineBuilder) BuildProcessableHealthEventInsertsPipeline() da
 				datastore.E("operationType", datastore.D(
 					datastore.E("$in", datastore.A("insert")),
 				)),
-				datastore.E("fullDocument.healthevent.processingstrategy", "PROCESS"),
+				datastore.E("fullDocument.healthevent.processingstrategy", "EXECUTE_REMEDIATION"),
 			)),
 		),
 	)
 }
 
 // BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
-// excluding PERSIST_ONLY events.
+// excluding STORE_ONLY events.
 func (b *MongoDBPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
 	return datastore.ToPipeline(
 		datastore.D(
@@ -425,7 +427,7 @@ func (b *MongoDBPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipelin
 				datastore.E("operationType", "insert"),
 				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
 				datastore.E("fullDocument.healthevent.ishealthy", false),
-				datastore.E("fullDocument.healthevent.processingstrategy", "PROCESS"),
+				datastore.E("fullDocument.healthevent.processingstrategy", "EXECUTE_REMEDIATION"),
 			)),
 		),
 	)
@@ -439,7 +441,7 @@ File: `store-client/pkg/client/postgresql_pipeline_builder.go`
 
 ```go
 // BuildProcessableHealthEventInsertsPipeline creates a pipeline that watches for health event inserts
-// excluding PERSIST_ONLY events.
+// excluding STORE_ONLY events.
 func (b *PostgreSQLPipelineBuilder) BuildProcessableHealthEventInsertsPipeline() datastore.Pipeline {
 	return datastore.ToPipeline(
 		datastore.D(
@@ -447,14 +449,14 @@ func (b *PostgreSQLPipelineBuilder) BuildProcessableHealthEventInsertsPipeline()
 				datastore.E("operationType", datastore.D(
 					datastore.E("$in", datastore.A("insert")),
 				)),
-				datastore.E("fullDocument.healthevent.processingstrategy", "PROCESS"),
+				datastore.E("fullDocument.healthevent.processingstrategy", "EXECUTE_REMEDIATION"),
 			)),
 		),
 	)
 }
 
 // BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
-// excluding PERSIST_ONLY events.
+// excluding STORE_ONLY events.
 func (b *PostgreSQLPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
 	return datastore.ToPipeline(
 		datastore.D(
@@ -462,7 +464,7 @@ func (b *PostgreSQLPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipe
 				datastore.E("operationType", datastore.D(datastore.E("$in", datastore.A("insert", "update")))),
 				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
 				datastore.E("fullDocument.healthevent.ishealthy", false),
-				datastore.E("fullDocument.healthevent.processingstrategy", "PROCESS"),
+				datastore.E("fullDocument.healthevent.processingstrategy", "EXECUTE_REMEDIATION"),
 			)),
 		),
 	)
@@ -474,7 +476,7 @@ func (b *PostgreSQLPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipe
 
 ### Step 5: Fault Quarantine Module
 
-Update this module to skip processing `PERSIST_ONLY` events so that:
+Update this module to skip processing `STORE_ONLY` events so that:
 - Node is not cordoned
 - Annotations and labels are not applied
 - `nodeQuarantined` status is not set (remains null)
@@ -483,14 +485,14 @@ Update this module to skip processing `PERSIST_ONLY` events so that:
 
 File: `fault-quarantine/pkg/initializer/init.go`
 
-Update the DB change stream pipeline to exclude `PERSIST_ONLY` events (so that fault-quarantine never receives them):
+Update the DB change stream pipeline to exclude `STORE_ONLY` events (so that fault-quarantine never receives them):
 
 ```go
 func InitializeAll(ctx context.Context, params InitializationParams) (*Components, error) {
 	// ...rest of the code
 	builder := client.GetPipelineBuilder()
 	
-	// call new helper method which filters inserted events with processingStrategy=PROCESS
+	// call new helper method which filters inserted events with processingStrategy=EXECUTE_REMEDIATION
 	pipeline := builder.BuildProcessableHealthEventInsertsPipeline()
 
 	// ...rest of the code
@@ -498,7 +500,7 @@ func InitializeAll(ctx context.Context, params InitializationParams) (*Component
 ```
 
 
-**Note:** We don't need skip logic in node-drainer and fault-remediation modules as they won't receive these events. Since fault-quarantine won't act on `PERSIST_ONLY` events, it won't set `nodeQuarantined`, so downstream pipeline filters will exclude them.
+**Note:** We don't need skip logic in node-drainer and fault-remediation modules as they won't receive these events. Since fault-quarantine won't act on `STORE_ONLY` events, it won't set `nodeQuarantined`, so downstream pipeline filters will exclude them.
 
 ---
 
@@ -506,29 +508,29 @@ func InitializeAll(ctx context.Context, params InitializationParams) (*Component
 
 Health Events Analyzer has two distinct processingStrategy concerns:
 
-1. **Incoming/historic events**: if an incoming (or historical) health event has `processingStrategy=PERSIST_ONLY`, it should be ignored
+1. **Incoming/historic events**: if an incoming (or historical) health event has `processingStrategy=STORE_ONLY`, it should be ignored
    by the analyzer for pattern detection (no queries/state transitions triggered by audit-only events).
-2. **Analyzer’s own output strategy**: if the analyzer itself is configured to publish with `PERSIST_ONLY`, then any aggregated health events
-   it publishes must have `processingStrategy=PERSIST_ONLY`.
-3. **Rule-based output strategy**: a single rule can also be configured to publish with `PERSIST_ONLY`; any new event it publishes should also use `PERSIST_ONLY`.
+2. **Analyzer’s own output strategy**: if the analyzer itself is configured to publish with `STORE_ONLY`, then any aggregated health events
+   it publishes must have `processingStrategy=STORE_ONLY`.
+3. **Rule-based output strategy**: a single rule can also be configured to publish with `STORE_ONLY`; any new event it publishes should also use `STORE_ONLY`.
 
-**Skip processing PERSIST_ONLY events in events-analyzer**
+**Skip processing STORE_ONLY events in events-analyzer**
 
-Update the change-stream pipeline to exclude `processingStrategy=PERSIST_ONLY` events, so the analyzer does not receive observability-only events for pattern detection.
+Update the change-stream pipeline to exclude `processingStrategy=STORE_ONLY` events, so the analyzer does not receive observability-only events for pattern detection.
 
 File: `health-events-analyzer/main.go`
 
 ```go
 func createPipeline() interface{} {
 	builder := client.GetPipelineBuilder()
-	// use new helper method which filters events with processingStrategy=PROCESS
+	// use new helper method which filters events with processingStrategy=EXECUTE_REMEDIATION
 	return builder.BuildProcessableNonFatalUnhealthyInsertsPipeline()
 }
 ```
 
-**Ignore PERSIST_ONLY events during mongo query**
+**Ignore STORE_ONLY events during mongo query**
 
-Update the default pipeline query to exclude `processingStrategy=PERSIST_ONLY` events. We need this condition for every rule that's why we are adding it at code level instead of keeping it at config file level.
+Update the default pipeline query to exclude `processingStrategy=STORE_ONLY` events. We need this condition for every rule that's why we are adding it at code level instead of keeping it at config file level.
 
 File: `health-events-analyzer/pkg/reconciler/reconciler.go`
 
@@ -544,14 +546,14 @@ func (r *Reconciler) getPipelineStages(
 		{
 			"$match": map[string]interface{}{
 				"healthevent.agent":  map[string]interface{}{"$ne": "health-events-analyzer"},
-				"healthevent.processingstrategy": map[string]interface{}{"$eq": "PROCESS"}, // Exclude PERSIST_ONLY by default
+				"healthevent.processingstrategy": map[string]interface{}{"$eq": "EXECUTE_REMEDIATION"}, // Exclude STORE_ONLY by default
 			},
 		},
 	}
 }
 ```
 
-**health-events-analyzer publishing with PERSIST_ONLY (module or rule)**
+**health-events-analyzer publishing with STORE_ONLY (module or rule)**
 
 Update the publish function to set the `processingStrategy` based on the module configuration and/or the rule configuration.
 
@@ -581,19 +583,19 @@ func (p *PublisherConfig) Publish(ctx context.Context, event *protos.HealthEvent
 
 ### Step 7: Configuration Changes
 
-Health monitors need to set `processingStrategy` based on configuration. The default strategy should be `PROCESS` (standard mode where cluster operations may be performed downstream).
+Health monitors need to set `processingStrategy` based on configuration. The default strategy should be `EXECUTE_REMEDIATION` (standard mode where cluster operations may be performed downstream).
 
 Add to Helm values.yaml (for each health monitor):
 
 ```yaml
 syslogHealthMonitor:
-  processingStrategy: PERSIST_ONLY  # PROCESS or PERSIST_ONLY
+  processingStrategy: STORE_ONLY  # EXECUTE_REMEDIATION or STORE_ONLY
 cspHealthMonitor:
-  processingStrategy: PERSIST_ONLY
+  processingStrategy: STORE_ONLY
 kubernetesObjectMonitor:
-  processingStrategy: PERSIST_ONLY
+  processingStrategy: STORE_ONLY
 gpuHealthMonitor:
-  processingStrategy: PERSIST_ONLY
+  processingStrategy: STORE_ONLY
 ```
 
 Update deployment template (add to container args in `_helpers.tpl` or `deployment.yaml`):
@@ -601,13 +603,13 @@ Update deployment template (add to container args in `_helpers.tpl` or `deployme
 ```yaml
 args:
   # ... existing args ...
-  - "--processingStrategy={{ .Values.processingStrategy | default \"PROCESS\" }}"
+  - "--processingStrategy={{ .Values.processingStrategy | default \"EXECUTE_REMEDIATION\" }}"
 ```
 
-Add command-line flag in health monitor with default value set to `PROCESS` (main.go):
+Add command-line flag in health monitor with default value set to `EXECUTE_REMEDIATION` (main.go):
 
 ```go
-processingStrategyFlag = flag.String("processingStrategy", "PROCESS", "Event processing strategy: PROCESS or PERSIST_ONLY")
+processingStrategyFlag = flag.String("processingStrategy", "EXECUTE_REMEDIATION", "Event processing strategy: EXECUTE_REMEDIATION or STORE_ONLY")
 ```
 
 ---
@@ -625,13 +627,13 @@ We considered extending the existing health event override feature in platform-c
    - NVBugs get open for node events
    - External systems running may alert on node/pod events
 
-2. Client-side intent should be a property of the health monitors themselves. As new monitors are added, the health monitors should be able to clearly state (by setting `processingStrategy=PERSIST_ONLY`) that published events are for observability only and no module should take action on them.
+2. Client-side intent should be a property of the health monitors themselves. As new monitors are added, the health monitors should be able to clearly state (by setting `processingStrategy=STORE_ONLY`) that published events are for observability only and no module should take action on them.
 
-### Using Health Event Overrides (override processingStrategy=PERSIST_ONLY)
-We considered extending the existing health event override feature in platform-connector to support setting `processingStrategy=PERSIST_ONLY` via CEL rules, instead of setting it at the health monitor level.
+### Using Health Event Overrides (override processingStrategy=STORE_ONLY)
+We considered extending the existing health event override feature in platform-connector to support setting `processingStrategy=STORE_ONLY` via CEL rules, instead of setting it at the health monitor level.
 
 **Why this was rejected:**
-When we add a new health monitor or health check, we don't want to tell operators to both enable the monitor and also to configure overrides to force `processingStrategy=PERSIST_ONLY` (observability-only).
+When we add a new health monitor or health check, we don't want to tell operators to both enable the monitor and also to configure overrides to force `processingStrategy=STORE_ONLY` (observability-only).
 The decided approach is similar to how feature flags work, where the feature flags are set to the default recommended value and the operators can change it if required.
 
 ---
