@@ -322,10 +322,28 @@ func (r *K8sConnector) constructHealthEventMessage(healthEvent *protos.HealthEve
 	return message
 }
 
+//nolint:cyclop
 func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
 	var nodeConditions []corev1.NodeCondition
 
+	// Filter out observability-only events. These should still be persisted by the platform connector,
+	// but MUST NOT create/update node conditions or Kubernetes events.
+	var processableEvents []*protos.HealthEvent
+
 	for _, healthEvent := range healthEvents.Events {
+		if healthEvent.ProcessingStrategy == protos.ProcessingStrategy_STORE_ONLY {
+			slog.Info("Skipping STORE_ONLY health event (no node conditions / node events)",
+				"node", healthEvent.NodeName,
+				"checkName", healthEvent.CheckName,
+				"agent", healthEvent.Agent)
+
+			continue
+		}
+
+		processableEvents = append(processableEvents, healthEvent)
+	}
+
+	for _, healthEvent := range processableEvents {
 		conditionType := corev1.NodeConditionType(string(healthEvent.CheckName))
 		message := r.fetchHealthEventMessage(healthEvent)
 
@@ -343,7 +361,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 
 	if len(nodeConditions) > 0 {
 		start := time.Now()
-		err := r.updateNodeConditions(ctx, healthEvents.Events)
+		err := r.updateNodeConditions(ctx, processableEvents)
 
 		duration := float64(time.Since(start).Milliseconds())
 		nodeConditionUpdateDuration.Observe(duration)
@@ -356,7 +374,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 		nodeConditionUpdateCounter.WithLabelValues(StatusSuccess).Inc()
 	}
 
-	for _, healthEvent := range healthEvents.Events {
+	for _, healthEvent := range processableEvents {
 		if !healthEvent.IsHealthy && !healthEvent.IsFatal {
 			event := &corev1.Event{
 				ObjectMeta: metav1.ObjectMeta{

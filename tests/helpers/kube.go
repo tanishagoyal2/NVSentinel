@@ -2204,3 +2204,46 @@ func VerifyLogFilesUploaded(ctx context.Context, t *testing.T, c klient.Client, 
 
 	t.Logf("✓ Log files verified for node %s", nodeName)
 }
+
+// WaitForDaemonSetRollout waits for a DaemonSet to complete its rollout.
+// It checks that all pods are updated and ready.
+func WaitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Client, name string) {
+	t.Helper()
+
+	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, name)
+
+	require.Eventually(t, func() bool {
+		daemonSet := &appsv1.DaemonSet{}
+		if err := client.Resources().Get(ctx, name, NVSentinelNamespace, daemonSet); err != nil {
+			t.Logf("Failed to get daemonset: %v", err)
+			return false
+		}
+
+		// Check if all desired pods are scheduled, updated, and ready
+		if daemonSet.Status.DesiredNumberScheduled == 0 {
+			t.Logf("DaemonSet has no desired pods scheduled yet")
+			return false
+		}
+
+		if daemonSet.Status.UpdatedNumberScheduled != daemonSet.Status.DesiredNumberScheduled {
+			t.Logf("DaemonSet rollout in progress: %d/%d pods updated",
+				daemonSet.Status.UpdatedNumberScheduled, daemonSet.Status.DesiredNumberScheduled)
+
+			return false
+		}
+
+		if daemonSet.Status.NumberReady != daemonSet.Status.DesiredNumberScheduled {
+			t.Logf("DaemonSet rollout in progress: %d/%d pods ready",
+				daemonSet.Status.NumberReady, daemonSet.Status.DesiredNumberScheduled)
+
+			return false
+		}
+
+		t.Logf("DaemonSet %s/%s rollout complete: %d/%d pods ready and updated",
+			NVSentinelNamespace, name, daemonSet.Status.NumberReady, daemonSet.Status.DesiredNumberScheduled)
+
+		return true
+	}, EventuallyWaitTimeout, WaitInterval, "daemonset %s/%s rollout should complete", NVSentinelNamespace, name)
+
+	t.Logf("DaemonSet %s/%s rollout completed successfully", NVSentinelNamespace, name)
+}

@@ -41,6 +41,7 @@ data:
     description = "Detect occurrence of fatal XIDs 2 times within 2 minutes where the burst window is 15 seconds and sticky XIDs window is 30 seconds (test config)"
     recommended_action = "CONTACT_SUPPORT"
     evaluate_rule = true
+    processing_strategy = "EXECUTE_REMEDIATION"
     stage = [
       '''
       {
@@ -1054,6 +1055,7 @@ data:
     message = "App passing bad data or using incorrect GPU methods; check error PID to identify source of the problem, if application is known good and problem persists, then contact support"
     recommended_action = "NONE"
     evaluate_rule = true
+    processing_strategy = "EXECUTE_REMEDIATION"
     stage = [
       '''
       {
