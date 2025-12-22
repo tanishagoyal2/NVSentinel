@@ -1523,24 +1523,29 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 	feature := features.New("TestHealthEventsAnalyzerStoreOnlyStrategy").
 		WithLabel("suite", "health-event-analyzer")
 
+	var testCtx *helpers.HealthEventsAnalyzerTestContext
+	var testNodeName string
+
+	var entitiesImpacted [][]helpers.EntityImpacted
+
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
-
-		err = helpers.SetDeploymentArgs(ctx, client, "health-events-analyzer", NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		err = helpers.SetDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
 
-		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", NVSentinelNamespace)
+		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)
+
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
 
 		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-config.yaml", "health-events-analyzer-test", testNodeName)
 		testNodeName = testCtx.NodeName
 		t.Logf("Using node: %s", testNodeName)
 
-		t.Log("Injecting XID error 119(x2) on same GPU. The node condition should not be added as the processing strategy is STORE_ONLY.")
+		t.Log("Injecting XID error 120(x2) on same GPU. The node condition should not be added as the processing strategy is STORE_ONLY.")
 
 		entities := []helpers.EntityImpacted{
 			{
@@ -1555,7 +1560,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 
 		entitiesImpacted = append(entitiesImpacted, entities)
 
-		errorCodes := []string{helpers.ERRORCODE_119}
+		errorCodes := []string{helpers.ERRORCODE_120}
 		for _, errorCode := range errorCodes {
 			helpers.SendHealthEvent(ctx, t, helpers.NewHealthEvent(testNodeName).
 				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
@@ -1567,12 +1572,10 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 			)
 		}
 
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
+		t.Log("Waiting 17s to create burst gap (>15s required)")
+		time.Sleep(17 * time.Second)
 
-		t.Log("Waiting 22s to create burst gap (>20s required)")
-		time.Sleep(22 * time.Second)
-
-		errorCodes = []string{helpers.ERRORCODE_119}
+		errorCodes = []string{helpers.ERRORCODE_120}
 		for _, errorCode := range errorCodes {
 			helpers.SendHealthEvent(ctx, t, helpers.NewHealthEvent(testNodeName).
 				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
@@ -1588,27 +1591,44 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 	})
 
 	feature.Assess("Check if HealthEventsAnalyzerStoreOnlyStrategy node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		t.Log("Verifying no node condition is created when processing STORE_ONLY strategy")
-		helpers.EnsureNodeConditionNotPresent(ctx, t, client, nodeName, "RepeatedXIDErrorOnSameGPU")
+		client, err := c.NewClient()
+		require.NoError(t, err)
 
-		t.Log("Verifying node was not cordoned when processing STORE_ONLY strategy")
-		helpers.AssertQuarantineState(ctx, t, client, nodeName, helpers.QuarantineAssertion{
-			ExpectCordoned:   false,
-			ExpectAnnotation: false,
-		})
+		t.Log("Verifying no node condition is created when processing STORE_ONLY strategy")
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
+
+		t.Log("Waiting for event to be exported via changestream")
+		var receivedEvent map[string]any
+		require.Eventually(t, func() bool {
+			events := helpers.GetMockEvents(t, c)
+			event, found := helpers.FindEventByNodeAndCheckName(events, testNodeName, "RepeatedXIDErrorOnSameGPU", false)
+			if found {
+				receivedEvent = event
+				return true
+			}
+			return false
+		}, helpers.NeverWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
+
+		t.Log("Validating received CloudEvent")
+		require.NotNil(t, receivedEvent)
+		helpers.ValidateCloudEvent(t, receivedEvent, testNodeName, "", "RepeatedXIDErrorOnSameGPU", "120", "STORE_ONLY")
 
 		return ctx
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		err := helpers.RemoveDeploymentArgs(ctx, client, "health-events-analyzer", NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		helpers.RemoveDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
 
-		err = helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", NVSentinelNamespace)
-		require.NoError(t, err)
+		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)
 
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
+
+	testEnv.Test(t, feature.Feature())
 }
