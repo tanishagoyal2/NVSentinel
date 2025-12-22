@@ -21,11 +21,12 @@ import (
 	"context"
 	"testing"
 
+	"tests/helpers"
+
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	"tests/helpers"
 )
 
 type k8sObjectMonitorContextKey int
@@ -117,6 +118,113 @@ func TestKubernetesObjectMonitor(t *testing.T) {
 
 			return true
 		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval)
+
+		return ctx
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
+func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
+	feature := features.New("Kubernetes Object Monitor with STORE_ONLY strategy - Node Not Ready Detection").
+		WithLabel("suite", "kubernetes-object-monitor").
+		WithLabel("component", "node-monitoring")
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		// Find the test node first
+		nodeList := &v1.NodeList{}
+		err = client.Resources().List(ctx, nodeList)
+		require.NoError(t, err)
+
+		var testNodeName string
+		for _, node := range nodeList.Items {
+			if node.Labels["type"] != "kwok" {
+				testNodeName = node.Name
+				break
+			}
+		}
+		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
+		t.Logf("Using test node: %s", testNodeName)
+
+		helpers.SetDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+			"--processing-strategy": "STORE_ONLY",
+		})
+
+		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
+
+		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
+	})
+
+	feature.Assess("Node NotReady triggers health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		nodeName := ctx.Value(k8sMonitorKeyNodeName).(string)
+		t.Logf("Setting TestCondition to False on node %s", nodeName)
+
+		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionFalse)
+
+		t.Log("Waiting for policy match annotation on node")
+		require.Never(t, func() bool {
+			node, err := helpers.GetNodeByName(ctx, client, nodeName)
+			if err != nil {
+				t.Logf("Failed to get node: %v", err)
+				return false
+			}
+
+			annotation, exists := node.Annotations[annotationKey]
+			if exists {
+				t.Logf("Annotation should not exist but found: %s", annotation)
+				return true
+			}
+
+			t.Logf("Node annotation correctly does not exist")
+			return false
+		}, helpers.NeverWaitTimeout, helpers.WaitInterval)
+		return ctx
+	})
+
+	feature.Assess("Node Ready recovery clears annotation", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		nodeName := ctx.Value(k8sMonitorKeyNodeName).(string)
+		t.Logf("Setting TestCondition to True on node %s", nodeName)
+
+		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionTrue)
+
+		t.Log("Waiting for policy match annotation to be cleared")
+		require.Eventually(t, func() bool {
+			node, err := helpers.GetNodeByName(ctx, client, nodeName)
+			if err != nil {
+				t.Logf("Failed to get node: %v", err)
+				return false
+			}
+
+			annotation, exists := node.Annotations[annotationKey]
+			if exists && annotation != "" {
+				t.Logf("Annotation still exists: %s", annotation)
+				return false
+			}
+
+			return true
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval)
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		helpers.RemoveDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+			"--processing-strategy": "STORE_ONLY",
+		})
+
+		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
 
 		return ctx
 	})
