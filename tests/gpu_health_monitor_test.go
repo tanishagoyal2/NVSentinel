@@ -481,9 +481,6 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 	})
 
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		// t.Logf("Waiting 30 seconds for the checking")
-		// time.Sleep(30 * time.Second)
-
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
