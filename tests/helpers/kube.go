@@ -2247,3 +2247,147 @@ func WaitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Cl
 
 	t.Logf("DaemonSet %s/%s rollout completed successfully", NVSentinelNamespace, name)
 }
+
+// SetDeploymentArgs sets or updates arguments for containers in a deployment.
+// If containerName is empty, applies to all containers. Otherwise, applies only to the named container.
+// Uses retry.RetryOnConflict for automatic retry handling.
+// Args is a map of flag to value, e.g., {"--processing-strategy": "STORE_ONLY", "--verbose": ""}.
+func SetDeploymentArgs(
+	ctx context.Context, c klient.Client, deploymentName, namespace, containerName string, args map[string]string,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment := &appsv1.Deployment{}
+		if err := c.Resources().Get(ctx, deploymentName, namespace, deployment); err != nil {
+			return err
+		}
+
+		if len(deployment.Spec.Template.Spec.Containers) == 0 {
+			return fmt.Errorf("deployment %s/%s has no containers", namespace, deploymentName)
+		}
+
+		found := false
+
+		for i := range deployment.Spec.Template.Spec.Containers {
+			container := &deployment.Spec.Template.Spec.Containers[i]
+
+			if containerName != "" && container.Name != containerName {
+				continue
+			}
+
+			found = true
+
+			setArgsOnContainer(container, args)
+		}
+
+		if containerName != "" && !found {
+			return fmt.Errorf("container %q not found in deployment %s/%s", containerName, namespace, deploymentName)
+		}
+
+		return c.Resources().Update(ctx, deployment)
+	})
+}
+
+func setArgsOnContainer(container *v1.Container, args map[string]string) {
+	for flag, value := range args {
+		found := false
+
+		for j := 0; j < len(container.Args); j++ {
+			existingArg := container.Args[j]
+
+			// Match --flag=value style
+			if strings.HasPrefix(existingArg, flag+"=") {
+				if value != "" {
+					container.Args[j] = flag + "=" + value
+				} else {
+					// No value means boolean flag, convert to just the flag
+					container.Args[j] = flag
+				}
+				found = true
+				break
+			}
+
+			// Match --flag or --flag value style
+			if existingArg == flag {
+				found = true
+				if value != "" {
+					// Check if next element is a value (not a flag)
+					if j+1 < len(container.Args) && !strings.HasPrefix(container.Args[j+1], "-") {
+						// Update the existing value
+						container.Args[j+1] = value
+					} else {
+						// Insert the value after the flag
+						container.Args = append(container.Args[:j+1], append([]string{value}, container.Args[j+1:]...)...)
+					}
+				}
+				break
+			}
+		}
+
+		if !found {
+			if value != "" {
+				// Add as --flag=value style
+				container.Args = append(container.Args, flag+"="+value)
+			} else {
+				// Add as boolean flag
+				container.Args = append(container.Args, flag)
+			}
+		}
+	}
+}
+
+// RemoveDeploymentArgs removes environment variables from containers in a deployment.
+// If containerName is empty, removes from all containers. Otherwise, removes only from the named container.
+// Uses retry.RetryOnConflict for automatic retry handling.
+func RemoveDeploymentArgs(
+	ctx context.Context, c klient.Client, deploymentName, namespace, containerName string, args map[string]string,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment := &appsv1.Deployment{}
+		if err := c.Resources().Get(ctx, deploymentName, namespace, deployment); err != nil {
+			return err
+		}
+
+		if len(deployment.Spec.Template.Spec.Containers) == 0 {
+			return fmt.Errorf("deployment %s/%s has no containers", namespace, deploymentName)
+		}
+
+		for i := range deployment.Spec.Template.Spec.Containers {
+			container := &deployment.Spec.Template.Spec.Containers[i]
+
+			if containerName != "" && container.Name != containerName {
+				continue
+			}
+
+			removeArgsFromContainer(container, args)
+		}
+
+		return c.Resources().Update(ctx, deployment)
+	})
+}
+
+func removeArgsFromContainer(container *v1.Container, args map[string]string) {
+	for flag := range args {
+		for j := 0; j < len(container.Args); j++ {
+			existingArg := container.Args[j]
+
+			// Match --flag=value style
+			if strings.HasPrefix(existingArg, flag+"=") {
+				container.Args = append(container.Args[:j], container.Args[j+1:]...)
+				break
+			}
+
+			// Match --flag or --flag value style
+			if existingArg == flag {
+				// Check if next element is a value (not a flag)
+				if j+1 < len(container.Args) && !strings.HasPrefix(container.Args[j+1], "-") {
+					// Remove both flag and its value
+					container.Args = append(container.Args[:j], container.Args[j+2:]...)
+				} else {
+					// Remove just the flag
+					container.Args = append(container.Args[:j], container.Args[j+1:]...)
+				}
+				break
+			}
+		}
+	}
+}
