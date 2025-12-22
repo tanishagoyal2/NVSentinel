@@ -217,6 +217,42 @@ func FindEventByNodeAndMessage(events []map[string]any, nodeName, message string
 	return nil, false
 }
 
+// FindEventByNodeAndCheckName searches for a CloudEvent matching the given nodeName, checkName, and isHealthy status
+func FindEventByNodeAndCheckName(events []map[string]any, nodeName, checkName string, isHealthy bool) (map[string]any, bool) {
+	for _, event := range events {
+		data, ok := event["data"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		healthEvent, ok := data["healthEvent"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		eventNodeName, ok := healthEvent["nodeName"].(string)
+		if !ok {
+			continue
+		}
+
+		eventCheckName, ok := healthEvent["checkName"].(string)
+		if !ok {
+			continue
+		}
+
+		eventIsHealthy, ok := healthEvent["isHealthy"].(bool)
+		if !ok {
+			continue
+		}
+
+		if eventNodeName == nodeName && eventCheckName == checkName && eventIsHealthy == isHealthy {
+			return event, true
+		}
+	}
+
+	return nil, false
+}
+
 // ValidateCloudEvent validates that a CloudEvent has the expected structure and content
 func ValidateCloudEvent(
 	t *testing.T,

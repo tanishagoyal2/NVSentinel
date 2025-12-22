@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"maps"
 
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,15 +36,21 @@ const (
 type PolicyMatchState map[string]string
 
 type Manager struct {
-	client client.Client
+	client             client.Client
+	processingStrategy pb.ProcessingStrategy
 }
 
-func NewManager(c client.Client) *Manager {
-	return &Manager{client: c}
+func NewManager(c client.Client, processingStrategy pb.ProcessingStrategy) *Manager {
+	return &Manager{client: c, processingStrategy: processingStrategy}
 }
 
 func (m *Manager) AddMatch(ctx context.Context, nodeName, stateKey, targetNode string) error {
 	slog.Debug("Adding match state to annotation", "node", nodeName, "stateKey", stateKey, "targetNode", targetNode)
+
+	if m.processingStrategy == pb.ProcessingStrategy_STORE_ONLY {
+		slog.Debug("Skipping match state update for STORE_ONLY strategy", "node", nodeName, "stateKey", stateKey, "targetNode", targetNode)
+		return nil
+	}
 
 	return m.updateAnnotation(ctx, nodeName, func(state PolicyMatchState) (PolicyMatchState, bool) {
 		if _, exists := state[stateKey]; exists {
@@ -58,6 +65,11 @@ func (m *Manager) AddMatch(ctx context.Context, nodeName, stateKey, targetNode s
 
 func (m *Manager) RemoveMatch(ctx context.Context, nodeName, stateKey string) error {
 	slog.Debug("Removing match state from annotation", "node", nodeName, "stateKey", stateKey)
+
+	if m.processingStrategy == pb.ProcessingStrategy_STORE_ONLY {
+		slog.Debug("Skipping match state removal for STORE_ONLY strategy", "node", nodeName, "stateKey", stateKey)
+		return nil
+	}
 
 	err := m.updateAnnotation(ctx, nodeName, func(state PolicyMatchState) (PolicyMatchState, bool) {
 		if _, exists := state[stateKey]; !exists {
