@@ -87,7 +87,7 @@ func TestNormalizePCI(t *testing.T) {
 
 func TestDetermineFatality(t *testing.T) {
 	xidHandler, err := NewXIDHandler("test-node",
-		"test-agent", "test-component", "test-check", "http://localhost:8080", "/tmp/metadata.json")
+		"test-agent", "test-component", "test-check", "http://localhost:8080", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 	assert.Nil(t, err)
 
 	testCases := []struct {
@@ -139,7 +139,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "NVRM GPU Map Line",
 			message: "NVRM: GPU at PCI:0000:00:08.0: GPU-12345678-1234-1234-1234-123456789012",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return nil, nil
@@ -154,7 +154,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid XID Message",
 			message: "NVRM: Xid (PCI:0000:00:08.0): 79, pid=12345, name=test-process",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_STORE_ONLY)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return &parser.Response{
@@ -191,13 +191,14 @@ func TestProcessLine(t *testing.T) {
 				assert.Equal(t, "0000:00:08.0", event.EntitiesImpacted[0].EntityValue)
 				// Issue #197: Message field stores full journal, no Metadata duplication
 				assert.Empty(t, event.Metadata)
+				assert.Equal(t, pb.ProcessingStrategy_STORE_ONLY, event.ProcessingStrategy)
 			},
 		},
 		{
 			name:    "Valid XID with GPU UUID",
 			message: "NVRM: Xid (PCI:0000:00:08.0): 79, pid=12345, name=test-process",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return &parser.Response{
@@ -227,13 +228,14 @@ func TestProcessLine(t *testing.T) {
 				assert.Equal(t, "GPU-12345678-1234-1234-1234-123456789012", event.EntitiesImpacted[1].EntityValue)
 				assert.Equal(t, "NVRM: Xid (PCI:0000:00:08.0): 79, pid=12345, name=test-process", event.Message)
 				assert.Empty(t, event.Metadata)
+				assert.Equal(t, pb.ProcessingStrategy_EXECUTE_REMEDIATION, event.ProcessingStrategy)
 			},
 		},
 		{
 			name:    "Parser Returns Error",
 			message: "Some random message",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return nil, errors.New("parse error")
@@ -248,7 +250,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Parser Returns Nil Response",
 			message: "Some random message",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return nil, nil
@@ -263,7 +265,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Parser Returns Success=false",
 			message: "Some random message",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return &parser.Response{
@@ -302,7 +304,7 @@ func TestProcessLine(t *testing.T) {
 }
 
 func TestCreateHealthEventFromResponse(t *testing.T) {
-	handler, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+	handler, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 
 	testCases := []struct {
 		name          string
@@ -343,6 +345,7 @@ func TestCreateHealthEventFromResponse(t *testing.T) {
 				assert.Equal(t, "test-node", event.NodeName)
 				assert.NotNil(t, event.GeneratedTimestamp)
 				assert.Empty(t, event.Metadata)
+				assert.Equal(t, pb.ProcessingStrategy_EXECUTE_REMEDIATION, event.ProcessingStrategy)
 			},
 		},
 		{
@@ -372,6 +375,7 @@ func TestCreateHealthEventFromResponse(t *testing.T) {
 				assert.Equal(t, "GPU-ABCDEF12-3456-7890-ABCD-EF1234567890", event.EntitiesImpacted[1].EntityValue)
 				assert.Equal(t, "Test XID message", event.Message)
 				assert.Empty(t, event.Metadata)
+				assert.Equal(t, pb.ProcessingStrategy_EXECUTE_REMEDIATION, event.ProcessingStrategy)
 			},
 		},
 	}
@@ -422,7 +426,7 @@ func TestNewXIDHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, err := NewXIDHandler(tc.nodeName, tc.agentName, tc.componentClass, tc.checkName, tc.xidAnalyserEndpoint, "/tmp/metadata.json")
+			handler, err := NewXIDHandler(tc.nodeName, tc.agentName, tc.componentClass, tc.checkName, tc.xidAnalyserEndpoint, "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 
 			if tc.expectError {
 				assert.Error(t, err)
