@@ -31,6 +31,9 @@ resources:
 
 logLevel: info
 
+processingStrategy: EXECUTE_REMEDIATION
+
+# Enable flags for the rules to be evaluated.
 enableMultipleRemediationsRule: true
 enableRepeatedXIDErrorOnSameGPURule: true
 enableRepeatedXID31OnSameGPURule: true

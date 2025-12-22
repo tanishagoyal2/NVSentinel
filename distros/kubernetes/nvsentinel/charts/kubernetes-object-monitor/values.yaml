@@ -104,3 +104,5 @@ volumes:
       path: /var/run/nvsentinel
       type: DirectoryOrCreate
 
+processingStrategy: EXECUTE_REMEDIATION
+

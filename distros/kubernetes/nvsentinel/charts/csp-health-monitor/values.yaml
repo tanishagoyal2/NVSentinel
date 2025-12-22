@@ -49,6 +49,8 @@ tolerations: []
 
 podAnnotations: {}
 
+processingStrategy: EXECUTE_REMEDIATION
+
 # Log verbosity level for the main CSP health monitor container (e.g. "debug", "info", "warn", "error")
 logLevel: info
 
