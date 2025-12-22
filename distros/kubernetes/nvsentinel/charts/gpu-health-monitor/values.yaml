@@ -53,3 +53,5 @@ tolerations: []
 podAnnotations: {}
 
 verbose: "False"
+
+processingStrategy: EXECUTE_REMEDIATION

@@ -47,3 +47,5 @@ affinity: {}
 tolerations: []
 
 logLevel: info
+
+processingStrategy: EXECUTE_REMEDIATION

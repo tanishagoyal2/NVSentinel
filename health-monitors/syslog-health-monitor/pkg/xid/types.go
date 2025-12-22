@@ -17,6 +17,7 @@ package xid
 import (
 	"regexp"
 
+	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/health-monitors/syslog-health-monitor/pkg/metadata"
 	"github.com/nvidia/nvsentinel/health-monitors/syslog-health-monitor/pkg/xid/parser"
 )
@@ -30,6 +31,7 @@ type XIDHandler struct {
 	defaultAgentName      string
 	defaultComponentClass string
 	checkName             string
+	processingStrategy    pb.ProcessingStrategy
 
 	pciToGPUUUID   map[string]string
 	parser         parser.Parser

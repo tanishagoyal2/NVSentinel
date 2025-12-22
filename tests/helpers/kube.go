@@ -2204,3 +2204,187 @@ func VerifyLogFilesUploaded(ctx context.Context, t *testing.T, c klient.Client, 
 
 	t.Logf("✓ Log files verified for node %s", nodeName)
 }
+
+// WaitForDaemonSetRollout waits for a DaemonSet to complete its rollout.
+// It checks that all pods are updated and ready.
+func waitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Client, name string) {
+	t.Helper()
+
+	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, name)
+
+	require.Eventually(t, func() bool {
+		daemonSet := &appsv1.DaemonSet{}
+		if err := client.Resources().Get(ctx, name, NVSentinelNamespace, daemonSet); err != nil {
+			t.Logf("Failed to get daemonset: %v", err)
+			return false
+		}
+
+		// Check if all desired pods are scheduled, updated, and ready
+		if daemonSet.Status.DesiredNumberScheduled == 0 {
+			t.Logf("DaemonSet has no desired pods scheduled yet")
+			return false
+		}
+
+		if daemonSet.Status.UpdatedNumberScheduled != daemonSet.Status.DesiredNumberScheduled {
+			t.Logf("DaemonSet rollout in progress: %d/%d pods updated",
+				daemonSet.Status.UpdatedNumberScheduled, daemonSet.Status.DesiredNumberScheduled)
+
+			return false
+		}
+
+		if daemonSet.Status.NumberReady != daemonSet.Status.DesiredNumberScheduled {
+			t.Logf("DaemonSet rollout in progress: %d/%d pods ready",
+				daemonSet.Status.NumberReady, daemonSet.Status.DesiredNumberScheduled)
+
+			return false
+		}
+
+		t.Logf("DaemonSet %s/%s rollout complete: %d/%d pods ready and updated",
+			NVSentinelNamespace, name, daemonSet.Status.NumberReady, daemonSet.Status.DesiredNumberScheduled)
+
+		return true
+	}, EventuallyWaitTimeout, WaitInterval, "daemonset %s/%s rollout should complete", NVSentinelNamespace, name)
+
+	t.Logf("DaemonSet %s/%s rollout completed successfully", NVSentinelNamespace, name)
+}
+
+// updateContainerProcessingStrategy updates the processing strategy argument for a specific container.
+func updateContainerProcessingStrategy(container *v1.Container) {
+	processingStrategyArg := "--processing-strategy=STORE_ONLY"
+
+	for j, arg := range container.Args {
+		if strings.HasPrefix(arg, "--processing-strategy=") {
+			container.Args[j] = processingStrategyArg
+			return
+		}
+
+		if arg == "--processing-strategy" && j+1 < len(container.Args) {
+			container.Args[j+1] = "STORE_ONLY"
+			return
+		}
+	}
+
+	container.Args = append(container.Args, processingStrategyArg)
+}
+
+// UpdateDaemonSetProcessingStrategy updates the daemonset to use STORE_ONLY processing strategy.
+func UpdateDaemonSetProcessingStrategy(ctx context.Context, t *testing.T,
+	client klient.Client, daemonsetName string, containerName string) (*appsv1.DaemonSet, error) {
+	t.Helper()
+
+	t.Logf("Updating daemonset %s/%s to use STORE_ONLY processing strategy", NVSentinelNamespace, daemonsetName)
+
+	var originalDaemonSet *appsv1.DaemonSet
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		daemonSet := &appsv1.DaemonSet{}
+		if err := client.Resources().Get(ctx, daemonsetName, NVSentinelNamespace, daemonSet); err != nil {
+			return err
+		}
+
+		if originalDaemonSet == nil {
+			originalDaemonSet = daemonSet.DeepCopy()
+		}
+
+		for i := range daemonSet.Spec.Template.Spec.Containers {
+			container := &daemonSet.Spec.Template.Spec.Containers[i]
+			if container.Name == containerName {
+				updateContainerProcessingStrategy(container)
+				break
+			}
+		}
+
+		return client.Resources().Update(ctx, daemonSet)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, daemonsetName)
+	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
+
+	t.Logf("Waiting 10 seconds for daemonset pods to start")
+	time.Sleep(10 * time.Second)
+
+	return originalDaemonSet, nil
+}
+
+func RestoreDaemonSet(ctx context.Context, t *testing.T, client klient.Client,
+	originalDaemonSet *appsv1.DaemonSet, daemonsetName string,
+) error {
+	t.Helper()
+
+	if originalDaemonSet == nil {
+		t.Log("No original daemonset to restore, skipping")
+		return nil
+	}
+
+	t.Logf("Restoring daemonset %s/%s to original state", NVSentinelNamespace, daemonsetName)
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		daemonSet := &appsv1.DaemonSet{}
+		if err := client.Resources().Get(ctx, daemonsetName, NVSentinelNamespace, daemonSet); err != nil {
+			return err
+		}
+
+		daemonSet.Spec.Template.Spec.Containers = originalDaemonSet.Spec.Template.Spec.Containers
+
+		return client.Resources().Update(ctx, daemonSet)
+	})
+	if err != nil {
+		return err
+	}
+
+	t.Logf("Waiting for daemonset %s/%s rollout to complete after restoration", NVSentinelNamespace, daemonsetName)
+	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
+
+	t.Log("DaemonSet restored successfully")
+
+	return nil
+}
+
+func GetDaemonSetPodOnWorkerNode(ctx context.Context, t *testing.T, client klient.Client,
+	daemonsetName string, podNamePattern string) (*v1.Pod, error) {
+	t.Helper()
+
+	var resultPod *v1.Pod
+
+	require.Eventually(t, func() bool {
+		// Get the pod
+		pod, err := GetPodOnWorkerNode(ctx, t, client, NVSentinelNamespace, podNamePattern)
+		if err != nil {
+			t.Logf("Failed to get pod: %v", err)
+			return false
+		}
+
+		// Verify pod is not being deleted
+		if pod.DeletionTimestamp != nil {
+			t.Logf("Pod %s is being deleted, waiting for replacement", pod.Name)
+			return false
+		}
+
+		// Verify pod is running and ready
+		if pod.Status.Phase != v1.PodRunning {
+			t.Logf("Pod %s is not in Running phase: %s", pod.Name, pod.Status.Phase)
+			return false
+		}
+
+		// Check all containers are ready
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == v1.PodReady && cond.Status != v1.ConditionTrue {
+				t.Logf("Pod %s is not ready yet", pod.Name)
+				return false
+			}
+		}
+
+		resultPod = pod
+
+		return true
+	}, EventuallyWaitTimeout, WaitInterval, "daemonset pod from current rollout should be running and ready")
+
+	if resultPod == nil {
+		return nil, fmt.Errorf("failed to get ready pod for daemonset %s", daemonsetName)
+	}
+
+	return resultPod, nil
+}
