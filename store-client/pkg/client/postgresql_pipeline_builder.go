@@ -16,6 +16,7 @@ package client
 
 import (
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
+	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
 )
 
@@ -110,6 +111,21 @@ func (b *PostgreSQLPipelineBuilder) BuildAllHealthEventInsertsPipeline() datasto
 				datastore.E("operationType", datastore.D(
 					datastore.E("$in", datastore.A("insert")),
 				)),
+			)),
+		),
+	)
+}
+
+// BuildProcessableHealthEventInsertsPipeline creates a pipeline that watches for health event inserts
+// with processingStrategy=EXECUTE_REMEDIATION
+func (b *PostgreSQLPipelineBuilder) BuildProcessableHealthEventInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", datastore.D(
+					datastore.E("$in", datastore.A("insert")),
+				)),
+				datastore.E("fullDocument.healthevent.processingstrategy", int32(protos.ProcessingStrategy_EXECUTE_REMEDIATION)),
 			)),
 		),
 	)

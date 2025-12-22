@@ -29,6 +29,14 @@ message HealthEvents {
   repeated HealthEvent events = 2;
 }
 
+// ProcessingStrategy defines how downstream modules should handle the event.
+// EXECUTE_REMEDIATION: normal behavior; downstream modules may update cluster state.
+// STORE_ONLY: observability-only behavior; event should be persisted/exported but should not modify cluster resources.
+enum ProcessingStrategy {
+  EXECUTE_REMEDIATION = 0;
+  STORE_ONLY = 1;
+}
+
 enum RecommendedAction {
   NONE = 0;
   COMPONENT_RESET = 2;
@@ -66,6 +74,7 @@ message HealthEvent {
   string nodeName = 13;
   BehaviourOverrides quarantineOverrides = 14;
   BehaviourOverrides drainOverrides = 15;
+  ProcessingStrategy processingStrategy = 16;
 }
 
 message BehaviourOverrides {
