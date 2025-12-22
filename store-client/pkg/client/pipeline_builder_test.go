@@ -85,7 +85,7 @@ func TestProcessableHealthEventInsertsPipeline(t *testing.T) {
 	}
 }
 
-func TestProcessableNonFatalUnhealthyInsertsPipeline(t *testing.T) {
+func TestNonFatalUnhealthyInsertsPipeline(t *testing.T) {
 	testCases := []struct {
 		name    string
 		builder PipelineBuilder
@@ -96,7 +96,7 @@ func TestProcessableNonFatalUnhealthyInsertsPipeline(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pipeline := tc.builder.BuildProcessableNonFatalUnhealthyInsertsPipeline()
+			pipeline := tc.builder.BuildNonFatalUnhealthyInsertsPipeline()
 			require.NotNil(t, pipeline)
 			require.NotEmpty(t, pipeline)
 			assert.Len(t, pipeline, 1, "Pipeline should have 1 stage")
@@ -182,8 +182,8 @@ func TestBackwardCompatibility(t *testing.T) {
 		require.NotEmpty(t, pipeline)
 	})
 
-	t.Run("BuildProcessableNonFatalUnhealthyInsertsPipeline", func(t *testing.T) {
-		pipeline := BuildProcessableNonFatalUnhealthyInsertsPipeline()
+	t.Run("BuildNonFatalUnhealthyInsertsPipeline", func(t *testing.T) {
+		pipeline := BuildNonFatalUnhealthyInsertsPipeline()
 		require.NotNil(t, pipeline)
 		require.NotEmpty(t, pipeline)
 	})
