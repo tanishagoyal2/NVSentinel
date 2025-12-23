@@ -26,7 +26,6 @@ import (
 	"tests/helpers"
 
 	"github.com/stretchr/testify/require"
-	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
@@ -423,7 +422,8 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
-		originalDaemonSet, err := helpers.UpdateDaemonSetProcessingStrategy(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName)
+		err = helpers.UpdateDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, map[string]string{
+			"--processing-strategy": "STORE_ONLY"})
 		require.NoError(t, err, "failed to update GPU health monitor processing strategy")
 
 		gpuHealthMonitorPod, err := helpers.GetDaemonSetPodOnWorkerNode(ctx, t, client, GPUHealthMonitorDaemonSetName, "gpu-health-monitor-dcgm-4.x")
@@ -442,7 +442,6 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		require.NoError(t, err, "failed to set ManagedByNVSentinel label")
 
 		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keyOriginalDaemonSet, originalDaemonSet)
 		ctx = context.WithValue(ctx, keyGpuHealthMonitorPodName, gpuHealthMonitorPodName)
 
 		restConfig := client.RESTConfig()
@@ -471,7 +470,7 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		t.Logf("Checking node condition is not applied on node %s", nodeName)
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, nodeName, "GpuInforomWatch")
 
-		t.Log("Verifying node was not cordoned when processing STORE_ONLY strategy")
+		t.Log("Verifying node was not cordoned")
 		helpers.AssertQuarantineState(ctx, t, client, nodeName, helpers.QuarantineAssertion{
 			ExpectCordoned:   false,
 			ExpectAnnotation: false,
@@ -485,9 +484,9 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		require.NoError(t, err, "failed to create kubernetes client")
 
 		nodeName := ctx.Value(keyNodeName).(string)
-		originalDaemonSet := ctx.Value(keyOriginalDaemonSet).(*appsv1.DaemonSet)
 
-		err = helpers.RestoreDaemonSet(ctx, t, client, originalDaemonSet, "gpu-health-monitor-dcgm-4.x")
+		err = helpers.RemoveDaemonSetArgs(ctx, t, client, "gpu-health-monitor-dcgm-4.x", "gpu-health-monitor", map[string]string{
+			"--processing-strategy": "EXECUTE_REMEDIATION"})
 		require.NoError(t, err, "failed to restore GPU health monitor daemon set")
 
 		restConfig := client.RESTConfig()
@@ -499,46 +498,11 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		}
 		podName := podNameVal.(string)
 
-		clearCommands := []struct {
-			name      string
-			fieldID   string
-			value     string
-			condition string
-		}{
-			{"Inforom", "84", "1", "GpuInforomWatch"},
-			{"Memory", "395", "0", "GpuMemWatch"},
-		}
-
 		t.Logf("Clearing injected errors on node %s", nodeName)
-		for _, clearCmd := range clearCommands {
-			cmd := []string{"/bin/sh", "-c",
-				fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f %s -v %s",
-					dcgmServiceHost, dcgmServicePort, clearCmd.fieldID, clearCmd.value)}
-			_, _, _ = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
-		}
-
-		t.Logf("Waiting for node conditions to be cleared automatically on %s", nodeName)
-		for _, clearCmd := range clearCommands {
-			t.Logf("  Waiting for %s condition to clear", clearCmd.condition)
-			require.Eventually(t, func() bool {
-				condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
-					clearCmd.condition, "")
-				if err != nil {
-					return false
-				}
-				// Condition should either be removed or become healthy (Status=False)
-				if condition == nil {
-					t.Logf("  %s condition removed", clearCmd.condition)
-					return true
-				}
-				if condition.Status == v1.ConditionFalse {
-					t.Logf("  %s condition became healthy", clearCmd.condition)
-					return true
-				}
-				t.Logf("  %s condition still unhealthy: %s", clearCmd.condition, condition.Message)
-				return false
-			}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "%s condition should be cleared", clearCmd.condition)
-		}
+		cmd := []string{"/bin/sh", "-c",
+			fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f %s -v %s",
+				dcgmServiceHost, dcgmServicePort, "84", "1")}
+		_, _, _ = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
 
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
