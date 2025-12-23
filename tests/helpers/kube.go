@@ -2335,7 +2335,7 @@ func setArgsOnContainer(container *v1.Container, args map[string]string) {
 	}
 }
 
-// RemoveDeploymentArgs removes environment variables from containers in a deployment.
+// RemoveDeploymentArgs removes container arguments in a deployment.
 // If containerName is empty, removes from all containers. Otherwise, removes only from the named container.
 // Uses retry.RetryOnConflict for automatic retry handling.
 func RemoveDeploymentArgs(
