@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/klient"
 )
@@ -32,15 +31,13 @@ const (
 
 // helper function to set up syslog health monitor and port forward to it
 func SetUpSyslogHealthMonitor(ctx context.Context, t *testing.T,
-	client klient.Client, updatedDaemonSet bool) (string, *appsv1.DaemonSet, *v1.Pod, chan struct{}) {
-	var originalDaemonSet *appsv1.DaemonSet
-
+	client klient.Client, args map[string]string) (string, *v1.Pod, chan struct{}) {
 	var err error
 
 	var syslogPod *v1.Pod
 
-	if updatedDaemonSet {
-		originalDaemonSet, err = UpdateDaemonSetProcessingStrategy(ctx, t, client, SyslogDaemonSetName, SyslogContainerName)
+	if args != nil {
+		err = UpdateDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, args)
 		require.NoError(t, err, "failed to update syslog health monitor processing strategy")
 	}
 
@@ -70,18 +67,18 @@ func SetUpSyslogHealthMonitor(ctx context.Context, t *testing.T,
 	err = SetNodeManagedByNVSentinel(ctx, client, testNodeName, false)
 	require.NoError(t, err, "failed to set ManagedByNVSentinel label")
 
-	return testNodeName, originalDaemonSet, syslogPod, stopChan
+	return testNodeName, syslogPod, stopChan
 }
 
 // helper function to roll back syslog health monitor daemonset and stop the port forward
 func TearDownSyslogHealthMonitor(ctx context.Context, t *testing.T, client klient.Client,
-	originalDaemonSet *appsv1.DaemonSet, nodeName string, stopChan chan struct{},
-	updatedDaemonSet bool, podName string) {
+	nodeName string, stopChan chan struct{},
+	args map[string]string, podName string) {
 	t.Log("Stopping port-forward")
 	close(stopChan)
 
-	if updatedDaemonSet {
-		err := RestoreDaemonSet(ctx, t, client, originalDaemonSet, "syslog-health-monitor-regular")
+	if args != nil {
+		err := RemoveDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, args)
 		require.NoError(t, err, "failed to restore syslog health monitor daemon set")
 	}
 

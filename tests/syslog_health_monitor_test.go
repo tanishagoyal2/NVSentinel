@@ -25,7 +25,6 @@ import (
 	"tests/helpers"
 
 	"github.com/stretchr/testify/require"
-	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
@@ -34,10 +33,9 @@ import (
 type contextKey string
 
 const (
-	keySyslogNodeName  contextKey = "nodeName"
-	keyStopChan        contextKey = "stopChan"
-	keySyslogPodName   contextKey = "syslogPodName"
-	keySyslogDaemonSet contextKey = "syslogDaemonSet"
+	keySyslogNodeName contextKey = "nodeName"
+	keyStopChan       contextKey = "stopChan"
+	keySyslogPodName  contextKey = "syslogPodName"
 )
 
 // TestSyslogHealthMonitorXIDDetection tests burst XID injection and aggregation
@@ -50,13 +48,12 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
-		testNodeName, originalDaemonSet, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, false)
+		testNodeName, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, nil)
 		require.NoError(t, err, "failed to set up syslog health monitor")
 
 		ctx = context.WithValue(ctx, keySyslogNodeName, testNodeName)
 		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
 		ctx = context.WithValue(ctx, keyStopChan, stopChan)
-		ctx = context.WithValue(ctx, keySyslogDaemonSet, originalDaemonSet)
 
 		return ctx
 	})
@@ -165,11 +162,10 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 		require.NoError(t, err, "failed to create kubernetes client")
 
 		nodeName := ctx.Value(keySyslogNodeName).(string)
-		originalDaemonSet := ctx.Value(keySyslogDaemonSet).(*appsv1.DaemonSet)
 		syslogPod := ctx.Value(keySyslogPodName).(string)
 		stopChan := ctx.Value(keyStopChan).(chan struct{})
 
-		helpers.TearDownSyslogHealthMonitor(ctx, t, client, originalDaemonSet, nodeName, stopChan, false, syslogPod)
+		helpers.TearDownSyslogHealthMonitor(ctx, t, client, nodeName, stopChan, nil, syslogPod)
 
 		return ctx
 	})
@@ -301,10 +297,9 @@ func TestSyslogHealthMonitorSXIDDetection(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
-		testNodeName, originalDaemonSet, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, false)
+		testNodeName, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, nil)
 
 		ctx = context.WithValue(ctx, keySyslogNodeName, testNodeName)
-		ctx = context.WithValue(ctx, keySyslogDaemonSet, originalDaemonSet)
 		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
 		ctx = context.WithValue(ctx, keyStopChan, stopChan)
 		return ctx
@@ -354,10 +349,9 @@ func TestSyslogHealthMonitorSXIDDetection(t *testing.T) {
 
 		nodeName := ctx.Value(keySyslogNodeName).(string)
 		stopChan := ctx.Value(keyStopChan).(chan struct{})
-		originalDaemonSet := ctx.Value(keySyslogDaemonSet).(*appsv1.DaemonSet)
 		syslogPod := ctx.Value(keySyslogPodName).(string)
 
-		helpers.TearDownSyslogHealthMonitor(ctx, t, client, originalDaemonSet, nodeName, stopChan, false, syslogPod)
+		helpers.TearDownSyslogHealthMonitor(ctx, t, client, nodeName, stopChan, nil, syslogPod)
 
 		return ctx
 	})
@@ -375,16 +369,17 @@ func TestSyslogHealthMonitorStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
-		testNodeName, originalDaemonSet, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, true)
+		testNodeName, syslogPod, stopChan := helpers.SetUpSyslogHealthMonitor(ctx, t, client, map[string]string{
+			"--processing-strategy": "STORE_ONLY",
+		})
 
 		ctx = context.WithValue(ctx, keySyslogNodeName, testNodeName)
 		ctx = context.WithValue(ctx, keyStopChan, stopChan)
 		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
-		ctx = context.WithValue(ctx, keySyslogDaemonSet, originalDaemonSet)
 		return ctx
 	})
 
-	feature.Assess("Inject XID errors and verify GPU lookup via NVSwitch topology", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Inject XID errors and verify no node condition is created when running in STORE_ONLY strategy", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
@@ -396,10 +391,10 @@ func TestSyslogHealthMonitorStoreOnlyStrategy(t *testing.T) {
 
 		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, xidMessages)
 
-		t.Log("Verifying no node condition is created when processing STORE_ONLY strategy")
+		t.Log("Verifying no node condition is created")
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, nodeName, "SysLogsXIDError")
 
-		t.Log("Verifying node was not cordoned when processing STORE_ONLY strategy")
+		t.Log("Verifying node was not cordoned")
 		helpers.AssertQuarantineState(ctx, t, client, nodeName, helpers.QuarantineAssertion{
 			ExpectCordoned:   false,
 			ExpectAnnotation: false,
@@ -411,12 +406,14 @@ func TestSyslogHealthMonitorStoreOnlyStrategy(t *testing.T) {
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
+
 		nodeName := ctx.Value(keySyslogNodeName).(string)
 		stopChan := ctx.Value(keyStopChan).(chan struct{})
 		syslogPod := ctx.Value(keySyslogPodName).(string)
 
-		originalDaemonSet := ctx.Value(keySyslogDaemonSet).(*appsv1.DaemonSet)
-		helpers.TearDownSyslogHealthMonitor(ctx, t, client, originalDaemonSet, nodeName, stopChan, true, syslogPod)
+		helpers.TearDownSyslogHealthMonitor(ctx, t, client, nodeName, stopChan, map[string]string{
+			"--processing-strategy": "EXECUTE_REMEDIATION",
+		}, syslogPod)
 
 		return ctx
 	})

@@ -2248,33 +2248,15 @@ func waitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Cl
 	t.Logf("DaemonSet %s/%s rollout completed successfully", NVSentinelNamespace, name)
 }
 
-// updateContainerProcessingStrategy updates the processing strategy argument for a specific container.
-func updateContainerProcessingStrategy(container *v1.Container) {
-	processingStrategyArg := "--processing-strategy=STORE_ONLY"
-
-	for j, arg := range container.Args {
-		if strings.HasPrefix(arg, "--processing-strategy=") {
-			container.Args[j] = processingStrategyArg
-			return
-		}
-
-		if arg == "--processing-strategy" && j+1 < len(container.Args) {
-			container.Args[j+1] = "STORE_ONLY"
-			return
-		}
-	}
-
-	container.Args = append(container.Args, processingStrategyArg)
-}
-
-// UpdateDaemonSetProcessingStrategy updates the daemonset to use STORE_ONLY processing strategy.
-func UpdateDaemonSetProcessingStrategy(ctx context.Context, t *testing.T,
-	client klient.Client, daemonsetName string, containerName string) (*appsv1.DaemonSet, error) {
+// UpdateDaemonSetArgs updates the daemonset with the specified arguments and complete the rollout.
+func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
+	client klient.Client, daemonsetName string, containerName string,
+	args map[string]string) error {
 	t.Helper()
 
-	t.Logf("Updating daemonset %s/%s to use STORE_ONLY processing strategy", NVSentinelNamespace, daemonsetName)
-
 	var originalDaemonSet *appsv1.DaemonSet
+
+	t.Logf("Updating daemonset %s/%s with args %v", NVSentinelNamespace, daemonsetName, args)
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		daemonSet := &appsv1.DaemonSet{}
@@ -2286,10 +2268,10 @@ func UpdateDaemonSetProcessingStrategy(ctx context.Context, t *testing.T,
 			originalDaemonSet = daemonSet.DeepCopy()
 		}
 
-		for i := range daemonSet.Spec.Template.Spec.Containers {
-			container := &daemonSet.Spec.Template.Spec.Containers[i]
-			if container.Name == containerName {
-				updateContainerProcessingStrategy(container)
+		containers := daemonSet.Spec.Template.Spec.Containers
+		for i := range containers {
+			if containers[i].Name == containerName {
+				setArgsOnContainer(t, &containers[i], args)
 				break
 			}
 		}
@@ -2297,7 +2279,7 @@ func UpdateDaemonSetProcessingStrategy(ctx context.Context, t *testing.T,
 		return client.Resources().Update(ctx, daemonSet)
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, daemonsetName)
@@ -2306,20 +2288,16 @@ func UpdateDaemonSetProcessingStrategy(ctx context.Context, t *testing.T,
 	t.Logf("Waiting 10 seconds for daemonset pods to start")
 	time.Sleep(10 * time.Second)
 
-	return originalDaemonSet, nil
+	return nil
 }
 
-func RestoreDaemonSet(ctx context.Context, t *testing.T, client klient.Client,
-	originalDaemonSet *appsv1.DaemonSet, daemonsetName string,
+func RemoveDaemonSetArgs(ctx context.Context, t *testing.T, client klient.Client,
+	daemonsetName string,
+	containerName string, args map[string]string,
 ) error {
 	t.Helper()
 
-	if originalDaemonSet == nil {
-		t.Log("No original daemonset to restore, skipping")
-		return nil
-	}
-
-	t.Logf("Restoring daemonset %s/%s to original state", NVSentinelNamespace, daemonsetName)
+	t.Logf("Removing args %v from daemonset %s/%s", args, NVSentinelNamespace, daemonsetName)
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		daemonSet := &appsv1.DaemonSet{}
@@ -2327,13 +2305,18 @@ func RestoreDaemonSet(ctx context.Context, t *testing.T, client klient.Client,
 			return err
 		}
 
-		daemonSet.Spec.Template.Spec.Containers = originalDaemonSet.Spec.Template.Spec.Containers
+		containers := daemonSet.Spec.Template.Spec.Containers
+
+		for i := range containers {
+			if containers[i].Name == containerName {
+				removeArgsFromContainer(&containers[i], args)
+				break
+			}
+		}
 
 		return client.Resources().Update(ctx, daemonSet)
 	})
-	if err != nil {
-		return err
-	}
+	require.NoError(t, err, "failed to remove args from daemonset %s/%s", NVSentinelNamespace, daemonsetName)
 
 	t.Logf("Waiting for daemonset %s/%s rollout to complete after restoration", NVSentinelNamespace, daemonsetName)
 	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
@@ -2341,6 +2324,88 @@ func RestoreDaemonSet(ctx context.Context, t *testing.T, client klient.Client,
 	t.Log("DaemonSet restored successfully")
 
 	return nil
+}
+
+// tryUpdateExistingArg attempts to update an existing argument at position j.
+// Returns true if the argument was found and updated.
+func tryUpdateExistingArg(container *v1.Container, j int, flag, value string) bool {
+	existingArg := container.Args[j]
+
+	// Match --flag=value style
+	if strings.HasPrefix(existingArg, flag+"=") {
+		if value != "" {
+			container.Args[j] = flag + "=" + value
+		} else {
+			container.Args[j] = flag
+		}
+
+		return true
+	}
+
+	// Match --flag or --flag value style
+	if existingArg == flag {
+		if value != "" {
+			if j+1 < len(container.Args) && !strings.HasPrefix(container.Args[j+1], "-") {
+				container.Args[j+1] = value
+			} else {
+				container.Args = append(container.Args[:j+1], append([]string{value}, container.Args[j+1:]...)...)
+			}
+		}
+
+		return true
+	}
+
+	return false
+}
+
+func setArgsOnContainer(t *testing.T, container *v1.Container, args map[string]string) {
+	t.Helper()
+	t.Logf("Setting args %v on container %s", args, container.Name)
+
+	for flag, value := range args {
+		found := false
+
+		for j := 0; j < len(container.Args); j++ {
+			if tryUpdateExistingArg(container, j, flag, value) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			if value != "" {
+				container.Args = append(container.Args, flag+"="+value)
+			} else {
+				container.Args = append(container.Args, flag)
+			}
+		}
+	}
+}
+
+func removeArgsFromContainer(container *v1.Container, args map[string]string) {
+	for flag := range args {
+		for j := 0; j < len(container.Args); j++ {
+			existingArg := container.Args[j]
+
+			// Match --flag=value style
+			if strings.HasPrefix(existingArg, flag+"=") {
+				container.Args = append(container.Args[:j], container.Args[j+1:]...)
+				break
+			}
+
+			// Match --flag or --flag value style
+
+			if existingArg == flag {
+				if j+1 < len(container.Args) && !strings.HasPrefix(container.Args[j+1], "-") {
+					container.Args = append(container.Args[:j], container.Args[j+2:]...)
+				} else {
+					container.Args = append(container.Args[:j], container.Args[j+1:]...)
+				}
+
+				break
+			}
+		}
+	}
 }
 
 func GetDaemonSetPodOnWorkerNode(ctx context.Context, t *testing.T, client klient.Client,
