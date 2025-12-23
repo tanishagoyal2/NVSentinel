@@ -149,9 +149,10 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
-		helpers.SetDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+		err = helpers.SetDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
+		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
 
@@ -220,9 +221,10 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.RemoveDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+		err = helpers.RemoveDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
+		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
 
