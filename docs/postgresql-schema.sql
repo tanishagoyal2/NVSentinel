@@ -103,7 +103,10 @@ CREATE TABLE IF NOT EXISTS health_events (
 
     -- Metadata
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    -- Event handling strategy
+    processing_strategy VARCHAR(50)
 );
 
 -- Indexes for health_events
