@@ -16,6 +16,7 @@ package client
 
 import (
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
+	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
 )
 
@@ -78,6 +79,21 @@ func (b *MongoDBPipelineBuilder) BuildAllHealthEventInsertsPipeline() datastore.
 				datastore.E("operationType", datastore.D(
 					datastore.E("$in", datastore.A("insert")),
 				)),
+			)),
+		),
+	)
+}
+
+// BuildProcessableHealthEventInsertsPipeline creates a pipeline that watches for
+// all EXECUTE_REMEDIATION health event inserts.
+func (b *MongoDBPipelineBuilder) BuildProcessableHealthEventInsertsPipeline() datastore.Pipeline {
+	return datastore.ToPipeline(
+		datastore.D(
+			datastore.E("$match", datastore.D(
+				datastore.E("operationType", datastore.D(
+					datastore.E("$in", datastore.A("insert")),
+				)),
+				datastore.E("fullDocument.healthevent.processingstrategy", int32(protos.ProcessingStrategy_EXECUTE_REMEDIATION)),
 			)),
 		),
 	)
