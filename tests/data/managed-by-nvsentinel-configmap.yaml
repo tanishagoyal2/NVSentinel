@@ -40,3 +40,20 @@ data:
       [rule-sets.cordon]
         shouldCordon = true
 
+    [[rule-sets]]
+      name = "SysLogsXIDError-Rule"
+      [[rule-sets.match.all]]
+        kind = "HealthEvent"
+        expression = "event.agent == 'syslog-health-monitor' && event.checkName == 'SysLogsXIDError'"
+      [[rule-sets.match.all]]
+        kind = "Node"
+        expression = '''
+          !('k8saas.nvidia.com/ManagedByNVSentinel' in node.metadata.labels && node.metadata.labels['k8saas.nvidia.com/ManagedByNVSentinel'] == "false")
+        '''
+      [rule-sets.taint]
+        key = "AggregatedNodeHealth"
+        value = "False"
+        effect = "NoSchedule"
+      [rule-sets.cordon]
+        shouldCordon = true
+
