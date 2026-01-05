@@ -259,6 +259,24 @@ func TestFaultQuarantineWithProcessingStrategy(t *testing.T) {
 			WithProcessingStrategy(int(protos.ProcessingStrategy_STORE_ONLY))
 		helpers.SendHealthEvent(ctx, t, event)
 
+		t.Logf("Node %s should not have condition SysLogsXIDError", testCtx.NodeName)
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testCtx.NodeName, "SysLogsXIDError")
+
+		helpers.AssertQuarantineState(ctx, t, client, testCtx.NodeName, helpers.QuarantineAssertion{
+			ExpectCordoned:   false,
+			ExpectAnnotation: false,
+		})
+
+		event = helpers.NewHealthEvent(testCtx.NodeName).
+			WithErrorCode("DCGM_FR_CLOCK_THROTTLE_POWER").
+			WithCheckName("GpuPowerWatch").
+			WithFatal(false).
+			WithProcessingStrategy(int(protos.ProcessingStrategy_STORE_ONLY))
+		helpers.SendHealthEvent(ctx, t, event)
+
+		t.Logf("Node %s should not have GpuPowerWatch node event", testCtx.NodeName)
+		helpers.EnsureNodeEventNotPresent(ctx, t, client, testCtx.NodeName, "GpuPowerWatch", "GpuPowerWatchIsNotHealthy")
+
 		helpers.AssertQuarantineState(ctx, t, client, testCtx.NodeName, helpers.QuarantineAssertion{
 			ExpectCordoned:   false,
 			ExpectAnnotation: false,
@@ -276,6 +294,24 @@ func TestFaultQuarantineWithProcessingStrategy(t *testing.T) {
 			WithMessage("XID error occurred").
 			WithProcessingStrategy(int(protos.ProcessingStrategy_EXECUTE_REMEDIATION))
 		helpers.SendHealthEvent(ctx, t, event)
+
+		t.Logf("Node %s should have condition SysLogsXIDError", testCtx.NodeName)
+		helpers.CheckNodeConditionExists(ctx, client, testCtx.NodeName, "SysLogsXIDError", "SysLogsXIDErrorIsNotHealthy")
+
+		helpers.AssertQuarantineState(ctx, t, client, testCtx.NodeName, helpers.QuarantineAssertion{
+			ExpectCordoned:   true,
+			ExpectAnnotation: true,
+		})
+
+		event = helpers.NewHealthEvent(testCtx.NodeName).
+			WithErrorCode("DCGM_FR_CLOCK_THROTTLE_POWER").
+			WithCheckName("GpuPowerWatch").
+			WithFatal(false).
+			WithProcessingStrategy(int(protos.ProcessingStrategy_EXECUTE_REMEDIATION))
+		helpers.SendHealthEvent(ctx, t, event)
+
+		t.Logf("Node %s should have node event GpuPowerWatch", testCtx.NodeName)
+		helpers.CheckNodeEventExists(ctx, client, testCtx.NodeName, "GpuPowerWatch", "GpuPowerWatchIsNotHealthy")
 
 		helpers.AssertQuarantineState(ctx, t, client, testCtx.NodeName, helpers.QuarantineAssertion{
 			ExpectCordoned:   true,

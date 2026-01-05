@@ -1394,9 +1394,9 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 		healthEvents           []*protos.HealthEvent
 		expectNodeConditions   bool
 		expectKubernetesEvents bool
-		expectedConditionCount int
-		expectedEventCount     int
 		description            string
+		expectedConditionType  string
+		expectedEventType      string
 	}{
 		{
 			name: "STORE_ONLY event should not create node condition",
@@ -1417,8 +1417,6 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			},
 			expectNodeConditions:   false,
 			expectKubernetesEvents: false,
-			expectedConditionCount: 0,
-			expectedEventCount:     0,
 			description:            "STORE_ONLY fatal event should not create node condition",
 		},
 		{
@@ -1440,8 +1438,6 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			},
 			expectNodeConditions:   false,
 			expectKubernetesEvents: false,
-			expectedConditionCount: 0,
-			expectedEventCount:     0,
 			description:            "STORE_ONLY non-fatal event should not create Kubernetes event",
 		},
 		{
@@ -1463,9 +1459,9 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			},
 			expectNodeConditions:   true,
 			expectKubernetesEvents: false,
-			expectedConditionCount: 1,
-			expectedEventCount:     0,
 			description:            "EXECUTE_REMEDIATION fatal event should create node condition",
+			expectedConditionType:  "GpuXidError",
+			expectedEventType:      "",
 		},
 		{
 			name: "Mixed strategies - only EXECUTE_REMEDIATION should be processed",
@@ -1499,9 +1495,55 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			},
 			expectNodeConditions:   true,
 			expectKubernetesEvents: false,
-			expectedConditionCount: 1, // Only GpuThermalWatch should create condition
-			expectedEventCount:     0,
 			description:            "Only EXECUTE_REMEDIATION events should create conditions",
+			expectedConditionType:  "GpuThermalWatch",
+			expectedEventType:      "",
+		},
+		{
+			name: "STORE_ONLY non fatal event should not create Kubernetes event",
+			healthEvents: []*protos.HealthEvent{
+				{
+					CheckName:          "GpuPowerWatch",
+					IsHealthy:          false,
+					EntitiesImpacted:   []*protos.Entity{{EntityType: "GPU", EntityValue: "0"}},
+					ErrorCode:          []string{""},
+					IsFatal:            false,
+					ProcessingStrategy: protos.ProcessingStrategy_STORE_ONLY,
+					GeneratedTimestamp: timestamppb.New(time.Now()),
+					ComponentClass:     "GPU",
+					RecommendedAction:  protos.RecommendedAction_CONTACT_SUPPORT,
+					Message:            "Power warning on GPU 0",
+					NodeName:           "store-only-test-node",
+				},
+			},
+			expectNodeConditions:   false,
+			expectKubernetesEvents: false,
+			description:            "STORE_ONLY non fatal event should not create Kubernetes event",
+			expectedConditionType:  "",
+			expectedEventType:      "",
+		},
+		{
+			name: "EXECUTE_REMEDIATION non fatal event should create Kubernetes event",
+			healthEvents: []*protos.HealthEvent{
+				{
+					CheckName:          "GpuPowerWatch",
+					IsHealthy:          false,
+					EntitiesImpacted:   []*protos.Entity{{EntityType: "GPU", EntityValue: "0"}},
+					ErrorCode:          []string{""},
+					IsFatal:            false,
+					ProcessingStrategy: protos.ProcessingStrategy_EXECUTE_REMEDIATION,
+					GeneratedTimestamp: timestamppb.New(time.Now()),
+					ComponentClass:     "GPU",
+					RecommendedAction:  protos.RecommendedAction_CONTACT_SUPPORT,
+					Message:            "Power warning on GPU 0",
+					NodeName:           "store-only-test-node",
+				},
+			},
+			expectNodeConditions:   false,
+			expectKubernetesEvents: true,
+			description:            "EXECUTE_REMEDIATION non fatal event should create Kubernetes event",
+			expectedConditionType:  "",
+			expectedEventType:      "GpuPowerWatch",
 		},
 	}
 
@@ -1548,7 +1590,7 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			require.NoError(t, err, "Failed to get test node")
 
 			// Count NVSentinel-related conditions (excluding standard K8s conditions like NodeReady)
-			nvsentinelConditions := 0
+			var nvsentinelConditions []corev1.NodeCondition
 			for _, condition := range node.Status.Conditions {
 				condType := string(condition.Type)
 				if condType != string(corev1.NodeReady) &&
@@ -1556,17 +1598,17 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 					condType != string(corev1.NodeDiskPressure) &&
 					condType != string(corev1.NodePIDPressure) &&
 					condType != string(corev1.NodeNetworkUnavailable) {
-					nvsentinelConditions++
+					nvsentinelConditions = append(nvsentinelConditions, condition)
 					t.Logf("Found NVSentinel condition: %s", condType)
 				}
 			}
 
 			if tc.expectNodeConditions {
-				assert.Equal(t, tc.expectedConditionCount, nvsentinelConditions,
-					"Expected %d NVSentinel node conditions, got %d", tc.expectedConditionCount, nvsentinelConditions)
+				assert.Equal(t, tc.expectedConditionType, string(nvsentinelConditions[0].Type),
+					"Expected condition type %s, got %s", tc.expectedConditionType, nvsentinelConditions[0].Type)
 			} else {
-				assert.Equal(t, 0, nvsentinelConditions,
-					"Expected no NVSentinel node conditions for STORE_ONLY events, got %d", nvsentinelConditions)
+				assert.Equal(t, 0, len(nvsentinelConditions),
+					"Expected no NVSentinel node conditions for STORE_ONLY events, got %d", len(nvsentinelConditions))
 			}
 
 			// Verify Kubernetes events
@@ -1576,8 +1618,8 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 			require.NoError(t, err, "Failed to list events")
 
 			if tc.expectKubernetesEvents {
-				assert.Equal(t, tc.expectedEventCount, len(events.Items),
-					"Expected %d Kubernetes events, got %d", tc.expectedEventCount, len(events.Items))
+				assert.Equal(t, tc.expectedEventType, events.Items[0].Type,
+					"Expected event type %s, got %s", tc.expectedEventType, events.Items[0].Type)
 			} else {
 				assert.Equal(t, 0, len(events.Items),
 					"Expected no Kubernetes events for STORE_ONLY events, got %d", len(events.Items))

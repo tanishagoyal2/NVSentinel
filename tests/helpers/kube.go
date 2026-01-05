@@ -405,7 +405,7 @@ func EnsureNodeEventNotPresent(ctx context.Context, t *testing.T,
 		t.Logf("node %s does not have event %v", nodeName, eventType)
 
 		return false
-	}, NeverWaitTimeout, WaitInterval, "node %s should not have event %v", nodeName, eventType, eventReason)
+	}, NeverWaitTimeout, WaitInterval, "node %s should not have event %v", nodeName, eventType)
 }
 
 // SelectTestNodeFromUnusedPool selects an available test node from the cluster.
