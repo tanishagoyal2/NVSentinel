@@ -43,19 +43,22 @@ const (
 type ProcessingStrategy int32
 
 const (
-	ProcessingStrategy_EXECUTE_REMEDIATION ProcessingStrategy = 0
-	ProcessingStrategy_STORE_ONLY          ProcessingStrategy = 1
+	ProcessingStrategy_UNSPECIFIED         ProcessingStrategy = 0
+	ProcessingStrategy_EXECUTE_REMEDIATION ProcessingStrategy = 1
+	ProcessingStrategy_STORE_ONLY          ProcessingStrategy = 2
 )
 
 // Enum value maps for ProcessingStrategy.
 var (
 	ProcessingStrategy_name = map[int32]string{
-		0: "EXECUTE_REMEDIATION",
-		1: "STORE_ONLY",
+		0: "UNSPECIFIED",
+		1: "EXECUTE_REMEDIATION",
+		2: "STORE_ONLY",
 	}
 	ProcessingStrategy_value = map[string]int32{
-		"EXECUTE_REMEDIATION": 0,
-		"STORE_ONLY":          1,
+		"UNSPECIFIED":         0,
+		"EXECUTE_REMEDIATION": 1,
+		"STORE_ONLY":          2,
 	}
 )
 
@@ -418,7 +421,7 @@ func (x *HealthEvent) GetProcessingStrategy() ProcessingStrategy {
 	if x != nil {
 		return x.ProcessingStrategy
 	}
-	return ProcessingStrategy_EXECUTE_REMEDIATION
+	return ProcessingStrategy_UNSPECIFIED
 }
 
 type BehaviourOverrides struct {
@@ -510,11 +513,12 @@ const file_health_event_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\">\n" +
 	"\x12BehaviourOverrides\x12\x14\n" +
 	"\x05force\x18\x01 \x01(\bR\x05force\x12\x12\n" +
-	"\x04skip\x18\x02 \x01(\bR\x04skip*=\n" +
-	"\x12ProcessingStrategy\x12\x17\n" +
-	"\x13EXECUTE_REMEDIATION\x10\x00\x12\x0e\n" +
+	"\x04skip\x18\x02 \x01(\bR\x04skip*N\n" +
+	"\x12ProcessingStrategy\x12\x0f\n" +
+	"\vUNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13EXECUTE_REMEDIATION\x10\x01\x12\x0e\n" +
 	"\n" +
-	"STORE_ONLY\x10\x01*\xa8\x01\n" +
+	"STORE_ONLY\x10\x02*\xa8\x01\n" +
 	"\x11RecommendedAction\x12\b\n" +
 	"\x04NONE\x10\x00\x12\x13\n" +
 	"\x0fCOMPONENT_RESET\x10\x02\x12\x13\n" +

@@ -16,5 +16,6 @@
             "entityValue": "0"
         }
     ],
-    "nodeName": "NODE_NAME"
+    "nodeName": "NODE_NAME",
+    "processingStrategy": 1
 }

@@ -13,6 +13,7 @@ DESCRIPTOR: _descriptor.FileDescriptor
 
 class ProcessingStrategy(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
+    UNSPECIFIED: _ClassVar[ProcessingStrategy]
     EXECUTE_REMEDIATION: _ClassVar[ProcessingStrategy]
     STORE_ONLY: _ClassVar[ProcessingStrategy]
 
@@ -28,6 +29,7 @@ class RecommendedAction(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     RUN_DCGMEUD: _ClassVar[RecommendedAction]
     UNKNOWN: _ClassVar[RecommendedAction]
 
+UNSPECIFIED: ProcessingStrategy
 EXECUTE_REMEDIATION: ProcessingStrategy
 STORE_ONLY: ProcessingStrategy
 NONE: RecommendedAction
