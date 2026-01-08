@@ -28,7 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +72,6 @@ func NewHealthEvent(nodeName string) *HealthEventTemplate {
 				EntityValue: "0",
 			},
 		},
-		ProcessingStrategy: int(protos.ProcessingStrategy_EXECUTE_REMEDIATION),
 	}
 }
 
