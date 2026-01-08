@@ -99,8 +99,9 @@ When a health monitor wants observability-only behavior, it publishes health eve
 
 ```protobuf
 enum ProcessingStrategy {
-  EXECUTE_REMEDIATION = 0;
-  STORE_ONLY = 1;
+  UNSPECIFIED = 0;
+  EXECUTE_REMEDIATION = 1;
+  STORE_ONLY = 2;
 }
 
 message HealthEvent {
