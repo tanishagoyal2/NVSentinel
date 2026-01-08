@@ -238,15 +238,8 @@ func TestFaultQuarantineWithProcessingStrategy(t *testing.T) {
 	var testCtx *helpers.QuarantineTestContext
 
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client, err := c.NewClient()
-		require.NoError(t, err)
-
 		var newCtx context.Context
-		newCtx, testCtx = helpers.SetupQuarantineTest(ctx, t, c, "data/managed-by-nvsentinel-configmap.yaml")
-
-		err = helpers.SetNodeManagedByNVSentinel(newCtx, client, testCtx.NodeName, true)
-		require.NoError(t, err)
-
+		newCtx, testCtx = helpers.SetupQuarantineTest(ctx, t, c, "")
 		return newCtx
 	})
 

@@ -41,6 +41,10 @@ type PipelineBuilder interface {
 	// Used by: health-events-analyzer for pattern analysis
 	BuildNonFatalUnhealthyInsertsPipeline() datastore.Pipeline
 
+	// BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal, unhealthy event inserts
+	// with processingStrategy=EXECUTE_REMEDIATION. This is used by health-events-analyzer for pattern analysis.
+	BuildProcessableNonFatalUnhealthyInsertsPipeline() datastore.Pipeline
+
 	// BuildQuarantinedAndDrainedNodesPipeline creates a pipeline for remediation-ready nodes
 	// Used by: fault-remediation to detect when nodes are ready for reboot
 	BuildQuarantinedAndDrainedNodesPipeline() datastore.Pipeline
