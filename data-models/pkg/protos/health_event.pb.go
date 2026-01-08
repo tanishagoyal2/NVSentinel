@@ -38,6 +38,7 @@ const (
 )
 
 // ProcessingStrategy defines how downstream modules should handle the event.
+// UNSPECIFIED: Reserved as the zero value (required by protobuf). Not used anywhere in the code.
 // EXECUTE_REMEDIATION: normal behavior; downstream modules may update cluster state.
 // STORE_ONLY: observability-only behavior; event should be persisted/exported but should not modify cluster resources.
 type ProcessingStrategy int32
