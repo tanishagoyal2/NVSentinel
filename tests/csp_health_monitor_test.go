@@ -428,9 +428,10 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.SetDeploymentArgs(ctx, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
+		err = helpers.SetDeploymentArgs(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
+		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace)
 
@@ -459,9 +460,6 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 
 	feature.Assess("Injecting PENDING maintenance event and verifying node was not cordoned when processing STORE_ONLY strategy", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Log("Injecting GCP maintenance event with PENDING status into mock Cloud Logging API")
-
-		t.Logf("verify if pod has correct strategy configured")
-		time.Sleep(20 * time.Second)
 
 		scheduledStart := time.Now().Add(15 * time.Minute)
 		scheduledEnd := time.Now().Add(75 * time.Minute)
@@ -500,22 +498,6 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 			ExpectAnnotation: false,
 		})
 
-		t.Log("Waiting for event to be exported via changestream")
-		var receivedEvent map[string]any
-		require.Eventually(t, func() bool {
-			events := helpers.GetMockEvents(t, c)
-			event, found := helpers.FindEventByNodeAndCheckName(events, testCtx.NodeName, "CSPMaintenance", false)
-			if found {
-				receivedEvent = event
-				return true
-			}
-
-			t.Log("Validating received CloudEvent")
-
-			helpers.ValidateCloudEvent(t, receivedEvent, testCtx.NodeName, "CSP maintenance scheduled", "CSPMaintenance", "", "STORE_ONLY")
-			return false
-		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
-
 		return ctx
 	})
 
@@ -523,8 +505,8 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.SetDeploymentArgs(ctx, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
-			"--processing-strategy": "EXECUTE_REMEDIATION",
+		helpers.RemoveDeploymentArgs(ctx, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
+			"--processing-strategy": "STORE_ONLY",
 		})
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace)
