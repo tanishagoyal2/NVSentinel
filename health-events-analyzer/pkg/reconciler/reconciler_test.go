@@ -305,6 +305,7 @@ func TestHandleEvent(t *testing.T) {
 			Metadata:           healthEvent_13.HealthEvent.Metadata,
 			GeneratedTimestamp: healthEvent_13.HealthEvent.GeneratedTimestamp,
 			NodeName:           healthEvent_13.HealthEvent.NodeName,
+			ProcessingStrategy: protos.ProcessingStrategy_EXECUTE_REMEDIATION, // Publisher sets this from config
 		}
 		expectedHealthEvents := &protos.HealthEvents{
 			Version: 1,

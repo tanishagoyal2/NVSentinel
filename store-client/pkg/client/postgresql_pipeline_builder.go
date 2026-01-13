@@ -145,21 +145,6 @@ func (b *PostgreSQLPipelineBuilder) BuildProcessableHealthEventInsertsPipeline()
 	)
 }
 
-// BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
-// with processingStrategy=EXECUTE_REMEDIATION
-func (b *PostgreSQLPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
-	return datastore.ToPipeline(
-		datastore.D(
-			datastore.E("$match", datastore.D(
-				datastore.E("operationType", datastore.D(datastore.E("$in", datastore.A("insert", "update")))),
-				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
-				datastore.E("fullDocument.healthevent.ishealthy", false),
-				datastore.E("fullDocument.healthevent.processingstrategy", int32(protos.ProcessingStrategy_EXECUTE_REMEDIATION)),
-			)),
-		),
-	)
-}
-
 // BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal, unhealthy event inserts
 // with processingStrategy=EXECUTE_REMEDIATION. This is used by health-events-analyzer for pattern analysis.
 // For PostgreSQL, we need to handle both INSERT and UPDATE operations because platform-connectors

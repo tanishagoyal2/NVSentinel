@@ -112,21 +112,6 @@ func (b *MongoDBPipelineBuilder) BuildProcessableHealthEventInsertsPipeline() da
 	)
 }
 
-// BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal unhealthy events
-// with processingStrategy=EXECUTE_REMEDIATION.
-func (b *MongoDBPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipeline() datastore.Pipeline {
-	return datastore.ToPipeline(
-		datastore.D(
-			datastore.E("$match", datastore.D(
-				datastore.E("operationType", "insert"),
-				datastore.E("fullDocument.healthevent.agent", datastore.D(datastore.E("$ne", "health-events-analyzer"))),
-				datastore.E("fullDocument.healthevent.ishealthy", false),
-				datastore.E("fullDocument.healthevent.processingstrategy", int32(protos.ProcessingStrategy_EXECUTE_REMEDIATION)),
-			)),
-		),
-	)
-}
-
 // BuildProcessableNonFatalUnhealthyInsertsPipeline creates a pipeline for non-fatal, unhealthy event inserts
 // with processingStrategy=EXECUTE_REMEDIATION. This is used by health-events-analyzer for pattern analysis.
 //

@@ -1536,7 +1536,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		err = helpers.SetDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		err = helpers.SetDeploymentArgs(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
@@ -1594,7 +1594,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Check if HealthEventsAnalyzerStoreOnlyStrategy node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Verify node condition is not added when processing STORE_ONLY events", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -1624,7 +1624,19 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.RemoveDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		for _, entities := range entitiesImpacted {
+			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
+				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
+				WithEntitiesImpacted(entities).
+				WithCheckName("SysLogsXIDError").
+				WithFatal(false).
+				WithHealthy(true).
+				WithMessage("No health failures").
+				WithComponentClass("GPU")
+			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
+		}
+
+		err = helpers.RemoveDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
