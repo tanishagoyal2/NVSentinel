@@ -149,7 +149,7 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
-		err = helpers.SetDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+		err = helpers.SetDeploymentArgs(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
 	})
 
-	feature.Assess("Node NotReady triggers health event", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Node NotReady triggers health event with STORE_ONLY strategy", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 

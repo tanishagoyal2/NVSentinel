@@ -48,7 +48,9 @@ func (m *Manager) AddMatch(ctx context.Context, nodeName, stateKey, targetNode s
 	slog.Debug("Adding match state to annotation", "node", nodeName, "stateKey", stateKey, "targetNode", targetNode)
 
 	if m.processingStrategy == pb.ProcessingStrategy_STORE_ONLY {
-		slog.Debug("Skipping match state update for STORE_ONLY strategy", "node", nodeName, "stateKey", stateKey, "targetNode", targetNode)
+		slog.Debug("Skipping match state update for STORE_ONLY strategy", "node", nodeName,
+			"stateKey", stateKey, "targetNode", targetNode)
+
 		return nil
 	}
 

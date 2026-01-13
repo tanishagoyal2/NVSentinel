@@ -113,7 +113,8 @@ func InitializeAll(ctx context.Context, params Params) (*Components, error) {
 		return nil, fmt.Errorf("failed to create policy evaluator: %w", err)
 	}
 
-	if err := registerControllers(mgr, evaluator, pub, cfg.Policies, params.MaxConcurrentReconciles, pb.ProcessingStrategy(strategyValue)); err != nil {
+	if err := registerControllers(mgr, evaluator, pub, cfg.Policies,
+		params.MaxConcurrentReconciles, pb.ProcessingStrategy(strategyValue)); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to register controllers: %w", err)
 	}
