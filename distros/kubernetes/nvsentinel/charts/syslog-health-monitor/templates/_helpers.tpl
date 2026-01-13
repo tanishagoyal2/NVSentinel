@@ -101,7 +101,7 @@ spec:
             - "--metadata-path"
             - "{{ $root.Values.global.metadataPath }}"
             - "--processing-strategy"
-            - {{ $root.Values.processingStrategy }}
+            - "{{ $root.Values.processingStrategy }}"
           resources:
             {{- toYaml $root.Values.resources | nindent 12 }}
           ports:
