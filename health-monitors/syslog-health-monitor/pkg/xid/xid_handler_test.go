@@ -297,7 +297,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid GPU Reset Message",
 			message: "GPU reset executed: GPU-123",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile)
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile, pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				return h
 			},
 			expectEvent: true,
@@ -336,7 +336,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid GPU Reset Message with Metadata Collector not Initialized",
 			message: "GPU reset executed: GPU-123",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json")
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", "/tmp/metadata.json", pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				return h
 			},
 			expectEvent: false,
@@ -346,7 +346,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid GPU Reset Message with Metadata Collector missing GPU UUID",
 			message: "GPU reset executed: GPU-456",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile)
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile, pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				return h
 			},
 			expectEvent: false,
@@ -356,7 +356,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid GPU Reset Message with Metadata Collector not containing PCI",
 			message: "GPU reset executed: GPU-123",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFileMissingPCI)
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFileMissingPCI, pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				return h
 			},
 			expectEvent: false,
@@ -403,7 +403,7 @@ func TestProcessLine(t *testing.T) {
 			name:    "Valid XID with GPU UUID from Metadata Collector: RESET_GPU kept",
 			message: "NVRM: Xid (PCI:0000:00:08.0): 79, pid=12345, name=test-process",
 			setupHandler: func() *XIDHandler {
-				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile)
+				h, _ := NewXIDHandler("test-node", "test-agent", "GPU", "xid-check", "", metadataFile, pb.ProcessingStrategy_EXECUTE_REMEDIATION)
 				h.parser = &mockParser{
 					parseFunc: func(msg string) (*parser.Response, error) {
 						return &parser.Response{

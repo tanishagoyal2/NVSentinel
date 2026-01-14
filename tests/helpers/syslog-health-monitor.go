@@ -83,7 +83,7 @@ func TearDownSyslogHealthMonitor(ctx context.Context, t *testing.T, client klien
 
 	t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
 
-	err := DeletePod(ctx, client, NVSentinelNamespace, podName)
+	err := DeletePod(ctx, t, client, NVSentinelNamespace, podName, true)
 	if err != nil {
 		t.Logf("Warning: failed to delete pod: %v", err)
 	} else {

@@ -54,8 +54,6 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 		ctx = context.WithValue(ctx, keySyslogPodName, syslogPod.Name)
 		ctx = context.WithValue(ctx, keyStopChan, stopChan)
 
-		ctx = context.WithValue(ctx, keySyslogDaemonSet, originalDaemonSet)
-
 		return ctx
 	})
 
@@ -75,7 +73,7 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 			`ErrorCode:119 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 kernel:.*?NVRM: Xid \(PCI:0002:00:00\): 119.*?Recommended Action=COMPONENT_RESET`,
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, xidMessages)
 
 		t.Log("Verifying node condition contains XID error with GPU UUID using regex pattern")
 		require.Eventually(t, func() bool {
@@ -95,7 +93,7 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 			"kernel: [16450076.435595] GPU reset executed: GPU-22222222-2222-2222-2222-222222222222",
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, gpuResetMessages)
+		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, gpuResetMessages)
 
 		t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
 		require.Eventually(t, func() bool {
@@ -126,7 +124,7 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 			`ErrorCode:119 PCI:0002:00:00 GPU_UUID:GPU-22222222-2222-2222-2222-222222222222 kernel:.*?NVRM: Xid \(PCI:0002:00:00\): 119.*?Recommended Action=COMPONENT_RESET`,
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, xidMessages)
+		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, xidMessages)
 
 		t.Log("Verifying node condition contains XID error with GPU UUID using regex pattern")
 		require.Eventually(t, func() bool {
@@ -146,7 +144,7 @@ func TestSyslogHealthMonitorXIDDetection(t *testing.T) {
 			"kernel: [16450076.435595] GPU reset executed: GPU-22222222-2222-2222-2222-222222222222",
 		}
 
-		helpers.InjectSyslogMessages(t, stubJournalHTTPPort, gpuResetMessages)
+		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, gpuResetMessages)
 
 		t.Logf("Waiting for SysLogsXIDError condition to be cleared from node %s", nodeName)
 		require.Eventually(t, func() bool {

@@ -2324,9 +2324,6 @@ func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
 	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, daemonsetName)
 	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
 
-	t.Logf("Waiting 10 seconds for daemonset pods to start")
-	time.Sleep(10 * time.Second)
-
 	return nil
 }
 
