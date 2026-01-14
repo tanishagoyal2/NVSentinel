@@ -1662,6 +1662,8 @@ func PortForwardPod(
 
 		if err := fw.ForwardPorts(); err != nil {
 			slog.Error("Error forwarding ports", "error", err)
+			close(readyChan)
+
 			return
 		}
 	}()
@@ -2255,6 +2257,15 @@ func waitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Cl
 			return false
 		}
 
+		// Check if the controller has observed the latest generation
+		// This prevents returning early when status reflects the old generation
+		if daemonSet.Status.ObservedGeneration < daemonSet.Generation {
+			t.Logf("DaemonSet controller hasn't observed latest generation yet: observed=%d, current=%d",
+				daemonSet.Status.ObservedGeneration, daemonSet.Generation)
+
+			return false
+		}
+
 		// Check if all desired pods are scheduled, updated, and ready
 		if daemonSet.Status.DesiredNumberScheduled == 0 {
 			t.Logf("DaemonSet has no desired pods scheduled yet")
@@ -2284,13 +2295,16 @@ func waitForDaemonSetRollout(ctx context.Context, t *testing.T, client klient.Cl
 	t.Logf("DaemonSet %s/%s rollout completed successfully", NVSentinelNamespace, name)
 }
 
-// UpdateDaemonSetArgs updates the daemonset with the specified arguments and complete the rollout.
+// UpdateDaemonSetArgs updates the daemonset with the specified arguments and completes the rollout.
+// Returns the original args slice that can be used with RestoreDaemonSetArgs to rollback the changes.
 func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
 	client klient.Client, daemonsetName string, containerName string,
-	args map[string]string) error {
+	args map[string]string) ([]string, error) {
 	t.Helper()
 
 	t.Logf("Updating daemonset %s/%s with args %v", NVSentinelNamespace, daemonsetName, args)
+
+	var originalArgs []string
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		daemonSet := &appsv1.DaemonSet{}
@@ -2303,6 +2317,10 @@ func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
 
 		for i := range containers {
 			if containers[i].Name == containerName {
+				// Capture original args before modification
+				originalArgs = make([]string, len(containers[i].Args))
+				copy(originalArgs, containers[i].Args)
+
 				setArgsOnContainer(t, &containers[i], args)
 
 				containerFound = true
@@ -2318,22 +2336,25 @@ func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
 		return client.Resources().Update(ctx, daemonSet)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, daemonsetName)
 	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
 
-	return nil
+	return originalArgs, nil
 }
 
-func RemoveDaemonSetArgs(ctx context.Context, t *testing.T, client klient.Client,
+// RestoreDaemonSetArgs restores the daemonset container args to the original state.
+// Use the originalArgs returned by UpdateDaemonSetArgs to rollback the changes.
+func RestoreDaemonSetArgs(ctx context.Context, t *testing.T, client klient.Client,
 	daemonsetName string,
-	containerName string, args map[string]string,
+	containerName string, originalArgs []string,
 ) {
 	t.Helper()
 
-	t.Logf("Removing args %v from daemonset %s/%s", args, NVSentinelNamespace, daemonsetName)
+	t.Logf("Restoring args for daemonset %s/%s container %s to original state",
+		NVSentinelNamespace, daemonsetName, containerName)
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		daemonSet := &appsv1.DaemonSet{}
@@ -2346,7 +2367,9 @@ func RemoveDaemonSetArgs(ctx context.Context, t *testing.T, client klient.Client
 
 		for i := range containers {
 			if containers[i].Name == containerName {
-				removeArgsFromContainer(&containers[i], args)
+				// Restore the original args
+				containers[i].Args = make([]string, len(originalArgs))
+				copy(containers[i].Args, originalArgs)
 
 				containerFound = true
 
@@ -2360,7 +2383,7 @@ func RemoveDaemonSetArgs(ctx context.Context, t *testing.T, client klient.Client
 
 		return client.Resources().Update(ctx, daemonSet)
 	})
-	require.NoError(t, err, "failed to remove args from daemonset %s/%s", NVSentinelNamespace, daemonsetName)
+	require.NoError(t, err, "failed to restore args for daemonset %s/%s", NVSentinelNamespace, daemonsetName)
 
 	t.Logf("Waiting for daemonset %s/%s rollout to complete after restoration", NVSentinelNamespace, daemonsetName)
 	waitForDaemonSetRollout(ctx, t, client, daemonsetName)
@@ -2419,32 +2442,6 @@ func setArgsOnContainer(t *testing.T, container *v1.Container, args map[string]s
 				container.Args = append(container.Args, flag+"="+value)
 			} else {
 				container.Args = append(container.Args, flag)
-			}
-		}
-	}
-}
-
-func removeArgsFromContainer(container *v1.Container, args map[string]string) {
-	for flag := range args {
-		for j := 0; j < len(container.Args); j++ {
-			existingArg := container.Args[j]
-
-			// Match --flag=value style
-			if strings.HasPrefix(existingArg, flag+"=") {
-				container.Args = append(container.Args[:j], container.Args[j+1:]...)
-				break
-			}
-
-			// Match --flag or --flag value style
-
-			if existingArg == flag {
-				if j+1 < len(container.Args) && !strings.HasPrefix(container.Args[j+1], "-") {
-					container.Args = append(container.Args[:j], container.Args[j+2:]...)
-				} else {
-					container.Args = append(container.Args[:j], container.Args[j+1:]...)
-				}
-
-				break
 			}
 		}
 	}

@@ -29,15 +29,18 @@ const (
 	SyslogDaemonSetName = "syslog-health-monitor-regular"
 )
 
-// helper function to set up syslog health monitor and port forward to it
+// helper function to set up syslog health monitor and port forward to it.
+// Returns the node name, pod, stop channel, and original args (for restoration during teardown).
 func SetUpSyslogHealthMonitor(ctx context.Context, t *testing.T,
-	client klient.Client, args map[string]string) (string, *v1.Pod, chan struct{}) {
+	client klient.Client, args map[string]string) (string, *v1.Pod, chan struct{}, []string) {
 	var err error
 
 	var syslogPod *v1.Pod
 
+	var originalArgs []string
+
 	if args != nil {
-		err = UpdateDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, args)
+		originalArgs, err = UpdateDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, args)
 		require.NoError(t, err, "failed to update syslog health monitor processing strategy")
 	}
 
@@ -67,18 +70,19 @@ func SetUpSyslogHealthMonitor(ctx context.Context, t *testing.T,
 	err = SetNodeManagedByNVSentinel(ctx, client, testNodeName, false)
 	require.NoError(t, err, "failed to set ManagedByNVSentinel label")
 
-	return testNodeName, syslogPod, stopChan
+	return testNodeName, syslogPod, stopChan, originalArgs
 }
 
-// helper function to roll back syslog health monitor daemonset and stop the port forward
+// helper function to roll back syslog health monitor daemonset and stop the port forward.
+// Pass the originalArgs returned by SetUpSyslogHealthMonitor to restore the daemonset to its original state.
 func TearDownSyslogHealthMonitor(ctx context.Context, t *testing.T, client klient.Client,
 	nodeName string, stopChan chan struct{},
-	args map[string]string, podName string) {
+	originalArgs []string, podName string) {
 	t.Log("Stopping port-forward")
 	close(stopChan)
 
-	if args != nil {
-		RemoveDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, args)
+	if originalArgs != nil {
+		RestoreDaemonSetArgs(ctx, t, client, SyslogDaemonSetName, SyslogContainerName, originalArgs)
 	}
 
 	t.Logf("Restarting syslog-health-monitor pod %s to clear conditions", podName)
