@@ -2336,7 +2336,7 @@ func UpdateDaemonSetArgs(ctx context.Context, t *testing.T,
 		return client.Resources().Update(ctx, daemonSet)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	t.Logf("Waiting for daemonset %s/%s rollout to complete", NVSentinelNamespace, daemonsetName)

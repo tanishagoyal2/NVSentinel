@@ -43,8 +43,9 @@ const (
 )
 
 const (
-	keyGpuHealthMonitorPodName contextKey = "gpuHealthMonitorPodName"
-	keyOriginalDaemonSet       contextKey = "originalDaemonSet"
+	keyGpuHealthMonitorPodName      contextKey = "gpuHealthMonitorPodName"
+	keyOriginalDaemonSet            contextKey = "originalDaemonSet"
+	keyGpuHealthMonitorOriginalArgs contextKey = "originalArgs"
 )
 
 // TestGPUHealthMonitorMultipleErrors verifies GPU health monitor handles multiple concurrent errors
@@ -666,7 +667,7 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err, "failed to create kubernetes client")
 
-		err = helpers.UpdateDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, map[string]string{
+		originalArgs, err := helpers.UpdateDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, map[string]string{
 			"--processing-strategy": "STORE_ONLY"})
 		require.NoError(t, err, "failed to update GPU health monitor processing strategy")
 
@@ -687,6 +688,7 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 
 		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
 		ctx = context.WithValue(ctx, keyGpuHealthMonitorPodName, gpuHealthMonitorPodName)
+		ctx = context.WithValue(ctx, keyGpuHealthMonitorOriginalArgs, originalArgs)
 
 		restConfig := client.RESTConfig()
 
@@ -728,10 +730,9 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		require.NoError(t, err, "failed to create kubernetes client")
 
 		nodeName := ctx.Value(keyNodeName).(string)
+		originalArgs := ctx.Value(keyGpuHealthMonitorOriginalArgs).([]string)
 
-		err = helpers.RemoveDaemonSetArgs(ctx, t, client, "gpu-health-monitor-dcgm-4.x", "gpu-health-monitor", map[string]string{
-			"--processing-strategy": "EXECUTE_REMEDIATION"})
-		require.NoError(t, err, "failed to restore GPU health monitor daemon set")
+		helpers.RestoreDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, originalArgs)
 
 		restConfig := client.RESTConfig()
 
