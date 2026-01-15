@@ -44,7 +44,6 @@ const (
 
 const (
 	keyGpuHealthMonitorPodName      contextKey = "gpuHealthMonitorPodName"
-	keyOriginalDaemonSet            contextKey = "originalDaemonSet"
 	keyGpuHealthMonitorOriginalArgs contextKey = "originalArgs"
 )
 

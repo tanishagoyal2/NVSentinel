@@ -448,6 +448,9 @@ func TestSyslogHealthMonitorStoreOnlyStrategy(t *testing.T) {
 
 		helpers.InjectSyslogMessages(t, helpers.StubJournalHTTPPort, xidMessages)
 
+		// The syslog monitor processes journal messages at 15sec interval. The timeout is set to
+		// 20 seconds to ensure the syslog monitor has sufficient time to process messages and insert
+		// events into the database before verifying that the node condition is not present.
 		require.Never(t, func() bool {
 			node, err := helpers.GetNodeByName(ctx, client, nodeName)
 			if err != nil {
