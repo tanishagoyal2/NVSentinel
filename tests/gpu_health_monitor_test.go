@@ -23,20 +23,28 @@ import (
 	"strings"
 	"testing"
 
+	"tests/helpers"
+
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
-	"tests/helpers"
 )
 
 const (
-	dcgmServiceHost      = "nvidia-dcgm.gpu-operator.svc"
-	dcgmServicePort      = "5555"
-	gpuOperatorNamespace = "gpu-operator"
-	dcgmServiceName      = "nvidia-dcgm"
-	dcgmOriginalPort     = 5555
-	dcgmBrokenPort       = 1555
+	dcgmServiceHost               = "nvidia-dcgm.gpu-operator.svc"
+	dcgmServicePort               = "5555"
+	gpuOperatorNamespace          = "gpu-operator"
+	dcgmServiceName               = "nvidia-dcgm"
+	dcgmOriginalPort              = 5555
+	dcgmBrokenPort                = 1555
+	GPUHealthMonitorContainerName = "gpu-health-monitor"
+	GPUHealthMonitorDaemonSetName = "gpu-health-monitor-dcgm-4.x"
+)
+
+const (
+	keyGpuHealthMonitorPodName      contextKey = "gpuHealthMonitorPodName"
+	keyGpuHealthMonitorOriginalArgs contextKey = "originalArgs"
 )
 
 // TestGPUHealthMonitorMultipleErrors verifies GPU health monitor handles multiple concurrent errors
@@ -62,7 +70,7 @@ func TestGPUHealthMonitorMultipleErrors(t *testing.T) {
 		helpers.InjectMetadata(t, ctx, client, helpers.NVSentinelNamespace, testNodeName, metadata)
 
 		t.Logf("Restarting GPU health monitor pod %s to load metadata", gpuHealthMonitorPod.Name)
-		err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, gpuHealthMonitorPod.Name)
+		err = helpers.DeletePod(ctx, t, client, helpers.NVSentinelNamespace, gpuHealthMonitorPod.Name, false)
 		require.NoError(t, err, "failed to restart GPU health monitor pod")
 		helpers.WaitForPodsDeleted(ctx, t, client, helpers.NVSentinelNamespace, []string{gpuHealthMonitorPod.Name})
 
@@ -299,7 +307,7 @@ func TestGPUHealthMonitorDCGMConnectionError(t *testing.T) {
 		require.NoError(t, err, "failed to patch DCGM service port")
 
 		t.Logf("Restarting GPU health monitor pod %s to trigger reconnection", gpuHealthMonitorPodName)
-		err = helpers.DeletePod(ctx, client, helpers.NVSentinelNamespace, gpuHealthMonitorPodName)
+		err = helpers.DeletePod(ctx, t, client, helpers.NVSentinelNamespace, gpuHealthMonitorPodName, false)
 		require.NoError(t, err, "failed to restart GPU health monitor pod")
 
 		t.Logf("Waiting for GpuDcgmConnectivityFailure condition on node %s", nodeName)
@@ -397,6 +405,344 @@ func TestGPUHealthMonitorDCGMConnectionError(t *testing.T) {
 		}
 
 		return ctx
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
+// TestGpuNvlinkWatchSemicolonMessageParsing tests the parsing of GpuNvlinkWatch error messages
+func TestGpuNvlinkWatchSemicolonMessageParsing(t *testing.T) {
+	feature := features.New("GpuNvlinkWatch error message parsing").
+		WithLabel("suite", "gpu-health-monitor").
+		WithLabel("component", "nvlink-error-message-parsing")
+
+	var testNodeName string
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		gpuHealthMonitorPod, err := helpers.GetPodOnWorkerNode(ctx, t, client, helpers.NVSentinelNamespace, "gpu-health-monitor")
+		require.NoError(t, err, "failed to find GPU health monitor pod on worker node")
+		require.NotNil(t, gpuHealthMonitorPod, "GPU health monitor pod should exist on worker node")
+
+		testNodeName = gpuHealthMonitorPod.Spec.NodeName
+		t.Logf("Using test node: %s", testNodeName)
+
+		t.Logf("Setting ManagedByNVSentinel=false on node %s", testNodeName)
+		err = helpers.SetNodeManagedByNVSentinel(ctx, client, testNodeName, false)
+		require.NoError(t, err, "failed to set ManagedByNVSentinel label")
+
+		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
+		return ctx
+	})
+
+	feature.Assess("Inject first NVLink error with semicolons in message", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		nodeName := ctx.Value(keyNodeName).(string)
+
+		nvlinkMessage := "Detected 7 nvlink_flit_crc_error_count_total NvLink errors on GPU 7's NVLink " +
+			"which exceeds threshold of 1 Monitor the NVLink. It can still perform workload.; " +
+			"Detected 97 nvlink_replay_error_count_total NvLink errors on GPU 7's NVLink (should be 0) " +
+			"Run a field diagnostic on the GPU.; " +
+			"Detected 1 nvlink_recovery_error_count_total NvLink errors on GPU 7's NVLink (should be 0). " +
+			"Run a field diagnostic on the GPU."
+
+		t.Logf("Injecting GpuNvlinkWatch error for GPU 7 with semicolons in message")
+		event := helpers.NewHealthEvent(nodeName).
+			WithCheckName("GpuNvlinkWatch").
+			WithAgent("gpu-health-monitor").
+			WithComponentClass("GPU").
+			WithErrorCode("DCGM_FR_NVLINK_ERROR_THRESHOLD").
+			WithMessage(nvlinkMessage).
+			WithEntitiesImpacted([]helpers.EntityImpacted{
+				{EntityType: "GPU", EntityValue: "7"},
+				{EntityType: "PCI", EntityValue: "0000:da:00.0"},
+				{EntityType: "GPU_UUID", EntityValue: "GPU-b610ad95-f331-ffd3-1ac5-e152e87f3a8c"},
+			}).
+			WithRecommendedAction(5)
+
+		helpers.SendHealthEvent(ctx, t, event)
+
+		t.Logf("Waiting for GpuNvlinkWatch condition to appear on node %s", nodeName)
+		require.Eventually(t, func() bool {
+			condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
+				"GpuNvlinkWatch", "GpuNvlinkWatchIsNotHealthy")
+			if err != nil {
+				t.Logf("Error checking condition: %v", err)
+				return false
+			}
+			if condition == nil {
+				t.Log("Condition not found yet")
+				return false
+			}
+
+			t.Logf("Found GpuNvlinkWatch condition - Status: %s, Message: %s",
+				condition.Status, condition.Message)
+
+			// Verify GPU 7 entity is in the message
+			if !strings.Contains(condition.Message, "GPU:7") {
+				t.Log("Condition message missing GPU:7 entity")
+				return false
+			}
+
+			expectedSanitizedMessage := "" +
+				"Detected 7 nvlink_flit_crc_error_count_total NvLink errors on GPU 7's NVLink which exceeds threshold of 1 Monitor the NVLink. It can still perform workload.. " +
+				"Detected 97 nvlink_replay_error_count_total NvLink errors on GPU 7's NVLink (should be 0) Run a field diagnostic on the GPU.. " +
+				"Detected 1 nvlink_recovery_error_count_total NvLink errors on GPU 7's NVLink (should be 0). Run a field diagnostic on the GPU."
+			if !strings.Contains(condition.Message, expectedSanitizedMessage) {
+				t.Logf("Condition message did not contain the full expected NVLink error message: got: %q", condition.Message)
+				return false
+			}
+
+			return condition.Status == v1.ConditionTrue
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "GpuNvlinkWatch condition should appear")
+
+		return ctx
+	})
+
+	feature.Assess("Inject second NVLink error for different GPU with semicolons", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		nodeName := ctx.Value(keyNodeName).(string)
+
+		// Second NVLink error for GPU 3
+		nvlinkMessage := "Detected 71 nvlink_replay_error_count_total NvLink errors on GPU 3's NVLink " +
+			"(should be 0). Run a field diagnostic on the GPU."
+
+		t.Logf("Injecting GpuNvlinkWatch error for GPU 3 with semicolons in message")
+		event := helpers.NewHealthEvent(nodeName).
+			WithCheckName("GpuNvlinkWatch").
+			WithAgent("gpu-health-monitor").
+			WithComponentClass("GPU").
+			WithErrorCode("DCGM_FR_NVLINK_ERROR_THRESHOLD").
+			WithMessage(nvlinkMessage).
+			WithEntitiesImpacted([]helpers.EntityImpacted{
+				{EntityType: "GPU", EntityValue: "3"},
+				{EntityType: "PCI", EntityValue: "0000:db:00.0"},
+				{EntityType: "GPU_UUID", EntityValue: "GPU-c721be06-f442-ffe4-2bd6-f263f98g4b9d"},
+			}).
+			WithRecommendedAction(5)
+		helpers.SendHealthEvent(ctx, t, event)
+
+		t.Logf("Waiting for GpuNvlinkWatch condition to include GPU 3 on node %s", nodeName)
+		require.Eventually(t, func() bool {
+			condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
+				"GpuNvlinkWatch", "GpuNvlinkWatchIsNotHealthy")
+			if err != nil || condition == nil {
+				return false
+			}
+
+			t.Logf("Condition message: %s", condition.Message)
+
+			// Both GPU 7 and GPU 3 should be in the message
+			hasGPU7 := strings.Contains(condition.Message, "GPU:7")
+			hasGPU3 := strings.Contains(condition.Message, "GPU:3")
+
+			if !hasGPU7 {
+				t.Log("Warning: GPU:7 not found in condition message (may have been incorrectly parsed)")
+				return false
+			}
+			if !hasGPU3 {
+				t.Log("Waiting for GPU:3 to appear in condition message")
+				return false
+			}
+
+			// Validate the complete sanitized message for GPU 7 is still present
+			expectedGPU7Message := "" +
+				"Detected 7 nvlink_flit_crc_error_count_total NvLink errors on GPU 7's NVLink which exceeds threshold of 1 Monitor the NVLink. It can still perform workload.. " +
+				"Detected 97 nvlink_replay_error_count_total NvLink errors on GPU 7's NVLink (should be 0) Run a field diagnostic on the GPU.. " +
+				"Detected 1 nvlink_recovery_error_count_total NvLink errors on GPU 7's NVLink (should be 0). Run a field diagnostic on the GPU."
+			if !strings.Contains(condition.Message, expectedGPU7Message) {
+				t.Logf("Condition message did not contain the expected GPU 7 NVLink error message (may have been corrupted by semicolon parsing)")
+				return false
+			}
+
+			// Validate the complete sanitized message for GPU 3
+			expectedGPU3Message := "Detected 71 nvlink_replay_error_count_total NvLink errors on GPU 3's NVLink " +
+				"(should be 0). Run a field diagnostic on the GPU."
+			if !strings.Contains(condition.Message, expectedGPU3Message) {
+				t.Logf("Condition message did not contain the expected GPU 3 NVLink error message")
+				return false
+			}
+
+			return condition.Status == v1.ConditionTrue
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "GpuNvlinkWatch should include GPU 3 with complete sanitized message")
+
+		return ctx
+	})
+
+	feature.Assess("Send healthy event and verify condition clears correctly", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		nodeName := ctx.Value(keyNodeName).(string)
+
+		t.Logf("Sending healthy GpuNvlinkWatch event to clear all errors")
+		healthyEvent := helpers.NewHealthEvent(nodeName).
+			WithCheckName("GpuNvlinkWatch").
+			WithAgent("gpu-health-monitor").
+			WithComponentClass("GPU").
+			WithHealthy(true).
+			WithFatal(true).
+			WithMessage("No Health Failures").
+			WithEntitiesImpacted([]helpers.EntityImpacted{}) // Empty entities clears all
+
+		helpers.SendHealthEvent(ctx, t, healthyEvent)
+
+		t.Logf("Waiting for GpuNvlinkWatch condition to become healthy on node %s", nodeName)
+		require.Eventually(t, func() bool {
+			condition, err := helpers.CheckNodeConditionExists(ctx, client, nodeName,
+				"GpuNvlinkWatch", "GpuNvlinkWatchIsHealthy")
+			if err != nil {
+				t.Logf("Error checking condition: %v", err)
+				return false
+			}
+
+			if condition == nil {
+				t.Log("Healthy condition not found yet, still waiting...")
+				return false
+			}
+
+			t.Logf("Condition state - Status: %s, Reason: %s, Message: %s",
+				condition.Status, condition.Reason, condition.Message)
+
+			// Verify healthy condition properties
+			if condition.Status != v1.ConditionFalse {
+				t.Logf("Condition status is not False: %s", condition.Status)
+				return false
+			}
+
+			if condition.Message != "No Health Failures" {
+				t.Logf("Condition message is not 'No Health Failures': %s", condition.Message)
+				return false
+			}
+
+			t.Log("GpuNvlinkWatch condition became healthy (Status=False, Message='No Health Failures')")
+			return true
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "GpuNvlinkWatch should become healthy")
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		if err != nil {
+			t.Logf("Warning: failed to create client for teardown: %v", err)
+			return ctx
+		}
+
+		nodeNameVal := ctx.Value(keyNodeName)
+		if nodeNameVal == nil {
+			t.Log("Skipping teardown: nodeName not set")
+			return ctx
+		}
+		nodeName := nodeNameVal.(string)
+
+		t.Logf("Removing ManagedByNVSentinel label from node %s", nodeName)
+		err = helpers.RemoveNodeManagedByNVSentinelLabel(ctx, client, nodeName)
+		if err != nil {
+			t.Logf("Warning: failed to remove ManagedByNVSentinel label: %v", err)
+		}
+
+		return ctx
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
+func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
+	feature := features.New("GPU Health Monitor - Store Only Events").
+		WithLabel("suite", "gpu-health-monitor").
+		WithLabel("component", "store-only-events")
+
+	var testNodeName string
+	var gpuHealthMonitorPodName string
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		originalArgs, err := helpers.UpdateDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, map[string]string{
+			"--processing-strategy": "STORE_ONLY"})
+		require.NoError(t, err, "failed to update GPU health monitor processing strategy")
+
+		gpuHealthMonitorPod, err := helpers.GetDaemonSetPodOnWorkerNode(ctx, t, client, GPUHealthMonitorDaemonSetName, "gpu-health-monitor-dcgm-4.x")
+		require.NoError(t, err, "failed to find GPU health monitor pod on worker node")
+		require.NotNil(t, gpuHealthMonitorPod, "GPU health monitor pod should exist on worker node")
+
+		testNodeName = gpuHealthMonitorPod.Spec.NodeName
+		gpuHealthMonitorPodName = gpuHealthMonitorPod.Name
+		t.Logf("Using GPU health monitor pod: %s on node: %s", gpuHealthMonitorPodName, testNodeName)
+
+		metadata := helpers.CreateTestMetadata(testNodeName)
+		helpers.InjectMetadata(t, ctx, client, helpers.NVSentinelNamespace, testNodeName, metadata)
+
+		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
+		ctx = context.WithValue(ctx, keyGpuHealthMonitorPodName, gpuHealthMonitorPodName)
+		ctx = context.WithValue(ctx, keyGpuHealthMonitorOriginalArgs, originalArgs)
+
+		restConfig := client.RESTConfig()
+
+		nodeName := ctx.Value(keyNodeName).(string)
+		podName := ctx.Value(keyGpuHealthMonitorPodName).(string)
+
+		t.Logf("Injecting Inforom error on node %s", nodeName)
+		cmd := []string{"/bin/sh", "-c",
+			fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f 84 -v 0",
+				dcgmServiceHost, dcgmServicePort)}
+
+		stdout, stderr, execErr := helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
+		require.NoError(t, execErr, "failed to inject Inforom error: %s", stderr)
+		require.Contains(t, stdout, "Successfully injected", "Inforom error injection failed")
+
+		return ctx
+	})
+
+	feature.Assess("Cluster state remains unaffected", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		nodeName := ctx.Value(keyNodeName).(string)
+
+		t.Logf("Checking node condition is not applied on node %s", nodeName)
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, nodeName, "GpuInforomWatch")
+
+		t.Log("Verifying node was not cordoned")
+		helpers.AssertQuarantineState(ctx, t, client, nodeName, helpers.QuarantineAssertion{
+			ExpectCordoned:   false,
+			ExpectAnnotation: false,
+		})
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err, "failed to create kubernetes client")
+
+		nodeName := ctx.Value(keyNodeName).(string)
+		originalArgs := ctx.Value(keyGpuHealthMonitorOriginalArgs).([]string)
+		podName := ctx.Value(keyGpuHealthMonitorPodName).(string)
+
+		restConfig := client.RESTConfig()
+
+		t.Logf("Clearing injected errors on node %s before restoring DaemonSet", nodeName)
+		cmd := []string{"/bin/sh", "-c",
+			fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f %s -v %s",
+				dcgmServiceHost, dcgmServicePort, "84", "1")}
+		_, _, _ = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
+
+		helpers.RestoreDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, originalArgs)
+
+		t.Logf("Cleaning up metadata from node %s", nodeName)
+		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
+
+		return ctx
+
 	})
 
 	testEnv.Test(t, feature.Feature())
