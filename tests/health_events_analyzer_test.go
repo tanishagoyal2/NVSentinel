@@ -33,6 +33,10 @@ import (
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
 
+const (
+	keyOriginalArgsContextKey contextKey = "originalArgs"
+)
+
 // All tests in this file are not yet supported for PostgreSQL.
 // So we skip them for now using a build tag (mongodb) that excludes them from PostgreSQL tests.
 // Github Issue: https://github.com/NVIDIA/NVSentinel/issues/606
@@ -1529,6 +1533,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 
 	var testCtx *helpers.HealthEventsAnalyzerTestContext
 	var testNodeName string
+	var originalArgs []string
 
 	var entitiesImpacted [][]helpers.EntityImpacted
 
@@ -1536,10 +1541,12 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		err = helpers.SetDeploymentArgs(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		originalArgs, err = helpers.SetDeploymentArgs(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
+
+		ctx = context.WithValue(ctx, keyOriginalArgsContextKey, originalArgs)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)
 
@@ -1624,6 +1631,8 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
+		originalArgs := ctx.Value(keyOriginalArgsContextKey).([]string)
+
 		for _, entities := range entitiesImpacted {
 			syslogHealthEvent := helpers.NewHealthEvent(testNodeName).
 				WithAgent(helpers.SYSLOG_HEALTH_MONITOR_AGENT).
@@ -1636,9 +1645,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		err = helpers.RemoveDeploymentArgs(ctx, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
-			"--processing-strategy": "STORE_ONLY",
-		})
+		err = helpers.RestoreDeploymentArgs(t, ctx, client, "health-events-analyzer", "health-events-analyzer", originalArgs)
 		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)

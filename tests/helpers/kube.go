@@ -2492,3 +2492,89 @@ func GetDaemonSetPodOnWorkerNode(ctx context.Context, t *testing.T, client klien
 
 	return resultPod, nil
 }
+
+// SetDeploymentArgs sets or updates arguments for containers in a deployment.
+// If containerName is empty, applies to all containers. Otherwise, applies only to the named container.
+// Uses retry.RetryOnConflict for automatic retry handling.
+// Args is a map of flag to value, e.g., {"--processing-strategy": "STORE_ONLY", "--verbose": ""}.
+func SetDeploymentArgs(
+	ctx context.Context, t *testing.T,
+	c klient.Client, deploymentName, namespace, containerName string, args map[string]string,
+) ([]string, error) {
+	var originalArgs []string
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment := &appsv1.Deployment{}
+		if err := c.Resources().Get(ctx, deploymentName, namespace, deployment); err != nil {
+			return err
+		}
+
+		if len(deployment.Spec.Template.Spec.Containers) == 0 {
+			return fmt.Errorf("deployment %s/%s has no containers", namespace, deploymentName)
+		}
+
+		updatedContainer := false
+
+		for i := range deployment.Spec.Template.Spec.Containers {
+			container := &deployment.Spec.Template.Spec.Containers[i]
+
+			if containerName != "" && container.Name != containerName {
+				continue
+			}
+
+			originalArgs = make([]string, len(container.Args))
+			copy(originalArgs, container.Args)
+
+			setArgsOnContainer(t, container, args)
+
+			updatedContainer = true
+		}
+
+		if containerName != "" && !updatedContainer {
+			return fmt.Errorf("container %q not found in deployment %s/%s", containerName, namespace, deploymentName)
+		}
+
+		return c.Resources().Update(ctx, deployment)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return originalArgs, nil
+}
+
+// RestoreDeploymentArgs restores the deployment container args to the original state.
+// If containerName is empty, removes from all containers. Otherwise, removes only from the named container.
+// Uses retry.RetryOnConflict for automatic retry handling.
+func RestoreDeploymentArgs(
+	t *testing.T, ctx context.Context, c klient.Client,
+	deploymentName, containerName string, originalArgs []string,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment := &appsv1.Deployment{}
+		if err := c.Resources().Get(ctx, deploymentName, NVSentinelNamespace, deployment); err != nil {
+			return err
+		}
+
+		containers := deployment.Spec.Template.Spec.Containers
+		containerFound := false
+
+		for i := range containers {
+			if containers[i].Name == containerName {
+				// Restore the original args
+				containers[i].Args = make([]string, len(originalArgs))
+				copy(containers[i].Args, originalArgs)
+
+				containerFound = true
+
+				break
+			}
+		}
+
+		if !containerFound {
+			return fmt.Errorf("container %q not found in deployment %s/%s", containerName, NVSentinelNamespace, deploymentName)
+		}
+
+		return c.Resources().Update(ctx, deployment)
+	})
+}
