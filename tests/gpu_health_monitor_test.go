@@ -682,10 +682,6 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 		metadata := helpers.CreateTestMetadata(testNodeName)
 		helpers.InjectMetadata(t, ctx, client, helpers.NVSentinelNamespace, testNodeName, metadata)
 
-		t.Logf("Setting ManagedByNVSentinel=false on node %s", testNodeName)
-		err = helpers.SetNodeManagedByNVSentinel(ctx, client, testNodeName, false)
-		require.NoError(t, err, "failed to set ManagedByNVSentinel label")
-
 		ctx = context.WithValue(ctx, keyNodeName, testNodeName)
 		ctx = context.WithValue(ctx, keyGpuHealthMonitorPodName, gpuHealthMonitorPodName)
 		ctx = context.WithValue(ctx, keyGpuHealthMonitorOriginalArgs, originalArgs)
@@ -731,32 +727,20 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 
 		nodeName := ctx.Value(keyNodeName).(string)
 		originalArgs := ctx.Value(keyGpuHealthMonitorOriginalArgs).([]string)
-
-		helpers.RestoreDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, originalArgs)
+		podName := ctx.Value(keyGpuHealthMonitorPodName).(string)
 
 		restConfig := client.RESTConfig()
 
-		podNameVal := ctx.Value(keyGpuHealthMonitorPodName)
-		if podNameVal == nil {
-			t.Log("Skipping teardown: podName not set (setup likely failed early)")
-			return ctx
-		}
-		podName := podNameVal.(string)
-
-		t.Logf("Clearing injected errors on node %s", nodeName)
+		t.Logf("Clearing injected errors on node %s before restoring DaemonSet", nodeName)
 		cmd := []string{"/bin/sh", "-c",
 			fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f %s -v %s",
 				dcgmServiceHost, dcgmServicePort, "84", "1")}
 		_, _, _ = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
 
+		helpers.RestoreDaemonSetArgs(ctx, t, client, GPUHealthMonitorDaemonSetName, GPUHealthMonitorContainerName, originalArgs)
+
 		t.Logf("Cleaning up metadata from node %s", nodeName)
 		helpers.DeleteMetadata(t, ctx, client, helpers.NVSentinelNamespace, nodeName)
-
-		t.Logf("Removing ManagedByNVSentinel label from node %s", nodeName)
-		err = helpers.RemoveNodeManagedByNVSentinelLabel(ctx, client, nodeName)
-		if err != nil {
-			t.Logf("Warning: failed to remove ManagedByNVSentinel label: %v", err)
-		}
 
 		return ctx
 
