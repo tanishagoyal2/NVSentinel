@@ -32,7 +32,8 @@ import (
 type k8sObjectMonitorContextKey int
 
 const (
-	k8sMonitorKeyNodeName k8sObjectMonitorContextKey = iota
+	k8sMonitorKeyNodeName     k8sObjectMonitorContextKey = iota
+	k8sMonitorKeyOriginalArgs k8sObjectMonitorContextKey = iota
 
 	annotationKey     = "nvsentinel.nvidia.com/k8s-object-monitor-policy-matches"
 	testConditionType = "TestCondition"
@@ -149,10 +150,12 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
-		err = helpers.SetDeploymentArgs(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+		originalArgs, err := helpers.SetDeploymentArgs(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
+
+		ctx = context.WithValue(ctx, k8sMonitorKeyOriginalArgs, originalArgs)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
 
@@ -221,9 +224,9 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		err = helpers.RemoveDeploymentArgs(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
-			"--processing-strategy": "STORE_ONLY",
-		})
+		originalArgs := ctx.Value(k8sMonitorKeyOriginalArgs).([]string)
+
+		err = helpers.RestoreDeploymentArgs(t, ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", originalArgs)
 		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
