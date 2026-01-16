@@ -1541,14 +1541,14 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		originalArgs, err = helpers.SetDeploymentArgs(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace, "health-events-analyzer", map[string]string{
+		originalArgs, err = helpers.SetDeploymentArgs(ctx, t, client, helpers.HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, helpers.NVSentinelNamespace, helpers.HEALTH_EVENTS_ANALYZER_CONTAINER_NAME, map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
 
 		ctx = context.WithValue(ctx, keyOriginalArgsContextKey, originalArgs)
 
-		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)
+		helpers.WaitForDeploymentRollout(ctx, t, client, helpers.HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
 
 		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
 
@@ -1618,7 +1618,7 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 				return true
 			}
 			return false
-		}, helpers.NeverWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
 
 		t.Log("Validating received CloudEvent")
 		require.NotNil(t, receivedEvent)
@@ -1645,10 +1645,10 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 			helpers.SendHealthEvent(ctx, t, syslogHealthEvent)
 		}
 
-		err = helpers.RestoreDeploymentArgs(t, ctx, client, "health-events-analyzer", "health-events-analyzer", originalArgs)
+		err = helpers.RestoreDeploymentArgs(t, ctx, client, helpers.HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, helpers.NVSentinelNamespace, helpers.HEALTH_EVENTS_ANALYZER_CONTAINER_NAME, originalArgs)
 		require.NoError(t, err)
 
-		helpers.WaitForDeploymentRollout(ctx, t, client, "health-events-analyzer", helpers.NVSentinelNamespace)
+		helpers.WaitForDeploymentRollout(ctx, t, client, helpers.HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
 
 		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testNodeName, testCtx.ConfigMapBackup)
 	})
