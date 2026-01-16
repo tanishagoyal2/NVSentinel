@@ -1655,3 +1655,67 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 
 	testEnv.Test(t, feature.Feature())
 }
+
+func TestHealthEventsAnalyzerProcessingStrategyRuleOverride(t *testing.T) {
+	feature := features.New("TestHealthEventsAnalyzerRuleOverride").
+		WithLabel("suite", "health-event-analyzer")
+
+	var testCtx *helpers.HealthEventsAnalyzerTestContext
+	var testNodeName string
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		testNodeName = helpers.AcquireNodeFromPool(ctx, t, client, helpers.DefaultExpiry)
+
+		ctx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "data/health-events-analyzer-rule-override.yaml", "health-events-analyzer-test", testNodeName)
+		testNodeName = testCtx.NodeName
+		t.Logf("Using node: %s", testNodeName)
+		return ctx
+	})
+
+	feature.Assess("Verify node condition is added for the rule MultipleRemediations when overriden in rules", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		t.Log("Triggering multiple remediations cycle")
+		helpers.TriggerMultipleRemediationsCycle(ctx, t, client, testNodeName)
+
+		event := helpers.NewHealthEvent(testNodeName).
+			WithFatal(true).
+			WithErrorCode(helpers.ERRORCODE_31).
+			WithRecommendedAction(int(pb.RecommendedAction_RESTART_VM))
+		helpers.SendHealthEvent(ctx, t, event)
+
+		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "MultipleRemediations")
+
+		t.Log("Waiting for event to be exported via changestream")
+		var receivedEvent map[string]any
+		require.Eventually(t, func() bool {
+			events := helpers.GetMockEvents(t, c)
+			event, found := helpers.FindEventByNodeAndCheckName(events, testNodeName, "MultipleRemediations", false)
+
+			if found {
+				receivedEvent = event
+
+				return true
+			}
+
+			return false
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
+
+		t.Log("Validating received CloudEvent")
+		require.NotNil(t, receivedEvent)
+
+		helpers.ValidateCloudEvent(t, receivedEvent, testNodeName, "", "MultipleRemediations", "31", "STORE_ONLY")
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		return helpers.TeardownHealthEventsAnalyzer(ctx, t, c, testCtx.NodeName, testCtx.ConfigMapBackup)
+	})
+
+	testEnv.Test(t, feature.Feature())
+}

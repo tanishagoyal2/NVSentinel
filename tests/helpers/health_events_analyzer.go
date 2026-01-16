@@ -185,6 +185,8 @@ func applyHealthEventsAnalyzerConfigAndRestart(
 		return err
 	}
 
+	WaitForDeploymentRollout(ctx, t, client, HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, NVSentinelNamespace)
+
 	return nil
 }
 
