@@ -2573,3 +2573,19 @@ func RestoreDeploymentArgs(
 		return c.Resources().Update(ctx, deployment)
 	})
 }
+
+func ApplyNewConfigMap(
+	ctx context.Context, t *testing.T, client klient.Client, configMapPath string,
+	deploymentName string,
+	configName string,
+) error {
+	t.Helper()
+	t.Logf("Applying config in deployment %s", deploymentName)
+
+	err := createConfigMapFromFilePath(ctx, client, configMapPath, configName, NVSentinelNamespace)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

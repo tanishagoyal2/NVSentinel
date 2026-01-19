@@ -131,6 +131,8 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		WithLabel("suite", "kubernetes-object-monitor").
 		WithLabel("component", "node-monitoring")
 
+	var testCtx *helpers.KubernetesObjectMonitorTestContext
+
 	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
@@ -150,14 +152,115 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
-		originalArgs, err := helpers.SetDeploymentArgs(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", map[string]string{
+		originalArgs, err := helpers.SetDeploymentArgs(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace, helpers.K8S_CONTAINER_NAME, map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
 
+		testCtx = &helpers.KubernetesObjectMonitorTestContext{
+			NodeName: testNodeName,
+		}
+
 		ctx = context.WithValue(ctx, k8sMonitorKeyOriginalArgs, originalArgs)
 
-		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
+		helpers.WaitForDeploymentRollout(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
+
+		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
+	})
+
+	feature.Assess("Node NotReady triggers health event with STORE_ONLY strategy", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		nodeName := ctx.Value(k8sMonitorKeyNodeName).(string)
+		t.Logf("Setting TestCondition to False on node %s", nodeName)
+
+		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionFalse)
+
+		t.Log("Waiting for policy match annotation on node")
+		require.Never(t, func() bool {
+			node, err := helpers.GetNodeByName(ctx, client, nodeName)
+			if err != nil {
+				t.Logf("Failed to get node: %v", err)
+				return false
+			}
+
+			annotation, exists := node.Annotations[annotationKey]
+			if exists {
+				t.Logf("Annotation should not exist but found: %s", annotation)
+				return true
+			}
+
+			t.Logf("Node annotation correctly does not exist")
+			return false
+		}, helpers.NeverWaitTimeout, helpers.WaitInterval)
+
+		return ctx
+	})
+
+	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		originalArgs := ctx.Value(k8sMonitorKeyOriginalArgs).([]string)
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		t.Logf("Setting TestCondition to True on node %s", testCtx.NodeName)
+
+		helpers.SetNodeConditionStatus(ctx, t, client, testCtx.NodeName, v1.NodeConditionType(testConditionType), v1.ConditionTrue)
+
+		helpers.TeardownKubernetesObjectMonitor(ctx, t, c, testCtx.ConfigMapBackup, originalArgs)
+
+		return ctx
+	})
+
+	testEnv.Test(t, feature.Feature())
+}
+
+func TestKubernetesObjectMonitorWithRuleOverride(t *testing.T) {
+	feature := features.New("Kubernetes Object Monitor with Rule Override for processingStrategy=STORE_ONLY - Node Not Ready Detection").
+		WithLabel("suite", "kubernetes-object-monitor").
+		WithLabel("component", "node-monitoring")
+
+	var testCtx *helpers.KubernetesObjectMonitorTestContext
+
+	feature.Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		client, err := c.NewClient()
+		require.NoError(t, err)
+
+		// Find the test node first
+		nodeList := &v1.NodeList{}
+		err = client.Resources().List(ctx, nodeList)
+		require.NoError(t, err)
+
+		var testNodeName string
+		for _, node := range nodeList.Items {
+			if node.Labels["type"] != "kwok" {
+				testNodeName = node.Name
+				break
+			}
+		}
+		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
+		t.Logf("Using test node: %s", testNodeName)
+
+		t.Log("Backing up current configmap")
+
+		backupData, err := helpers.BackupConfigMap(ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
+		require.NoError(t, err)
+		t.Log("Backup created in memory")
+
+		testCtx = &helpers.KubernetesObjectMonitorTestContext{
+			NodeName:        testNodeName,
+			ConfigMapBackup: backupData,
+		}
+
+		err = helpers.ApplyNewConfigMap(ctx, t, client, "data/k8s-rule-override.yaml", helpers.K8S_DEPLOYMENT_NAME, "kubernetes-object-monitor")
+		require.NoError(t, err)
+
+		originalArgs, err := helpers.SetDeploymentArgs(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace, helpers.K8S_CONTAINER_NAME, nil)
+		require.NoError(t, err)
+
+		ctx = context.WithValue(ctx, k8sMonitorKeyOriginalArgs, originalArgs)
+
+		helpers.RestartDeployment(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
 
 		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
 	})
@@ -191,45 +294,18 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Node Ready recovery clears annotation", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-		client, err := c.NewClient()
-		require.NoError(t, err)
-
-		nodeName := ctx.Value(k8sMonitorKeyNodeName).(string)
-		t.Logf("Setting TestCondition to True on node %s", nodeName)
-
-		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionTrue)
-
-		t.Log("Waiting for policy match annotation to be cleared")
-		require.Eventually(t, func() bool {
-			node, err := helpers.GetNodeByName(ctx, client, nodeName)
-			if err != nil {
-				t.Logf("Failed to get node: %v", err)
-				return false
-			}
-
-			annotation, exists := node.Annotations[annotationKey]
-			if exists && annotation != "" {
-				t.Logf("Annotation still exists: %s", annotation)
-				return false
-			}
-
-			return true
-		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval)
-
-		return ctx
-	})
-
 	feature.Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		originalArgs := ctx.Value(k8sMonitorKeyOriginalArgs).([]string)
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		originalArgs := ctx.Value(k8sMonitorKeyOriginalArgs).([]string)
+		t.Logf("Setting TestCondition to True on node %s", testCtx.NodeName)
 
-		err = helpers.RestoreDeploymentArgs(t, ctx, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace, "", originalArgs)
-		require.NoError(t, err)
+		helpers.SetNodeConditionStatus(ctx, t, client, testCtx.NodeName, v1.NodeConditionType(testConditionType), v1.ConditionTrue)
 
-		helpers.WaitForDeploymentRollout(ctx, t, client, "kubernetes-object-monitor", helpers.NVSentinelNamespace)
+		t.Log("Restoring kubernetes-object-monitor state")
+
+		helpers.TeardownKubernetesObjectMonitor(ctx, t, c, testCtx.ConfigMapBackup, originalArgs)
 
 		return ctx
 	})

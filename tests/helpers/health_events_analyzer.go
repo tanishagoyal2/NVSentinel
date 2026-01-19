@@ -80,7 +80,14 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 	testCtx.ConfigMapBackup = backupData
 
-	err = applyHealthEventsAnalyzerConfigAndRestart(ctx, t, client, configMapPath)
+	err = ApplyNewConfigMap(
+		ctx, t, client, configMapPath, HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, "health-events-analyzer-config",
+	)
+	require.NoError(t, err)
+
+	t.Logf("Restarting %s deployment", HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME)
+
+	err = RestartDeployment(ctx, t, client, HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, NVSentinelNamespace)
 	require.NoError(t, err)
 
 	return ctx, testCtx
@@ -165,29 +172,6 @@ func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, node
 
 	event.EntitiesImpacted = []EntityImpacted{}
 	SendHealthEvent(ctx, t, event)
-}
-
-func applyHealthEventsAnalyzerConfigAndRestart(
-	ctx context.Context, t *testing.T, client klient.Client, configMapPath string,
-) error {
-	t.Helper()
-	t.Logf("Applying health-events-analyzer configmap: %s", configMapPath)
-
-	err := createConfigMapFromFilePath(ctx, client, configMapPath, "health-events-analyzer-config", NVSentinelNamespace)
-	if err != nil {
-		return err
-	}
-
-	t.Log("Restarting health-events-analyzer deployment")
-
-	err = RestartDeployment(ctx, t, client, "health-events-analyzer", NVSentinelNamespace)
-	if err != nil {
-		return err
-	}
-
-	WaitForDeploymentRollout(ctx, t, client, HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, NVSentinelNamespace)
-
-	return nil
 }
 
 func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client klient.Client, nodeName string) {
