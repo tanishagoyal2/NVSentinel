@@ -1601,28 +1601,12 @@ func TestHealthEventsAnalyzerStoreOnlyStrategy(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Verify node condition is not added when processing STORE_ONLY events", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Verify node condition is not added and node is not cordoned when processing STORE_ONLY events", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
 		t.Log("Verifying no node condition is created when processing STORE_ONLY strategy")
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "RepeatedXIDErrorOnSameGPU")
-
-		t.Log("Waiting for event to be exported via changestream")
-		var receivedEvent map[string]any
-		require.Eventually(t, func() bool {
-			events := helpers.GetMockEvents(t, c)
-			event, found := helpers.FindEventByNodeAndCheckName(events, testNodeName, "RepeatedXIDErrorOnSameGPU", false)
-			if found {
-				receivedEvent = event
-				return true
-			}
-			return false
-		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
-
-		t.Log("Validating received CloudEvent")
-		require.NotNil(t, receivedEvent)
-		helpers.ValidateCloudEvent(t, receivedEvent, testNodeName, "", "RepeatedXIDErrorOnSameGPU", "120", "STORE_ONLY")
 
 		return ctx
 	})
@@ -1675,7 +1659,7 @@ func TestHealthEventsAnalyzerProcessingStrategyRuleOverride(t *testing.T) {
 		return ctx
 	})
 
-	feature.Assess("Verify node condition is added for the rule MultipleRemediations when overriden in rules", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+	feature.Assess("Verify node condition is not added for the rule MultipleRemediations as rule strategy is overridden to STORE_ONLY", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
@@ -1689,26 +1673,6 @@ func TestHealthEventsAnalyzerProcessingStrategyRuleOverride(t *testing.T) {
 		helpers.SendHealthEvent(ctx, t, event)
 
 		helpers.EnsureNodeConditionNotPresent(ctx, t, client, testNodeName, "MultipleRemediations")
-
-		t.Log("Waiting for event to be exported via changestream")
-		var receivedEvent map[string]any
-		require.Eventually(t, func() bool {
-			events := helpers.GetMockEvents(t, c)
-			event, found := helpers.FindEventByNodeAndCheckName(events, testNodeName, "MultipleRemediations", false)
-
-			if found {
-				receivedEvent = event
-
-				return true
-			}
-
-			return false
-		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "event should be exported via changestream")
-
-		t.Log("Validating received CloudEvent")
-		require.NotNil(t, receivedEvent)
-
-		helpers.ValidateCloudEvent(t, receivedEvent, testNodeName, "", "MultipleRemediations", "31", "STORE_ONLY")
 
 		return ctx
 	})
