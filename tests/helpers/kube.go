@@ -2545,6 +2545,13 @@ func RestoreDeploymentArgs(
 	t *testing.T, ctx context.Context, c klient.Client,
 	deploymentName, namespace, containerName string, originalArgs []string,
 ) error {
+	if originalArgs == nil {
+		return nil
+	}
+
+	t.Helper()
+	t.Logf("Restoring args %v for deployment %s/%s container %s", originalArgs, namespace, deploymentName, containerName)
+
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		deployment := &appsv1.Deployment{}
 		if err := c.Resources().Get(ctx, deploymentName, namespace, deployment); err != nil {

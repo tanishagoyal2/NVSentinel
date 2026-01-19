@@ -260,7 +260,8 @@ func TestKubernetesObjectMonitorWithRuleOverride(t *testing.T) {
 
 		ctx = context.WithValue(ctx, k8sMonitorKeyOriginalArgs, originalArgs)
 
-		helpers.RestartDeployment(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
+		err = helpers.RestartDeployment(ctx, t, client, helpers.K8S_DEPLOYMENT_NAME, helpers.NVSentinelNamespace)
+		require.NoError(t, err)
 
 		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
 	})
