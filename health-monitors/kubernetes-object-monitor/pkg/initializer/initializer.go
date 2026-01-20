@@ -114,7 +114,7 @@ func InitializeAll(ctx context.Context, params Params) (*Components, error) {
 	}
 
 	if err := registerControllers(mgr, evaluator, pub, cfg.Policies,
-		params.MaxConcurrentReconciles, pb.ProcessingStrategy(strategyValue)); err != nil {
+		params.MaxConcurrentReconciles); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to register controllers: %w", err)
 	}
@@ -167,9 +167,8 @@ func registerControllers(
 	pub *publisher.Publisher,
 	policies []config.Policy,
 	maxConcurrentReconciles int,
-	processingStrategy pb.ProcessingStrategy,
 ) error {
-	annotationMgr := annotations.NewManager(mgr.GetClient(), processingStrategy)
+	annotationMgr := annotations.NewManager(mgr.GetClient())
 	gvkPolicies := groupPoliciesByGVK(policies)
 
 	for gvk, policies := range gvkPolicies {

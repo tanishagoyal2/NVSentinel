@@ -25,7 +25,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/annotations"
 	"github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/config"
 	"github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/metrics"
@@ -214,11 +213,8 @@ func (r *ResourceReconciler) handleUnhealthyTransition(
 	r.matchStates[stateKey] = nodeName
 	r.matchStatesMu.Unlock()
 
-	// Skip annotation update if policy has STORE_ONLY processing strategy
-	if p.HealthEvent.ProcessingStrategy != pb.ProcessingStrategy_STORE_ONLY.String() {
-		if err := r.annotationMgr.AddMatch(ctx, nodeName, stateKey, nodeName); err != nil {
-			slog.Error("Failed to persist match state to annotation", "node", nodeName, "stateKey", stateKey, "error", err)
-		}
+	if err := r.annotationMgr.AddMatch(ctx, nodeName, stateKey, nodeName); err != nil {
+		slog.Error("Failed to persist match state to annotation", "node", nodeName, "stateKey", stateKey, "error", err)
 	}
 
 	metrics.PolicyMatches.WithLabelValues(p.Name, nodeName, r.gvk.Kind).Inc()

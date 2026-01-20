@@ -178,7 +178,7 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionFalse)
 
 		t.Log("Waiting for policy match annotation on node")
-		require.Never(t, func() bool {
+		require.Eventually(t, func() bool {
 			node, err := helpers.GetNodeByName(ctx, client, nodeName)
 			if err != nil {
 				t.Logf("Failed to get node: %v", err)
@@ -186,15 +186,13 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 			}
 
 			annotation, exists := node.Annotations[annotationKey]
-			if exists {
-				t.Logf("Annotation should not exist but found: %s", annotation)
-				return true
+			if !exists {
+				return false
 			}
 
-			t.Logf("Node annotation correctly does not exist")
-			return false
-		}, helpers.NeverWaitTimeout, helpers.WaitInterval)
-
+			t.Logf("Found policy match annotation: %s", annotation)
+			return true
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval)
 		return ctx
 	})
 
@@ -276,7 +274,7 @@ func TestKubernetesObjectMonitorWithRuleOverride(t *testing.T) {
 		helpers.SetNodeConditionStatus(ctx, t, client, nodeName, v1.NodeConditionType(testConditionType), v1.ConditionFalse)
 
 		t.Log("Waiting for policy match annotation on node")
-		require.Never(t, func() bool {
+		require.Eventually(t, func() bool {
 			node, err := helpers.GetNodeByName(ctx, client, nodeName)
 			if err != nil {
 				t.Logf("Failed to get node: %v", err)
@@ -284,14 +282,14 @@ func TestKubernetesObjectMonitorWithRuleOverride(t *testing.T) {
 			}
 
 			annotation, exists := node.Annotations[annotationKey]
-			if exists {
-				t.Logf("Annotation should not exist but found: %s", annotation)
-				return true
+			if !exists {
+				return false
 			}
 
-			t.Logf("Node annotation correctly does not exist")
-			return false
-		}, helpers.NeverWaitTimeout, helpers.WaitInterval)
+			t.Logf("Found policy match annotation: %s", annotation)
+			return true
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval)
+
 		return ctx
 	})
 

@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/annotations"
 	celenv "github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/cel"
 	"github.com/nvidia/nvsentinel/health-monitors/kubernetes-object-monitor/pkg/config"
@@ -573,7 +572,7 @@ func setupTestWithPolicies(t *testing.T, policies []config.Policy) *testSetup {
 		Kind:    "Node",
 	}
 
-	annotationMgr := annotations.NewManager(k8sClient, protos.ProcessingStrategy_EXECUTE_REMEDIATION)
+	annotationMgr := annotations.NewManager(k8sClient)
 
 	reconciler := controller.NewResourceReconciler(
 		k8sClient,
@@ -628,7 +627,7 @@ func setupTestWithCRD(t *testing.T, policies []config.Policy, crd *apiextensions
 		Kind:    crd.Spec.Names.Kind,
 	}
 
-	annotationMgr := annotations.NewManager(k8sClient, protos.ProcessingStrategy_EXECUTE_REMEDIATION)
+	annotationMgr := annotations.NewManager(k8sClient)
 
 	reconciler := controller.NewResourceReconciler(
 		k8sClient,
@@ -736,7 +735,7 @@ func restartReconciler(t *testing.T, setup *testSetup) *testSetup {
 
 	policies := []config.Policy{defaultNodeNotReadyPolicy()}
 
-	annotationMgr := annotations.NewManager(setup.k8sClient, protos.ProcessingStrategy_EXECUTE_REMEDIATION)
+	annotationMgr := annotations.NewManager(setup.k8sClient)
 
 	reconciler := controller.NewResourceReconciler(
 		setup.k8sClient,
@@ -774,7 +773,7 @@ func restartReconcilerWithCRD(t *testing.T, setup *testSetup, policies []config.
 		publishedEvents: []mockPublishedEvent{},
 	}
 
-	annotationMgr := annotations.NewManager(setup.k8sClient, protos.ProcessingStrategy_EXECUTE_REMEDIATION)
+	annotationMgr := annotations.NewManager(setup.k8sClient)
 
 	reconciler := controller.NewResourceReconciler(
 		setup.k8sClient,
