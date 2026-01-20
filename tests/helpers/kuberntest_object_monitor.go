@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
@@ -46,10 +47,32 @@ func TeardownKubernetesObjectMonitor(
 
 		err = createConfigMapFromBytes(ctx, client, configMapBackup, "kubernetes-object-monitor", NVSentinelNamespace)
 		require.NoError(t, err)
+
+		err = RestartDeployment(ctx, t, client, K8S_DEPLOYMENT_NAME, NVSentinelNamespace)
+		require.NoError(t, err)
 	}
 
 	err = RestoreDeploymentArgs(t, ctx, client, K8S_DEPLOYMENT_NAME, NVSentinelNamespace, K8S_CONTAINER_NAME, originalArgs)
 	require.NoError(t, err)
 
 	WaitForDeploymentRollout(ctx, t, client, K8S_DEPLOYMENT_NAME, NVSentinelNamespace)
+}
+
+func UpdateKubernetesObjectMonitorConfigMap(ctx context.Context, t *testing.T, client klient.Client,
+	configMapPath string, configName string) {
+	t.Helper()
+
+	if configMapPath == "" {
+		t.Fatalf("configMapPath is empty")
+	}
+
+	t.Logf("Updating configmap %s", configName)
+
+	err := createConfigMapFromFilePath(ctx, client, configMapPath, configName, NVSentinelNamespace)
+	require.NoError(t, err)
+
+	t.Logf("Restarting %s deployment", K8S_DEPLOYMENT_NAME)
+
+	err = RestartDeployment(ctx, t, client, K8S_DEPLOYMENT_NAME, NVSentinelNamespace)
+	require.NoError(t, err)
 }

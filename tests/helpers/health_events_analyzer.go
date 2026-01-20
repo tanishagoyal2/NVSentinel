@@ -72,18 +72,18 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 	clearHealthEventsAnalyzerConditions(ctx, t, gpuNodeName)
 
-	t.Log("Backing up current health-events-analyzer configmap")
+	if configMapPath != "" {
+		t.Log("Backing up current health-events-analyzer configmap")
 
-	backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
-	require.NoError(t, err)
-	t.Log("Backup created in memory")
+		backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
+		require.NoError(t, err)
+		t.Log("Backup created in memory")
 
-	testCtx.ConfigMapBackup = backupData
+		testCtx.ConfigMapBackup = backupData
 
-	err = ApplyNewConfigMap(
-		ctx, t, client, configMapPath, HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME, "health-events-analyzer-config",
-	)
-	require.NoError(t, err)
+		err = createConfigMapFromFilePath(ctx, client, configMapPath, "health-events-analyzer-config", NVSentinelNamespace)
+		require.NoError(t, err)
+	}
 
 	t.Logf("Restarting %s deployment", HEALTH_EVENTS_ANALYZER_DEPLOYMENT_NAME)
 
@@ -244,10 +244,12 @@ func restoreHealthEventsAnalyzerConfig(ctx context.Context, t *testing.T, c *env
 	client, err := c.NewClient()
 	require.NoError(t, err)
 
-	t.Log("Restoring configmap from memory")
+	if configMapBackup != nil {
+		t.Log("Restoring configmap from memory")
 
-	err = createConfigMapFromBytes(ctx, client, configMapBackup, "health-events-analyzer-config", NVSentinelNamespace)
-	require.NoError(t, err)
+		err = createConfigMapFromBytes(ctx, client, configMapBackup, "health-events-analyzer-config", NVSentinelNamespace)
+		require.NoError(t, err)
+	}
 
 	err = RestartDeployment(ctx, t, client, "health-events-analyzer", NVSentinelNamespace)
 	require.NoError(t, err)

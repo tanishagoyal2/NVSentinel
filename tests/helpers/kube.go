@@ -2581,18 +2581,38 @@ func RestoreDeploymentArgs(
 	})
 }
 
-func ApplyNewConfigMap(
-	ctx context.Context, t *testing.T, client klient.Client, configMapPath string,
-	deploymentName string,
-	configName string,
-) error {
+// DeleteExistingNodeEvents deletes Kubernetes node events for a given node name and event type and reason.
+// This is useful for cleaning up test events that might interfere with subsequent tests.
+func DeleteExistingNodeEvents(ctx context.Context, t *testing.T, c klient.Client,
+	nodeName, eventType, eventReason string) error {
 	t.Helper()
-	t.Logf("Applying config in deployment %s", deploymentName)
+	t.Logf("Deleting events for node %s with type=%s, reason=%s", nodeName, eventType, eventReason)
 
-	err := createConfigMapFromFilePath(ctx, client, configMapPath, configName, NVSentinelNamespace)
+	eventList, err := GetNodeEvents(ctx, c, nodeName, eventType)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get events for node %s: %w", nodeName, err)
 	}
+
+	deletedCount := 0
+
+	for _, event := range eventList.Items {
+		if eventReason != "" && event.Reason != eventReason {
+			continue
+		}
+
+		// Delete the event (events are in default namespace)
+		err := c.Resources().WithNamespace("default").Delete(ctx, &event)
+		if err != nil {
+			t.Logf("Warning: failed to delete event %s: %v", event.Name, err)
+			continue
+		}
+
+		deletedCount++
+
+		t.Logf("Deleted event: %s (type=%s, reason=%s)", event.Name, event.Type, event.Reason)
+	}
+
+	t.Logf("Deleted %d event(s) for node %s", deletedCount, nodeName)
 
 	return nil
 }
