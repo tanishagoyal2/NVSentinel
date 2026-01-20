@@ -83,6 +83,7 @@ func InitializeAll(ctx context.Context, params Params) (*Components, error) {
 
 	strategyValue, ok := pb.ProcessingStrategy_value[params.ProcessingStrategy]
 	if !ok {
+		conn.Close()
 		return nil, fmt.Errorf("unexpected processingStrategy value: %q", params.ProcessingStrategy)
 	}
 
