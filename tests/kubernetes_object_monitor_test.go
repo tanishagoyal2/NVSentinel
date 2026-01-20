@@ -59,7 +59,7 @@ func TestKubernetesObjectMonitor(t *testing.T) {
 				break
 			}
 		}
-		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
+		require.NotEmpty(t, testNodeName, "no worker node found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
 		return context.WithValue(ctx, k8sMonitorKeyNodeName, testNodeName)
@@ -154,7 +154,7 @@ func TestKubernetesObjectMonitorWithStoreOnlyStrategy(t *testing.T) {
 				break
 			}
 		}
-		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
+		require.NotEmpty(t, testNodeName, "no worker node found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
 		err = helpers.DeleteExistingNodeEvents(ctx, t, client, testNodeName, "node-test-condition", "node-test-conditionIsNotHealthy")
@@ -248,7 +248,7 @@ func TestKubernetesObjectMonitorWithRuleOverride(t *testing.T) {
 				break
 			}
 		}
-		require.NotEmpty(t, testNodeName, "no real (non-KWOK) nodes found in cluster")
+		require.NotEmpty(t, testNodeName, "no worker node found in cluster")
 		t.Logf("Using test node: %s", testNodeName)
 
 		err = helpers.DeleteExistingNodeEvents(ctx, t, client, testNodeName, "node-test-condition", "node-test-conditionIsNotHealthy")
