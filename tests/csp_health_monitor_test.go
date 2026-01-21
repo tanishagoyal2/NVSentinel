@@ -32,7 +32,8 @@ import (
 )
 
 const (
-	cspPollingInterval = 30 * time.Second
+	cspPollingInterval        = 30 * time.Second
+	keyOriginalArgsContextKey = "originalArgs"
 )
 
 // TestCSPHealthMonitorGCPMaintenanceEvent verifies the complete GCP maintenance event lifecycle:
@@ -428,10 +429,11 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		err = helpers.SetDeploymentArgs(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
+		originalArgs, err := helpers.SetDeploymentArgs(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
 			"--processing-strategy": "STORE_ONLY",
 		})
 		require.NoError(t, err)
+		ctx = context.WithValue(ctx, keyOriginalArgsContextKey, originalArgs)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace)
 
@@ -498,6 +500,12 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 			ExpectAnnotation: false,
 		})
 
+		t.Logf("Verified: node %s was not cordoned when processing STORE_ONLY strategy", testCtx.NodeName)
+		helpers.AssertQuarantineState(ctx, t, client, testCtx.NodeName, helpers.QuarantineAssertion{
+			ExpectCordoned:   false,
+			ExpectAnnotation: false,
+		})
+
 		return ctx
 	})
 
@@ -505,9 +513,10 @@ func TestCSPHealthMonitorStoreOnlyProcessingStrategy(t *testing.T) {
 		client, err := c.NewClient()
 		require.NoError(t, err)
 
-		helpers.RemoveDeploymentArgs(ctx, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", map[string]string{
-			"--processing-strategy": "STORE_ONLY",
-		})
+		originalArgs := ctx.Value(keyOriginalArgsContextKey).([]string)
+
+		err = helpers.RestoreDeploymentArgs(t, ctx, client, "csp-health-monitor", helpers.NVSentinelNamespace, "maintenance-notifier", originalArgs)
+		require.NoError(t, err)
 
 		helpers.WaitForDeploymentRollout(ctx, t, client, "csp-health-monitor", helpers.NVSentinelNamespace)
 
