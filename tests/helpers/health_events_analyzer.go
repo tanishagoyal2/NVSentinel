@@ -177,13 +177,14 @@ func clearHealthEventsAnalyzerConditions(ctx context.Context, t *testing.T, node
 func TriggerMultipleRemediationsCycle(ctx context.Context, t *testing.T, client klient.Client, nodeName string) {
 	xidsToInject := []string{ERRORCODE_79, ERRORCODE_48}
 
-	t.Logf("Delete any existing RebootNode CR for node %s", nodeName)
+	t.Log("Delete any existing RebootNode CR")
 
 	err := DeleteAllRebootNodeCRs(ctx, t, client)
 	require.NoError(t, err, "failed to delete all RebootNode CRs")
 
 	// inject 2 fatal errors and let the remediation cycle finish
 	t.Logf("Injecting fatal errors to node %s", nodeName)
+
 	for _, xid := range xidsToInject {
 		waitForRemediationToComplete(ctx, t, client, nodeName, xid)
 	}
