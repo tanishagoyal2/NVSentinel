@@ -77,6 +77,7 @@ func SetupHealthEventsAnalyzerTest(ctx context.Context,
 
 		backupData, err := BackupConfigMap(ctx, client, "health-events-analyzer-config", NVSentinelNamespace)
 		require.NoError(t, err)
+
 		t.Log("Backup created in memory")
 
 		testCtx.ConfigMapBackup = backupData
