@@ -60,9 +60,9 @@ kubectl -n nvsentinel logs deployment/health-events-analyzer -f | \
 
 The Health Events Analyzer establishes a connection to MongoDB to listen for inserted events and to publish new health events. Connection errors prevent event processing and increase health_event_analyzer_event_processing_errors metric for `execute_pipeline_error` error type.
 
-Follow this runbook to resolve DB connection error mongodb-connection-error
+Follow the [MongoDB Connection Error runbook](https://github.com/NVIDIA/NVSentinel/blob/main/docs/runbooks/mongodb-connection-error.md) to diagnose and resolve MongoDB connection issues.
 
-If mongodb pods are in healthy state then check for connectivity errors in health-events-analyzer pod
+If MongoDB pods are in a healthy state, check for connectivity errors in the health-events-analyzer pod:
 
 ```bash
 # Check for connection errors in HEA logs
