@@ -60,32 +60,7 @@ kubectl -n nvsentinel logs deployment/health-events-analyzer -f | \
 
 The Health Events Analyzer establishes a connection to MongoDB to listen for inserted events and to publish new health events. Connection errors prevent event processing and increase health_event_analyzer_event_processing_errors metric for `execute_pipeline_error` error type.
 
-**Diagnosis:**
-
-```bash
-# Check MongoDB pods are running
-kubectl get pods -n nvsentinel -l app.kubernetes.io/name=mongodb
-# All pods should be Running and Ready
-
-# Check certificates (mongo-root-ca, mongo-app-client-cert, mongo-server-cert-*)
-kubectl get certificates -n nvsentinel
-# All should show READY = True
-
-# If certificates not ready, check cert-manager
-kubectl get pods -n cert-manager
-
-# Check MongoDB database creation job
-kubectl get job -n nvsentinel create-mongodb-database
-# Should show COMPLETIONS: 1/1
-```
-If the MongoDB job needs to be rerun:
-
-```bash
-# Save and recreate the job
-kubectl get job create-mongodb-database -n nvsentinel -o yaml > create-mongodb-database.yaml
-kubectl delete job -n nvsentinel create-mongodb-database
-kubectl apply -f create-mongodb-database.yaml
-```
+Follow this runbook to resolve DB connection error mongodb-connection-error
 
 If mongodb pods are in healthy state then check for connectivity errors in health-events-analyzer pod
 
