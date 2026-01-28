@@ -169,7 +169,12 @@ kubectl -n nvsentinel logs job/create-mongodb-database
 # Check if job completed successfully
 kubectl -n nvsentinel get job create-mongodb-database -o jsonpath='{.status.succeeded}'
 # Should return "1" if successful
-# If job failed, delete the job and re-sync nvsentinel application. ArgoCD will recreate the job
+
+# If job failed, delete the job and mongodb stateful set
+kubectl delete  -n nvsentinel statefulset.apps/mongodb
+kubectl delete  -n nvsentinel job.batch/create-mongodb-database
+
+# Re-sync the nvsentinel application. ArgoCD will recreate the job
 ```
 
 ### Issue 3: Storage Class Is Missing
