@@ -148,7 +148,7 @@ func (c *FaultQuarantineClient) UpdateNode(ctx context.Context, nodeName string,
 		Jitter:   0.1,
 	}
 
-	return retry.OnError(backoff, errors.IsConflict, func() error {
+	return retry.OnError(backoff, isRetryableError, func() error {
 		node, err := c.Clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -167,6 +167,22 @@ func (c *FaultQuarantineClient) UpdateNode(ctx context.Context, nodeName string,
 
 		return nil
 	})
+}
+
+func isRetryableError(err error) bool {
+	if errors.IsConflict(err) {
+		return true
+	}
+
+	if errors.IsServerTimeout(err) || errors.IsTooManyRequests(err) {
+		return true
+	}
+
+	if errors.IsTimeout(err) || errors.IsServiceUnavailable(err) {
+		return true
+	}
+
+	return false
 }
 
 func (c *FaultQuarantineClient) ReadCircuitBreakerState(

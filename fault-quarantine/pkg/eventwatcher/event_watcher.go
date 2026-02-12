@@ -259,7 +259,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	result, err := w.databaseClient.FindOne(ctx, filter, findOptions)
 	if err != nil {
 		if errors.Is(err, client.ErrNoDocuments) {
-			slog.Debug("No quarantining/unquarantining events found for node", "node", nodeName)
+			slog.Warn("No quarantining/unquarantining events found for node", "node", nodeName)
 
 			return nil
 		}
@@ -271,7 +271,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 
 	if err := result.Decode(&latestEvent); err != nil {
 		if errors.Is(err, client.ErrNoDocuments) || client.IsNoDocumentsError(err) {
-			slog.Debug("No quarantining/unquarantining events found for node (during decode)", "node", nodeName)
+			slog.Warn("No quarantining/unquarantining events found for node", "node", nodeName)
 
 			return nil
 		}
