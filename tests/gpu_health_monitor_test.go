@@ -706,17 +706,12 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 					t.Logf("DCGM error injection failed with exit code 235 (will retry): %v, stderr: %s", execErr, stderr)
 					return false
 				}
-
-				t.Fatalf("DCGM error injection failed with non-retryable error: %v, stderr: %s", execErr, stderr)
-				return false
-			}
-			if !strings.Contains(stdout, "Successfully injected") {
-				t.Logf("DCGM injection did not return success message: %s", stdout)
-				return false
 			}
 			return true
 		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "failed to inject Inforom error after retries: %s", stderr)
 
+		require.NoError(t, execErr, "failed to inject Inforom error: %s", stderr)
+		require.Contains(t, stdout, "Successfully injected", "Inforom error injection failed")
 		t.Logf("Successfully injected Inforom error")
 
 		return ctx
