@@ -697,11 +697,17 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 
 		var stdout, stderr string
 		var execErr error
-		// Retry the injection command as DCGM might need time to initialize after pod rollout
+		// Retry the injection command only for exit code 235 (DCGM_ST_CONNECTION_NOT_VALID)
+		// as DCGM might need time to initialize after pod rollout
 		require.Eventually(t, func() bool {
 			stdout, stderr, execErr = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
 			if execErr != nil {
-				t.Logf("DCGM error injection attempt failed %v, stderr: %s", execErr, stderr)
+				if strings.Contains(execErr.Error(), "exit code 235") {
+					t.Logf("DCGM error injection failed with exit code 235 (will retry): %v, stderr: %s", execErr, stderr)
+					return false
+				}
+
+				t.Fatalf("DCGM error injection failed with non-retryable error: %v, stderr: %s", execErr, stderr)
 				return false
 			}
 			if !strings.Contains(stdout, "Successfully injected") {
