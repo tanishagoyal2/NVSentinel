@@ -1482,20 +1482,6 @@ func (r *Reconciler) handleManualUntaint(nodeName string) error {
 
 	annotationsToRemove := []string{}
 
-	var taintsToRemove []config.Taint
-
-	taintsKey := common.QuarantineHealthEventAppliedTaintsAnnotationKey
-	if taintsStr, exists := annotations[taintsKey]; exists && taintsStr != "" {
-		annotationsToRemove = append(annotationsToRemove, taintsKey)
-
-		if err := json.Unmarshal([]byte(taintsStr), &taintsToRemove); err != nil {
-			slog.Error("Failed to unmarshal taints", "node", nodeName, "error", err)
-			return fmt.Errorf("failed to unmarshal taints for manually untainted node %s: %w", nodeName, err)
-		}
-
-		slog.Debug("Parsed taints to remove", "node", nodeName, "taintCount", len(taintsToRemove))
-	}
-
 	if _, exists := annotations[common.QuarantineHealthEventAnnotationKey]; exists {
 		annotationsToRemove = append(annotationsToRemove, common.QuarantineHealthEventAnnotationKey)
 	}
@@ -1515,7 +1501,6 @@ func (r *Reconciler) handleManualUntaint(nodeName string) error {
 	if err := r.k8sClient.HandleManualUntaintCleanup(
 		ctx,
 		nodeName,
-		taintsToRemove,
 		annotationsToRemove,
 		newAnnotations,
 		[]string{statemanager.NVSentinelStateLabelKey},

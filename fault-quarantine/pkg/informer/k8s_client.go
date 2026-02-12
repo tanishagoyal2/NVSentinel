@@ -530,27 +530,11 @@ func (c *FaultQuarantineClient) HandleManualUncordonCleanup(
 func (c *FaultQuarantineClient) HandleManualUntaintCleanup(
 	ctx context.Context,
 	nodename string,
-	taintsToRemove []config.Taint,
 	annotationsToRemove []string,
 	annotationsToAdd map[string]string,
 	labelsToRemove []string,
 ) error {
 	updateFn := func(node *v1.Node) error {
-		// Uncordon the node if it's currently cordoned
-		if node.Spec.Unschedulable {
-			if !c.DryRunMode {
-				slog.Info("Uncordoning node as part of manual untaint cleanup", "node", nodename)
-
-				node.Spec.Unschedulable = false
-			} else {
-				slog.Info("DryRun mode enabled, skipping node uncordoning", "node", nodename)
-			}
-		}
-
-		if len(taintsToRemove) > 0 {
-			c.removeNodeTaints(node, taintsToRemove)
-		}
-
 		if len(annotationsToRemove) > 0 || len(annotationsToAdd) > 0 {
 			c.updateNodeAnnotationsForManualUncordon(node, annotationsToRemove, annotationsToAdd)
 		}
