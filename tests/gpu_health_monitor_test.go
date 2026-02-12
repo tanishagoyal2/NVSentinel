@@ -695,9 +695,23 @@ func TestGpuHealthMonitorStoreOnlyEvents(t *testing.T) {
 			fmt.Sprintf("dcgmi test --host %s:%s --inject --gpuid 0 -f 84 -v 0",
 				dcgmServiceHost, dcgmServicePort)}
 
-		stdout, stderr, execErr := helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
-		require.NoError(t, execErr, "failed to inject Inforom error: %s", stderr)
-		require.Contains(t, stdout, "Successfully injected", "Inforom error injection failed")
+		var stdout, stderr string
+		var execErr error
+		// Retry the injection command as DCGM might need time to initialize after pod rollout
+		require.Eventually(t, func() bool {
+			stdout, stderr, execErr = helpers.ExecInPod(ctx, restConfig, helpers.NVSentinelNamespace, podName, "", cmd)
+			if execErr != nil {
+				t.Logf("DCGM error injection attempt failed %v, stderr: %s", execErr, stderr)
+				return false
+			}
+			if !strings.Contains(stdout, "Successfully injected") {
+				t.Logf("DCGM injection did not return success message: %s", stdout)
+				return false
+			}
+			return true
+		}, helpers.EventuallyWaitTimeout, helpers.WaitInterval, "failed to inject Inforom error after retries: %s", stderr)
+
+		t.Logf("Successfully injected Inforom error")
 
 		return ctx
 	})
