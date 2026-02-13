@@ -155,10 +155,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	databaseClient := datastoreAdapter.GetDatabaseClient()
 
-	if err := r.setupCircuitBreaker(ctx, databaseClient); err != nil {
-		return err
-	}
-
+	// Create change stream watcher first (needed for eventWatcher)
 	changeStreamWatcher, err := datastoreAdapter.CreateChangeStreamWatcher(
 		ctx, "fault-quarantine", r.config.DatabasePipeline)
 	if err != nil {
@@ -185,7 +182,26 @@ func (r *Reconciler) Start(ctx context.Context) error {
 		r,              // Reconciler implements LastProcessedObjectIDStore interface
 	)
 
-	r.setupNodeInformerCallbacks()
+	r.SetupNodeInformerCallbacks()
+
+	slog.Info("Starting node informer")
+
+	go func() {
+		if err := r.k8sClient.NodeInformer.Run(ctx.Done()); err != nil {
+			slog.Error("Node informer failed", "error", err)
+		}
+	}()
+
+	// Wait for the informer cache to sync before proceeding
+	if !r.k8sClient.NodeInformer.WaitForSync(ctx) {
+		return fmt.Errorf("failed to sync NodeInformer cache")
+	}
+
+	slog.Info("Node informer started and synced")
+
+	if err := r.setupCircuitBreaker(ctx, databaseClient); err != nil {
+		return err
+	}
 
 	ruleSetEvals, err := r.initializeRuleSetEvaluators()
 	if err != nil {
@@ -197,10 +213,6 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	rulesetsConfig := r.buildRulesetsConfig()
 
 	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
-
-	if !r.k8sClient.NodeInformer.WaitForSync(ctx) {
-		return fmt.Errorf("failed to sync NodeInformer cache")
-	}
 
 	r.initializeQuarantineMetrics()
 
@@ -234,7 +246,7 @@ func (r *Reconciler) setupCircuitBreaker(ctx context.Context, databaseClient cli
 }
 
 // setupNodeInformerCallbacks configures callbacks on the already-created node informer
-func (r *Reconciler) setupNodeInformerCallbacks() {
+func (r *Reconciler) SetupNodeInformerCallbacks() {
 	r.k8sClient.NodeInformer.SetOnQuarantinedNodeDeletedCallback(func(nodeName string) {
 		metrics.CurrentQuarantinedNodes.WithLabelValues(nodeName).Set(0)
 		slog.Info("Set currentQuarantinedNodes to 0 for deleted quarantined node", "node", nodeName)
