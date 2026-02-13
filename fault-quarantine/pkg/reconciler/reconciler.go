@@ -155,24 +155,17 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	databaseClient := datastoreAdapter.GetDatabaseClient()
 
-	// Create change stream watcher first (needed for eventWatcher)
-	changeStreamWatcher, err := datastoreAdapter.CreateChangeStreamWatcher(
-		ctx, "fault-quarantine", r.config.DatabasePipeline)
+	// Handle circuit breaker cursor mode BEFORE creating change stream watcher
+	// This ensures resume token is deleted (if cursor=CREATE) before the stream opens
+	// Note: We don't check if tripped here because that requires the node informer to be synced
+	if err := r.handleCircuitBreakerCursorMode(ctx, databaseClient); err != nil {
+		return fmt.Errorf("failed to handle circuit breaker cursor mode: %w", err)
+	}
+
+	oldWatcher, err := r.setupChangeStreamWatcher(ctx, datastoreAdapter)
 	if err != nil {
-		return fmt.Errorf("failed to create change stream watcher: %w", err)
+		return err
 	}
-
-	// Unwrap to get client.ChangeStreamWatcher for EventWatcher compatibility
-	type unwrapper interface {
-		Unwrap() client.ChangeStreamWatcher
-	}
-
-	unwrapable, ok := changeStreamWatcher.(unwrapper)
-	if !ok {
-		return fmt.Errorf("watcher does not support unwrapping to client.ChangeStreamWatcher")
-	}
-
-	oldWatcher := unwrapable.Unwrap()
 
 	// Create event watcher with the new signature
 	r.eventWatcher = eventwatcher.NewEventWatcher(
@@ -199,8 +192,9 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	slog.Info("Node informer started and synced")
 
-	if err := r.setupCircuitBreaker(ctx, databaseClient); err != nil {
-		return err
+	// Check circuit breaker state AFTER informer is synced (IsTripped needs node counts from informer)
+	if err := r.checkCircuitBreakerAtStartup(ctx); err != nil {
+		return fmt.Errorf("failed to check circuit breaker at startup: %w", err)
 	}
 
 	ruleSetEvals, err := r.initializeRuleSetEvaluators()
@@ -231,18 +225,31 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	return nil
 }
 
-func (r *Reconciler) setupCircuitBreaker(ctx context.Context, databaseClient client.DatabaseClient) error {
-	// Handle circuit breaker state BEFORE creating change stream watcher
-	// This ensures resume token is deleted (if cursor=CREATE) before the stream opens
-	if err := r.checkCircuitBreakerAtStartup(ctx); err != nil {
-		return err
+// setupChangeStreamWatcher creates and unwraps the change stream watcher
+func (r *Reconciler) setupChangeStreamWatcher(
+	ctx context.Context,
+	datastoreAdapter interface {
+		CreateChangeStreamWatcher(ctx context.Context, clientName string, pipeline interface{}) (
+			datastore.ChangeStreamWatcher, error)
+	},
+) (client.ChangeStreamWatcher, error) {
+	changeStreamWatcher, err := datastoreAdapter.CreateChangeStreamWatcher(
+		ctx, "fault-quarantine", r.config.DatabasePipeline)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create change stream watcher: %w", err)
 	}
 
-	if err := r.handleCircuitBreakerCursorMode(ctx, databaseClient); err != nil {
-		return fmt.Errorf("failed to handle circuit breaker cursor mode: %w", err)
+	// Unwrap to get client.ChangeStreamWatcher for EventWatcher compatibility
+	type unwrapper interface {
+		Unwrap() client.ChangeStreamWatcher
 	}
 
-	return nil
+	unwrapable, ok := changeStreamWatcher.(unwrapper)
+	if !ok {
+		return nil, fmt.Errorf("watcher does not support unwrapping to client.ChangeStreamWatcher")
+	}
+
+	return unwrapable.Unwrap(), nil
 }
 
 // setupNodeInformerCallbacks configures callbacks on the already-created node informer
