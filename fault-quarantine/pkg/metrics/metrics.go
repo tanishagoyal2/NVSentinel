@@ -80,7 +80,7 @@ var (
 	CurrentQuarantinedNodes = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "fault_quarantine_current_quarantined_nodes",
-			Help: "Current number of quarantined nodes.",
+			Help: "Nodes which are currently quarantined and undergoing breakfix",
 		},
 		[]string{"node"},
 	)
