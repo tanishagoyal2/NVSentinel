@@ -158,21 +158,12 @@ func (b *MongoDBPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() datas
 						datastore.E("$or", datastore.A(
 							datastore.D(
 								datastore.E("$expr", datastore.D(
-									datastore.E("$gt", datastore.A(
-										datastore.D(
-											datastore.E("$size", datastore.D(
-												datastore.E("$filter", datastore.D(
-													datastore.E("input", datastore.D(
-														datastore.E("$objectToArray", "$updateDescription.updatedFields"),
-													)),
-													datastore.E("as", "field"),
-													datastore.E("cond", datastore.D(
-														datastore.E("$eq", datastore.A("$$field.k", "healtheventstatus.userpodsevictionstatus")),
-													)),
-												)),
-											)),
-										),
-										0,
+									datastore.E("$ne", datastore.A(
+										datastore.D(datastore.E("$getField", datastore.D(
+											datastore.E("input", "$updateDescription.updatedFields"),
+											datastore.E("field", "healtheventstatus.userpodsevictionstatus"),
+										))),
+										nil,
 									)),
 								)),
 								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", datastore.D(
@@ -185,21 +176,12 @@ func (b *MongoDBPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() datas
 							// Watch for unquarantine events (for annotation cleanup)
 							datastore.D(
 								datastore.E("$expr", datastore.D(
-									datastore.E("$gt", datastore.A(
-										datastore.D(
-											datastore.E("$size", datastore.D(
-												datastore.E("$filter", datastore.D(
-													datastore.E("input", datastore.D(
-														datastore.E("$objectToArray", "$updateDescription.updatedFields"),
-													)),
-													datastore.E("as", "field"),
-													datastore.E("cond", datastore.D(
-														datastore.E("$eq", datastore.A("$$field.k", "healtheventstatus.userpodsevictionstatus")),
-													)),
-												)),
-											)),
-										),
-										0,
+									datastore.E("$ne", datastore.A(
+										datastore.D(datastore.E("$getField", datastore.D(
+											datastore.E("input", "$updateDescription.updatedFields"),
+											datastore.E("field", "healtheventstatus.userpodsevictionstatus"),
+										))),
+										nil,
 									)),
 								)),
 								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.UnQuarantined)),
