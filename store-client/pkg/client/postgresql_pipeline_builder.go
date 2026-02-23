@@ -197,8 +197,8 @@ func (b *PostgreSQLPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() da
 										datastore.E("$in", datastore.A(string(model.StatusSucceeded), string(model.AlreadyDrained))),
 									)),
 								)),
-								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", datastore.D(
-									datastore.E("$in", datastore.A(string(model.StatusSucceeded), string(model.AlreadyDrained))),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", datastore.D(
+									datastore.E("$in", datastore.A(string(model.Quarantined), string(model.AlreadyQuarantined))),
 								)),
 							),
 							// Watch for unquarantine events (for annotation cleanup)
