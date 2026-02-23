@@ -856,7 +856,12 @@ func TestUpdateNodeRemediatedStatus(t *testing.T) {
 				},
 			}
 
-			err := r.updateNodeRemediatedStatus(ctx, mockHealthStore, tt.eventToken, tt.nodeRemediated)
+			healthEventDoc := &events.HealthEventDoc{
+				HealthEventWithStatus: model.HealthEventWithStatus{
+					HealthEventStatus: model.HealthEventStatus{},
+				},
+			}
+			err := r.updateNodeRemediatedStatus(ctx, mockHealthStore, tt.eventToken, healthEventDoc, tt.nodeRemediated)
 
 			if tt.expectError {
 				assert.Error(t, err)

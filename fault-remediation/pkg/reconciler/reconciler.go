@@ -394,7 +394,8 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 	_, performRemediationErr := r.performRemediation(ctx, healthEventWithStatus, groupConfig)
 	nodeRemediatedStatus := performRemediationErr == nil
 
-	if err := r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken, nodeRemediatedStatus); err != nil {
+	if err := r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken,
+		healthEventWithStatus, nodeRemediatedStatus); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("update_status_error", nodeName).Inc()
 		slog.Error("Error updating remediation status for node", "error", err)
 
@@ -429,12 +430,14 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 	ctx context.Context,
 	healthEventStore datastore.HealthEventStore,
 	eventWithToken datastore.EventWithToken,
+	healthEventWithStatus *events.HealthEventDoc,
 	nodeRemediatedStatus bool,
 ) error {
 	documentID, err := utils.ExtractDocumentID(eventWithToken.Event)
 	if err != nil {
 		return err
 	}
+
 	// Create status object for the update
 	status := datastore.HealthEventStatus{}
 	faultRemediated := nodeRemediatedStatus
