@@ -153,7 +153,6 @@ func (b *MongoDBPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() datas
 					// ============================================================
 					// Case 1: UPDATE operations (PRIMARY PATH)
 					// ============================================================
-					// Match when eviction status is updated AND node is already quarantined
 					datastore.D(
 						datastore.E("operationType", "update"),
 						datastore.E("$or", datastore.A(
@@ -228,6 +227,7 @@ func (b *MongoDBPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() datas
 							),
 							// Watch for cancelled quarantine events (for annotation cleanup)
 							datastore.D(
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Quarantined)),
 								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
 							),
 						)),

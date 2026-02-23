@@ -238,6 +238,7 @@ func (b *PostgreSQLPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() da
 								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.StatusSucceeded)),
 							),
 							datastore.D(
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Quarantined)),
 								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
 							),
 						)),
