@@ -144,34 +144,129 @@ func (b *MongoDBPipelineBuilder) BuildProcessableNonFatalUnhealthyInsertsPipelin
 // BuildQuarantinedAndDrainedNodesPipeline creates a pipeline for remediation-ready nodes
 // This watches for insert/update events where both quarantine and eviction status indicate the
 // node is ready for reboot, or where the node has been unquarantined and needs cleanup, or where
-// quarantine was cancelled. Note: Both INSERT and UPDATE operations are supported to handle
-// database-specific semantics (MongoDB uses "update" for replaceOne operations, PostgreSQL uses
-// "insert" for new healthy events).
+// quarantine was cancelled.
+//
+// MongoDB behavior:
+//   - For UPDATE operations: MongoDB reports the entire object path in updateDescription.updatedFields
+//     (e.g., "healtheventstatus.userpodsevictionstatus" when the entire object is replaced)
+//   - We check updateDescription.updatedFields to ensure we only trigger when relevant fields are updated
+//   - For INSERT operations: We check fullDocument fields directly
 func (b *MongoDBPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() datastore.Pipeline {
 	return datastore.ToPipeline(
 		datastore.D(
 			datastore.E("$match", datastore.D(
-				datastore.E("operationType", datastore.D(
-					datastore.E("$in", datastore.A("insert", "update")),
-				)),
 				datastore.E("$or", datastore.A(
-					// Watch for quarantine events (for remediation)
+					// ============================================================
+					// Case 1: UPDATE operations (PRIMARY PATH)
+					// ============================================================
+					// Match when eviction status is updated AND node is already quarantined
 					datastore.D(
-						datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", datastore.D(
-							datastore.E("$in", datastore.A(string(model.StatusSucceeded), string(model.AlreadyDrained))),
-						)),
-						datastore.E("fullDocument.healtheventstatus.nodequarantined", datastore.D(
-							datastore.E("$in", datastore.A(string(model.Quarantined), string(model.AlreadyQuarantined))),
+						datastore.E("operationType", "update"),
+						datastore.E("$or", datastore.A(
+							// Watch for quarantine events (for remediation)
+							// MongoDB reports "healtheventstatus.userpodsevictionstatus" when the entire object is updated
+							// Use $expr with $objectToArray to check if key with dots exists in updatedFields
+							datastore.D(
+								datastore.E("$expr", datastore.D(
+									datastore.E("$gt", datastore.A(
+										datastore.D(
+											datastore.E("$size", datastore.D(
+												datastore.E("$filter", datastore.D(
+													datastore.E("input", datastore.D(
+														datastore.E("$objectToArray", "$updateDescription.updatedFields"),
+													)),
+													datastore.E("as", "field"),
+													datastore.E("cond", datastore.D(
+														datastore.E("$eq", datastore.A("$$field.k", "healtheventstatus.userpodsevictionstatus")),
+													)),
+												)),
+											)),
+										),
+										0,
+									)),
+								)),
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", datastore.D(
+									datastore.E("$in", datastore.A(string(model.StatusSucceeded), string(model.AlreadyDrained))),
+								)),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", datastore.D(
+									datastore.E("$in", datastore.A(string(model.Quarantined), string(model.AlreadyQuarantined))),
+								)),
+							),
+							// Watch for unquarantine events (for annotation cleanup)
+							datastore.D(
+								datastore.E("$expr", datastore.D(
+									datastore.E("$gt", datastore.A(
+										datastore.D(
+											datastore.E("$size", datastore.D(
+												datastore.E("$filter", datastore.D(
+													datastore.E("input", datastore.D(
+														datastore.E("$objectToArray", "$updateDescription.updatedFields"),
+													)),
+													datastore.E("as", "field"),
+													datastore.E("cond", datastore.D(
+														datastore.E("$eq", datastore.A("$$field.k", "healtheventstatus.userpodsevictionstatus")),
+													)),
+												)),
+											)),
+										),
+										0,
+									)),
+								)),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.UnQuarantined)),
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.StatusSucceeded)),
+							),
+							// Watch for cancelled quarantine events (for annotation cleanup)
+							datastore.D(
+								datastore.E("$expr", datastore.D(
+									datastore.E("$gt", datastore.A(
+										datastore.D(
+											datastore.E("$size", datastore.D(
+												datastore.E("$filter", datastore.D(
+													datastore.E("input", datastore.D(
+														datastore.E("$objectToArray", "$updateDescription.updatedFields"),
+													)),
+													datastore.E("as", "field"),
+													datastore.E("cond", datastore.D(
+														datastore.E("$eq", datastore.A("$$field.k", "healtheventstatus.userpodsevictionstatus")),
+													)),
+												)),
+											)),
+										),
+										0,
+									)),
+								)),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Quarantined)),
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
+							),
 						)),
 					),
-					// Watch for unquarantine events (for annotation cleanup)
+
+					// ============================================================
+					// Case 2: INSERT operations (FAILSAFE PATH)
+					// ============================================================
+					// Match if event is inserted with remediation-ready status already set
 					datastore.D(
-						datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.UnQuarantined)),
-						datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.StatusSucceeded)),
-					),
-					// Watch for cancelled quarantine events (for annotation cleanup)
-					datastore.D(
-						datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Cancelled)),
+						datastore.E("operationType", "insert"),
+						datastore.E("$or", datastore.A(
+							// Watch for quarantine events (for remediation)
+							datastore.D(
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", datastore.D(
+									datastore.E("$in", datastore.A(string(model.StatusSucceeded), string(model.AlreadyDrained))),
+								)),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", datastore.D(
+									datastore.E("$in", datastore.A(string(model.Quarantined), string(model.AlreadyQuarantined))),
+								)),
+							),
+							// Watch for unquarantine events (for annotation cleanup)
+							datastore.D(
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.UnQuarantined)),
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.StatusSucceeded)),
+							),
+							// Watch for cancelled quarantine events (for annotation cleanup)
+							datastore.D(
+								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
+							),
+						)),
 					),
 				)),
 			)),

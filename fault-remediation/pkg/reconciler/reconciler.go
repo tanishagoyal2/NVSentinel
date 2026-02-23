@@ -116,9 +116,10 @@ func (r *FaultRemediationReconciler) Reconcile(
 
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined
+	nodeDrainingStatus := healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status
 
 	if nodeQuarantined != nil {
-		if *nodeQuarantined == model.UnQuarantined || *nodeQuarantined == model.Cancelled {
+		if *nodeQuarantined == model.UnQuarantined || nodeDrainingStatus == model.Cancelled {
 			return r.handleCancellationEvent(ctx, nodeName, *nodeQuarantined, r.Watcher, event.ResumeToken)
 		}
 	}
@@ -395,7 +396,8 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 	_, performRemediationErr := r.performRemediation(ctx, healthEventWithStatus, groupConfig)
 	nodeRemediatedStatus := performRemediationErr == nil
 
-	if err := r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken, nodeRemediatedStatus); err != nil {
+	if err := r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken,
+		healthEventWithStatus, nodeRemediatedStatus); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("update_status_error", nodeName).Inc()
 		slog.Error("Error updating remediation status for node", "error", err)
 
@@ -430,6 +432,7 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 	ctx context.Context,
 	healthEventStore datastore.HealthEventStore,
 	eventWithToken datastore.EventWithToken,
+	healthEventWithStatus *events.HealthEventDoc,
 	nodeRemediatedStatus bool,
 ) error {
 	documentID, err := utils.ExtractDocumentID(eventWithToken.Event)
@@ -437,15 +440,37 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 		return err
 	}
 
-	// Create status object for the update
-	status := datastore.HealthEventStatus{}
+	// Start with the existing status to preserve all current values (e.g., UserPodsEvictionStatus)
+	// Only update FaultRemediated and LastRemediationTimestamp
 	faultRemediated := nodeRemediatedStatus
-	status.FaultRemediated = &faultRemediated
+	healthEventWithStatus.HealthEventStatus.FaultRemediated = &faultRemediated
 
 	// If remediation was successful, set the timestamp
 	if nodeRemediatedStatus {
 		now := time.Now().UTC()
-		status.LastRemediationTimestamp = &now
+		healthEventWithStatus.HealthEventStatus.LastRemediationTimestamp = &now
+	}
+
+	// Convert model.HealthEventStatus to datastore.HealthEventStatus
+	// IMPORTANT: We must preserve NodeQuarantined and UserPodsEvictionStatus even though
+	// we're only updating FaultRemediated and LastRemediationTimestamp.
+	// This is because PostgreSQL's UpdateHealthEventStatus updates ALL fields unconditionally,
+	// so if we don't include existing values, they'll be overwritten with zero values.
+	var nodeQuarantined *datastore.Status
+
+	if healthEventWithStatus.HealthEventStatus.NodeQuarantined != nil {
+		status := datastore.Status(*healthEventWithStatus.HealthEventStatus.NodeQuarantined)
+		nodeQuarantined = &status
+	}
+
+	status := datastore.HealthEventStatus{
+		NodeQuarantined: nodeQuarantined,
+		UserPodsEvictionStatus: datastore.OperationStatus{
+			Status:  datastore.Status(healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status),
+			Message: healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Message,
+		},
+		FaultRemediated:          healthEventWithStatus.HealthEventStatus.FaultRemediated,
+		LastRemediationTimestamp: healthEventWithStatus.HealthEventStatus.LastRemediationTimestamp,
 	}
 
 	// Use the healthEventStore to update the status with retries
