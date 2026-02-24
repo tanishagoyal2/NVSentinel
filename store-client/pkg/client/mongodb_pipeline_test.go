@@ -123,29 +123,36 @@ func TestConvertAgnosticPipelineToMongo_QuarantineUpdate(t *testing.T) {
 }
 
 func TestQuarantinedAndDrainedPipelineMatchesMainBranch(t *testing.T) {
-	// This test ensures our agnostic pipeline produces the expected structure.
-	// Pipeline uses top-level $or with UPDATE and INSERT branches; each branch has its own $or
-	// with 3 conditions (quarantine+drained, unquarantine, cancelled).
+	// This test ensures our agnostic pipeline produces the expected structure for cross-database compatibility
+	// Updated to accept both INSERT and UPDATE operations for PostgreSQL compatibility
+	exprUserPodsKeyPresent := bson.D{
+		bson.E{Key: "$gt", Value: bson.A{
+			bson.D{
+				bson.E{Key: "$size", Value: bson.D{
+					bson.E{Key: "$filter", Value: bson.D{
+						bson.E{Key: "input", Value: bson.D{
+							bson.E{Key: "$objectToArray", Value: "$updateDescription.updatedFields"},
+						}},
+						bson.E{Key: "as", Value: "field"},
+						bson.E{Key: "cond", Value: bson.D{
+							bson.E{Key: "$eq", Value: bson.A{"$$field.k", "healtheventstatus.userpodsevictionstatus"}},
+						}},
+					}},
+				}},
+			},
+			0,
+		}},
+	}
 	expectedPipeline := mongo.Pipeline{
 		bson.D{
 			bson.E{Key: "$match", Value: bson.D{
 				bson.E{Key: "$or", Value: bson.A{
-					// UPDATE branch (with $expr for change-stream update detection)
+					// UPDATE branch
 					bson.D{
 						bson.E{Key: "operationType", Value: "update"},
 						bson.E{Key: "$or", Value: bson.A{
 							bson.D{
-								bson.E{Key: "$expr", Value: bson.D{
-									bson.E{Key: "$ne", Value: bson.A{
-										bson.D{
-											bson.E{Key: "$getField", Value: bson.D{
-												bson.E{Key: "input", Value: "$updateDescription.updatedFields"},
-												bson.E{Key: "field", Value: "healtheventstatus.userpodsevictionstatus"},
-											}},
-										},
-										nil,
-									}},
-								}},
+								bson.E{Key: "$expr", Value: exprUserPodsKeyPresent},
 								bson.E{Key: "fullDocument.healtheventstatus.userpodsevictionstatus.status", Value: bson.D{
 									bson.E{Key: "$in", Value: bson.A{string(model.StatusSucceeded), string(model.AlreadyDrained)}},
 								}},
@@ -154,34 +161,14 @@ func TestQuarantinedAndDrainedPipelineMatchesMainBranch(t *testing.T) {
 								}},
 							},
 							bson.D{
-								bson.E{Key: "$expr", Value: bson.D{
-									bson.E{Key: "$ne", Value: bson.A{
-										bson.D{
-											bson.E{Key: "$getField", Value: bson.D{
-												bson.E{Key: "input", Value: "$updateDescription.updatedFields"},
-												bson.E{Key: "field", Value: "healtheventstatus.userpodsevictionstatus"},
-											}},
-										},
-										nil,
-									}},
-								}},
+								bson.E{Key: "$expr", Value: exprUserPodsKeyPresent},
 								bson.E{Key: "fullDocument.healtheventstatus.nodequarantined", Value: string(model.UnQuarantined)},
 								bson.E{Key: "fullDocument.healtheventstatus.userpodsevictionstatus.status", Value: string(model.StatusSucceeded)},
 							},
 							bson.D{
-								bson.E{Key: "$expr", Value: bson.D{
-									bson.E{Key: "$ne", Value: bson.A{
-										bson.D{
-											bson.E{Key: "$getField", Value: bson.D{
-												bson.E{Key: "input", Value: "$updateDescription.updatedFields"},
-												bson.E{Key: "field", Value: "healtheventstatus.userpodsevictionstatus"},
-											}},
-										},
-										nil,
-									}},
+								bson.E{Key: "updateDescription.updatedFields", Value: bson.D{
+									bson.E{Key: "healtheventstatus.nodequarantined", Value: string(model.Cancelled)},
 								}},
-								bson.E{Key: "fullDocument.healtheventstatus.nodequarantined", Value: string(model.Quarantined)},
-								bson.E{Key: "fullDocument.healtheventstatus.userpodsevictionstatus.status", Value: string(model.Cancelled)},
 							},
 						}},
 					},
@@ -202,8 +189,7 @@ func TestQuarantinedAndDrainedPipelineMatchesMainBranch(t *testing.T) {
 								bson.E{Key: "fullDocument.healtheventstatus.userpodsevictionstatus.status", Value: string(model.StatusSucceeded)},
 							},
 							bson.D{
-								bson.E{Key: "fullDocument.healtheventstatus.nodequarantined", Value: string(model.Quarantined)},
-								bson.E{Key: "fullDocument.healtheventstatus.userpodsevictionstatus.status", Value: string(model.Cancelled)},
+								bson.E{Key: "fullDocument.healtheventstatus.nodequarantined", Value: string(model.Cancelled)},
 							},
 						}},
 					},

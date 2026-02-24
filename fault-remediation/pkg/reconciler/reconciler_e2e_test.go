@@ -1335,10 +1335,7 @@ func createCancelledEvent(eventID string, nodeName string, action protos.Recomme
 		"fullDocument": map[string]interface{}{
 			"_id": eventID,
 			"healtheventstatus": map[string]interface{}{
-				"nodequarantined": model.Quarantined,
-				"userpodsevictionstatus": map[string]interface{}{
-					"status": model.Cancelled,
-				},
+				"nodequarantined": model.Cancelled,
 			},
 			"healthevent": map[string]interface{}{
 				"nodename":          nodeName,

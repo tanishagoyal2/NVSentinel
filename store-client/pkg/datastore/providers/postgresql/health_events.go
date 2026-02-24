@@ -219,7 +219,8 @@ func (p *PostgreSQLHealthEventStore) UpdateHealthEventStatus(
 
 	var params []interface{}
 
-	if status.NodeQuarantined != nil {
+	switch {
+	case status.NodeQuarantined != nil:
 		// NodeQuarantined has a value - update it in both column and JSONB
 		statusStr := string(*status.NodeQuarantined)
 		//nolint:dupword // SQL query uses nested jsonb_set calls
@@ -262,8 +263,8 @@ func (p *PostgreSQLHealthEventStore) UpdateHealthEventStatus(
 			status.LastRemediationTimestamp,
 			id,
 		}
-	} else {
-		// NodeQuarantined is NULL - only update other fields, skip nodequarantined in JSONB
+	case status.UserPodsEvictionStatus.Status != "":
+		// NodeQuarantined is NULL but UserPodsEvictionStatus is set - update eviction + remediation fields only
 		//nolint:dupword // SQL query uses nested jsonb_set calls
 		query = `
 			UPDATE health_events
@@ -294,6 +295,31 @@ func (p *PostgreSQLHealthEventStore) UpdateHealthEventStatus(
 			string(status.UserPodsEvictionStatus.Status),
 			status.UserPodsEvictionStatus.Message,
 			status.DrainFinishTimestamp,
+			status.FaultRemediated,
+			status.LastRemediationTimestamp,
+			id,
+		}
+	default:
+		// NodeQuarantined is NULL and UserPodsEvictionStatus is empty (e.g. FR-only update):
+		// only update fault_remediated and last_remediation_timestamp, preserve existing eviction status
+		//nolint:dupword // SQL query uses nested jsonb_set
+		query = `
+			UPDATE health_events
+			SET fault_remediated = $1::boolean,
+			    last_remediation_timestamp = $2::timestamp,
+			    document = jsonb_set(
+			        jsonb_set(
+			            document,
+			            '{healtheventstatus,faultremediated}',
+			            to_jsonb($1::boolean)
+			        ),
+			        '{healtheventstatus,lastremediationtimestamp}',
+			        to_jsonb($2::timestamp)
+			    ),
+			    updated_at = NOW()
+			WHERE id = $3::uuid
+		`
+		params = []interface{}{
 			status.FaultRemediated,
 			status.LastRemediationTimestamp,
 			id,

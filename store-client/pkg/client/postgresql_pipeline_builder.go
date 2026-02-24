@@ -211,9 +211,8 @@ func (b *PostgreSQLPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() da
 							// Watch for cancelled quarantine events
 							datastore.D(
 								datastore.E("updateDescription.updatedFields", datastore.D(
-									datastore.E("healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
+									datastore.E("healtheventstatus.nodequarantined", string(model.Cancelled)),
 								)),
-								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Quarantined)),
 							),
 						)),
 					),
@@ -238,8 +237,7 @@ func (b *PostgreSQLPipelineBuilder) BuildQuarantinedAndDrainedNodesPipeline() da
 								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.StatusSucceeded)),
 							),
 							datastore.D(
-								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Quarantined)),
-								datastore.E("fullDocument.healtheventstatus.userpodsevictionstatus.status", string(model.Cancelled)),
+								datastore.E("fullDocument.healtheventstatus.nodequarantined", string(model.Cancelled)),
 							),
 						)),
 					),
