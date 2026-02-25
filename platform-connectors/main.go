@@ -33,6 +33,7 @@ import (
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
 	"github.com/nvidia/nvsentinel/commons/pkg/flags"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	srv "github.com/nvidia/nvsentinel/commons/pkg/server"
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/connectors/kubernetes"
@@ -61,6 +62,11 @@ func main() {
 
 	if err := auditlogger.InitAuditLogger("platform-connectors"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	// Initialize OpenTelemetry tracing
+	if err := tracing.InitTracing("platform-connector"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	if err := run(); err != nil {
@@ -428,6 +434,13 @@ func run() error {
 
 		if err := cleanupResources(cfg.socket, lis, k8sRingBuffer, storeConnector); err != nil {
 			return err
+		}
+
+		// Shutdown tracing
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := tracing.ShutdownTracing(shutdownCtx); err != nil {
+			slog.Warn("Failed to shutdown tracing", "error", err)
 		}
 
 		// Also cancel the root to propagate shutdown to any other goroutines.

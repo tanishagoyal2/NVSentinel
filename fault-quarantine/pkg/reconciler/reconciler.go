@@ -26,9 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/nvidia/nvsentinel/commons/pkg/statemanager"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/breaker"
@@ -437,7 +439,17 @@ func (r *Reconciler) ProcessEvent(
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) *model.Status {
+	// Extract trace ID and continue trace
+	ctx, span := tracing.StartSpanFromTraceID(ctx, event.TraceID, "process_event")
+	defer span.End()
+
+	// Add health event attributes to span
+	if event.HealthEvent != nil {
+		tracing.AddHealthEventAttributes(span, event.HealthEvent)
+	}
+
 	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {
+		span.SetAttributes(attribute.String("event.processing_status", "halted"))
 		return nil
 	}
 
@@ -447,10 +459,17 @@ func (r *Reconciler) ProcessEvent(
 
 	if isNodeQuarantined == nil {
 		slog.Debug("Skipped processing event for node, no status update needed", "node", event.HealthEvent.NodeName)
-	} else if *isNodeQuarantined == model.Quarantined ||
-		*isNodeQuarantined == model.UnQuarantined ||
-		*isNodeQuarantined == model.AlreadyQuarantined {
-		metrics.TotalEventsSuccessfullyProcessed.Inc()
+		span.SetAttributes(attribute.String("event.processing_status", "skipped"))
+	} else {
+		statusStr := string(*isNodeQuarantined)
+		span.SetAttributes(
+			attribute.String("event.processing_status", statusStr),
+		)
+		if *isNodeQuarantined == model.Quarantined ||
+			*isNodeQuarantined == model.UnQuarantined ||
+			*isNodeQuarantined == model.AlreadyQuarantined {
+			metrics.TotalEventsSuccessfullyProcessed.Inc()
+		}
 	}
 
 	return isNodeQuarantined
@@ -472,6 +491,13 @@ func (r *Reconciler) checkCircuitBreakerAndHalt(ctx context.Context) bool {
 
 	if tripped {
 		slog.Error("Circuit breaker TRIPPED. Halting event processing until restart and breaker reset.")
+		span := tracing.SpanFromContext(ctx)
+		if span != nil {
+			span.SetAttributes(
+				attribute.String("quarantine.circuit_breaker.state", "open"),
+				attribute.Bool("quarantine.circuit_breaker.triggered", true),
+			)
+		}
 		<-ctx.Done()
 
 		return true
@@ -799,6 +825,14 @@ func (r *Reconciler) applyQuarantine(
 	labelsMap *sync.Map,
 	isCordoned *atomic.Bool,
 ) *model.Status {
+	ctx, span := tracing.StartSpan(ctx, "apply_quarantine")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Bool("quarantine.action.cordon", isCordoned.Load()),
+		attribute.Int("quarantine.action.taint_count", len(taintsToBeApplied)),
+	)
+
 	r.recordCordonEventInCircuitBreaker(event)
 
 	healthEvents := healthEventsAnnotation.NewHealthEventsAnnotationMap()
@@ -856,6 +890,11 @@ func (r *Reconciler) applyQuarantine(
 	if err != nil {
 		slog.Error("Failed to taint and cordon node", "node", event.HealthEvent.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("taint_and_cordon_error").Inc()
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("error.type", "taint_and_cordon_error"),
+			attribute.String("event.processing_status", "error"),
+		)
 
 		return nil
 	}
@@ -863,6 +902,10 @@ func (r *Reconciler) applyQuarantine(
 	slog.Debug("QuarantineNodeAndSetAnnotations completed successfully", "node", event.HealthEvent.NodeName)
 
 	r.updateQuarantineMetrics(event.HealthEvent.NodeName, taintsToBeApplied, isCordoned)
+
+	span.SetAttributes(
+		attribute.String("event.processing_status", "Quarantined"),
+	)
 
 	status := model.Quarantined
 
@@ -1180,6 +1223,9 @@ func (r *Reconciler) performUncordon(
 	event *protos.HealthEvent,
 	annotations map[string]string,
 ) (bool, error) {
+	ctx, span := tracing.StartSpan(ctx, "perform_uncordon")
+	defer span.End()
+
 	slog.Info("All entities recovered for check - proceeding with uncordon",
 		"check", event.CheckName,
 		"node", event.NodeName)
@@ -1224,11 +1270,27 @@ func (r *Reconciler) performUncordon(
 	); err != nil {
 		slog.Error("Failed to untaint and uncordon node", "node", event.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("untaint_and_uncordon_error").Inc()
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("error.type", "untaint_and_uncordon_error"),
+		)
 
 		return true, fmt.Errorf("failed to untaint and uncordon node %s: %w", event.NodeName, err)
 	}
 
 	r.updateUncordonMetrics(event.NodeName, taintsToBeRemoved, isUnCordon)
+
+	span.SetAttributes(
+		attribute.Bool("quarantine.action.uncordon", isUnCordon),
+		attribute.Bool("taints.removed", len(taintsToBeRemoved) > 0),
+		attribute.String("event.processing_status", "UnQuarantined"),
+	)
+
+	span.SetAttributes(
+		attribute.Bool("quarantine.action.uncordon", isUnCordon),
+		attribute.Bool("taints.removed", len(taintsToBeRemoved) > 0),
+		attribute.String("event.processing_status", "UnQuarantined"),
+	)
 
 	return false, nil
 }

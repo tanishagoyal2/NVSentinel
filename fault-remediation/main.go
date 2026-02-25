@@ -36,6 +36,7 @@ import (
 
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/initializer"
 )
 
@@ -71,6 +72,11 @@ func main() {
 
 	if err := auditlogger.InitAuditLogger("fault-remediation"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	// Initialize OpenTelemetry tracing
+	if err := tracing.InitTracing("fault-remediation"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	if err := run(); err != nil {

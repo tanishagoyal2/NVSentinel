@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
@@ -167,6 +169,10 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 	ctx context.Context,
 	healthEvents *protos.HealthEvents,
 ) error {
+	// Create root span for event reception and storage
+	ctx, span := tracing.StartSpan(ctx, "platform_connector.receive_event")
+	defer span.End()
+
 	// Prepare all documents for batch insertion
 	healthEventWithStatusList := make([]interface{}, 0, len(healthEvents.GetEvents()))
 
@@ -179,7 +185,11 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 
 		slog.Debug("Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
 
+		// Generate trace ID for this event
+		traceID := span.SpanContext().TraceID().String()
+
 		healthEventWithStatusObj := model.HealthEventWithStatus{
+			TraceID:     traceID,
 			CreatedAt:   time.Now().UTC(),
 			HealthEvent: clonedHealthEvent,
 			HealthEventStatus: &protos.HealthEventStatus{
@@ -187,19 +197,47 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 			},
 		}
 		healthEventWithStatusList = append(healthEventWithStatusList, healthEventWithStatusObj)
+
+		// Add health event attributes to span (for first event in batch)
+		if i == 0 {
+			tracing.AddHealthEventAttributes(span, clonedHealthEvent)
+			span.SetAttributes(
+				attribute.Int("platform_connector.grpc.events_count", len(healthEvents.GetEvents())),
+			)
+		}
 	}
 
 	slog.Debug("Inserting health events batch", "documentCount", len(healthEventWithStatusList))
 
+	// Create child span for database operation
+	ctx, dbSpan := tracing.StartSpan(ctx, "platform_connector.db.insert")
+	defer dbSpan.End()
+
+	dbSpan.SetAttributes(
+		attribute.String("platform_connector.db.operation", "insert"),
+		attribute.Int("platform_connector.db.document_count", len(healthEventWithStatusList)),
+	)
+
 	// Insert all documents in a single batch operation
 	// This ensures MongoDB generates INSERT operations (not UPDATE) for change streams
 	// Note: InsertMany is already atomic - either all documents are inserted or none are
+	startTime := time.Now()
 	_, err := r.databaseClient.InsertMany(ctx, healthEventWithStatusList)
+	duration := time.Since(startTime)
+
 	if err != nil {
 		slog.Error("InsertMany failed", "error", err)
+		tracing.RecordError(dbSpan, err)
+		dbSpan.SetAttributes(
+			attribute.String("platform_connector.db.error", err.Error()),
+		)
 
 		return fmt.Errorf("insertMany failed: %w", err)
 	}
+
+	dbSpan.SetAttributes(
+		attribute.Float64("platform_connector.db.duration_ms", float64(duration.Nanoseconds())/1e6),
+	)
 
 	slog.Debug("InsertMany completed successfully")
 

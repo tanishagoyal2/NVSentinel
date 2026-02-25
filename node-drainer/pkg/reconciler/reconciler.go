@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"go.opentelemetry.io/otel/attribute"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -33,6 +33,7 @@ import (
 
 	"github.com/nvidia/nvsentinel/commons/pkg/eventutil"
 	"github.com/nvidia/nvsentinel/commons/pkg/statemanager"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/config"
@@ -285,6 +286,15 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 		return err
 	}
 
+	// Extract trace ID and continue trace
+	ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.TraceID, "process_event")
+	defer span.End()
+
+	// Add health event attributes to span
+	if healthEventWithStatus.HealthEvent != nil {
+		tracing.AddHealthEventAttributes(span, healthEventWithStatus.HealthEvent)
+	}
+
 	eventID := utils.ExtractEventID(event)
 
 	if healthEventWithStatus.HealthEvent != nil && healthEventWithStatus.HealthEvent.Id == "" {
@@ -310,6 +320,10 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 	actionResult, err := r.evaluator.EvaluateEventWithDatabase(ctx, healthEventWithStatus, database, healthEventStore)
 	if err != nil {
 		metrics.ProcessingErrors.WithLabelValues("evaluate_event_error", nodeName).Inc()
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("error.type", "evaluate_event_error"),
+		)
 
 		return fmt.Errorf("failed to evaluate event: %w", err)
 	}
@@ -317,6 +331,10 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 	slog.Info("Evaluated action for node",
 		"node", nodeName,
 		"action", actionResult.Action.String())
+
+	span.SetAttributes(
+		attribute.String("drain.action", actionResult.Action.String()),
+	)
 
 	return r.executeAction(ctx, actionResult, healthEventWithStatus, event, database, eventID)
 }
@@ -327,6 +345,10 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 
 	switch action.Action {
 	case evaluator.ActionSkip:
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("drain.status", "skipped"),
+		)
 		r.clearEventStatus(eventID, nodeName)
 		return r.executeSkip(ctx, nodeName, healthEvent, event, database)
 
@@ -342,10 +364,18 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return r.executeCustomDrain(ctx, action, healthEvent, event, database, action.PartialDrainEntity)
 
 	case evaluator.ActionEvictImmediate:
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("drain.status", "in_progress"),
+		)
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		return r.executeImmediateEviction(ctx, action, healthEvent, action.PartialDrainEntity)
 
 	case evaluator.ActionEvictWithTimeout:
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("drain.status", "in_progress"),
+		)
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		return r.executeTimeoutEviction(ctx, action, healthEvent, eventID, action.PartialDrainEntity)
 
@@ -356,9 +386,25 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return r.executeCheckCompletion(ctx, action, healthEvent, action.PartialDrainEntity)
 
 	case evaluator.ActionMarkAlreadyDrained:
-		return r.handleMarkAlreadyDrained(ctx, eventID, nodeName, healthEvent, event, database, action.Status)
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("drain.status", "already_drained"),
+		)
+		r.clearEventStatus(eventID, nodeName)
+
+		err := r.executeMarkAlreadyDrained(ctx, healthEvent, event, database, action.Status)
+		if err == nil {
+			r.deleteCustomDrainCRIfEnabled(ctx, nodeName, eventID)
+		}
+
+		return err
 
 	case evaluator.ActionUpdateStatus:
+		span := tracing.SpanFromContext(ctx)
+		statusStr := string(action.Status)
+		span.SetAttributes(
+			attribute.String("drain.status", statusStr),
+		)
 		r.clearEventStatus(eventID, nodeName)
 		return r.executeUpdateStatus(ctx, healthEvent, event, database, action.Status)
 
@@ -431,8 +477,15 @@ func (r *Reconciler) executeImmediateEviction(ctx context.Context, action *evalu
 
 func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, eventID string, partialDrainEntity *protos.Entity) error {
+	ctx, span := tracing.StartSpan(ctx, "execute_timeout_eviction")
+	defer span.End()
+
 	nodeName := healthEvent.HealthEvent.NodeName
 	timeoutMinutes := int(action.Timeout.Minutes())
+
+	span.SetAttributes(
+		attribute.Int("drain.timeout_minutes", timeoutMinutes),
+	)
 
 	// Check if this event has been cancelled before proceeding with timeout eviction
 	// This prevents force-deleting pods when a manual uncordon has happened
@@ -463,14 +516,26 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 		if (checkEventExists && checkEventStatus == model.Cancelled) || checkNodeCancelled {
 			slog.Info("Event was cancelled during timeout eviction, stopping",
 				"node", nodeName, "eventID", eventID)
+			span.SetAttributes(
+				attribute.String("drain.status", "cancelled"),
+			)
 
 			return nil
 		}
 
 		metrics.ProcessingErrors.WithLabelValues("timeout_eviction_error", nodeName).Inc()
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("error.type", "timeout_eviction_error"),
+			attribute.String("drain.status", "failed"),
+		)
 
 		return fmt.Errorf("failed timeout eviction for node %s: %w", nodeName, err)
 	}
+
+	span.SetAttributes(
+		attribute.String("drain.status", "in_progress"),
+	)
 
 	return fmt.Errorf("timeout eviction initiated, requeuing for status verification")
 }
@@ -853,6 +918,9 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, event datastore.Event, database queue.DataStore,
 	partialDrainEntity *protos.Entity) error {
+	ctx, span := tracing.StartSpan(ctx, "execute_custom_drain")
+	defer span.End()
+
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	eventID, err := utils.ExtractDocumentID(event)
@@ -892,12 +960,22 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 
 	crName, err := r.customDrainClient.CreateDrainCR(ctx, templateData)
 	if err != nil {
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("error.type", "custom_drain_cr_creation_error"),
+		)
 		return r.handleCustomDrainCRCreationError(ctx, err, nodeName, healthEvent, event, database)
 	}
 
 	slog.Info("Created custom drain CR",
 		"node", nodeName,
 		"crName", crName)
+
+	span.SetAttributes(
+		attribute.String("drain.custom_cr.name", crName),
+		attribute.String("drain.custom_cr.status", "created"),
+		attribute.Bool("drain.custom_cr.created", true),
+	)
 
 	return fmt.Errorf("waiting for custom drain CR to complete: %s", crName)
 }
