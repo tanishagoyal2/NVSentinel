@@ -21,7 +21,7 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 - **Multi-module coordination**: See which modules are actively processing the same event like fault-quarantine and health-events-analyzer pick up event at the same time
 - **Context preservation**: All relevant event metadata is attached to spans, eliminating the need to login to the cluster and to search logs in each module
 - **Concurrent processing**: Understand how multiple events are processed simultaneously
-- **Circuit breaker activity**: Monitor when circuit breaker is triped
+- **Circuit breaker activity**: Monitor when circuit breaker is tripped
 
 ## How Traces Are Different From Logs and Metrics?
 
@@ -206,8 +206,6 @@ MongoDB (stores event with trace_id as separate field)
 
 **All modules share the same trace ID (`abc123`)** - this is only possible with context propagation at each step.
 
-## Trace Context Propagation Options
-
 Trace context is stored as a separate top-level field in the MongoDB document, keeping observability data separate from business logic.
 
 **How it works technically**:
@@ -260,17 +258,14 @@ Trace context is stored as a separate top-level field in the MongoDB document, k
 ### Span Creation Strategy
 
 **Where is the Trace ID Created?**
+Platform-Connector creates the root trace when it receives a health event via gRPC:
 
-The trace ID creation depends on which trace context propagation option you choose:
-
-#### Platform-Connector Creates Root Trace
-
-**Platform-Connector** creates the root trace when it receives a health event via gRPC:
 - **Root Span**: Created when platform-connector receives a health event via gRPC
 - **Span name**: `platform_connector.receive_event`
 - **Trace ID generated here** in platform-connector
 - **No trace context propagation needed from health monitor**: Health monitor just sends the gRPC call with the health event
 - Platform-connector stores trace ID as separate MongoDB field
+
 - **Advantages**:
   - Simpler implementation (only platform-connector needs tracing)
   - Health monitors don't need OpenTelemetry instrumentation
@@ -289,7 +284,6 @@ Platform Connector:
   2. Create NEW trace (trace_id: abc123)
   3. Create root span: "platform_connector.receive_event"
   4. Store event in MongoDB with trace_id as separate top-level field
-  5. Start new trace (trace_id: abc123)
 ```
 
 2. **Module Spans**: Each module creates spans for its processing:
