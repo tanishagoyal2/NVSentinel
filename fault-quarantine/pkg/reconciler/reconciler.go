@@ -443,13 +443,21 @@ func (r *Reconciler) ProcessEvent(
 	ctx, span := tracing.StartSpanFromTraceID(ctx, event.TraceID, "process_event")
 	defer span.End()
 
+	// Ensure health_event.id is set for span attributes (event watcher sets it; fallback from context if empty)
+	if event.HealthEvent != nil && event.HealthEvent.Id == "" {
+		if id, ok := ctx.Value(eventwatcher.DocumentIDContextKey).(string); ok && id != "" {
+			event.HealthEvent.Id = id
+		}
+	}
+
 	// Add health event attributes to span
 	if event.HealthEvent != nil {
 		tracing.AddHealthEventAttributes(span, event.HealthEvent)
 	}
 
 	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {
-		span.SetAttributes(attribute.String("event.processing_status", "halted"))
+		span.SetAttributes(attribute.String("fault_quarantine.processing_status", "halted"))
+		tracing.SetOperationStatus(span, tracing.OperationStatusThrottled)
 		return nil
 	}
 
@@ -459,18 +467,21 @@ func (r *Reconciler) ProcessEvent(
 
 	if isNodeQuarantined == nil {
 		slog.Debug("Skipped processing event for node, no status update needed", "node", event.HealthEvent.NodeName)
-		span.SetAttributes(attribute.String("event.processing_status", "skipped"))
+		span.SetAttributes(attribute.String("fault_quarantine.processing_status", "skipped"))
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 	} else {
 		statusStr := string(*isNodeQuarantined)
 		span.SetAttributes(
-			attribute.String("event.processing_status", statusStr),
+			attribute.String("fault_quarantine.processing_status", statusStr),
 		)
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 		if *isNodeQuarantined == model.Quarantined ||
 			*isNodeQuarantined == model.UnQuarantined ||
 			*isNodeQuarantined == model.AlreadyQuarantined {
 			metrics.TotalEventsSuccessfullyProcessed.Inc()
 		}
 	}
+	span.SetAttributes(attribute.String("event.consumer", "fault-quarantine"))
 
 	return isNodeQuarantined
 }
@@ -494,9 +505,10 @@ func (r *Reconciler) checkCircuitBreakerAndHalt(ctx context.Context) bool {
 		span := tracing.SpanFromContext(ctx)
 		if span != nil {
 			span.SetAttributes(
-				attribute.String("quarantine.circuit_breaker.state", "open"),
-				attribute.Bool("quarantine.circuit_breaker.triggered", true),
+				attribute.String("fault_quarantine.circuit_breaker.state", "tripped"),
+				attribute.Bool("fault_quarantine.circuit_breaker.tripped", true),
 			)
+			tracing.SetOperationStatus(span, tracing.OperationStatusThrottled)
 		}
 		<-ctx.Done()
 
@@ -512,10 +524,19 @@ func (r *Reconciler) handleEvent(
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) *model.Status {
+	ctx, span := tracing.StartSpan(ctx, "handle_event")
+	defer span.End()
+
 	annotations, quarantineAnnotationExists := r.hasExistingQuarantine(event.HealthEvent.NodeName)
 
 	if quarantineAnnotationExists {
-		return r.handleAlreadyQuarantinedNode(ctx, event.HealthEvent, ruleSetEvals)
+		status := r.handleAlreadyQuarantinedNode(ctx, event.HealthEvent, ruleSetEvals)
+		if status != nil {
+			tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+		} else {
+			tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
+		}
+		return status
 	}
 
 	// For healthy events, if there's no existing quarantine annotation,
@@ -523,7 +544,7 @@ func (r *Reconciler) handleEvent(
 	if event.HealthEvent.IsHealthy {
 		slog.Info("Skipping healthy event for node as there's no existing quarantine annotation",
 			"node", event.HealthEvent.NodeName, "event", event.HealthEvent)
-
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return nil
 	}
 
@@ -539,8 +560,8 @@ func (r *Reconciler) handleEvent(
 
 	var isCordoned atomic.Bool
 
-	r.evaluateRulesets(
-		event, ruleSetEvals, rulesetsConfig,
+	matchedRulesets := r.evaluateRulesets(
+		ctx, event, ruleSetEvals, rulesetsConfig,
 		taintAppliedMap, &labelsMap, &isCordoned, taintEffectPriorityMap,
 	)
 
@@ -552,11 +573,16 @@ func (r *Reconciler) handleEvent(
 
 	// In dry-run mode, always apply annotations for observability even if no actions would be taken
 	if !isNodeQuarantined && !r.config.DryRun {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return nil
 	}
 
-	status := r.applyQuarantine(ctx, event, annotations, taintsToBeApplied, annotationsMap, &labelsMap, &isCordoned)
-
+	status := r.applyQuarantine(ctx, event, annotations, taintsToBeApplied, annotationsMap, &labelsMap, &isCordoned, matchedRulesets)
+	if status != nil {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+	} else {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
+	}
 	return status
 }
 
@@ -608,25 +634,32 @@ func (r *Reconciler) handleAlreadyQuarantinedNode(
 	event *protos.HealthEvent,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 ) *model.Status {
-	healthEventsAnnotationMap, _, err := r.getHealthEventsFromAnnotation(event)
+	ctx, span := tracing.StartSpan(ctx, "handle_already_quarantined_node")
+	defer span.End()
+
+	healthEventsAnnotationMap, _, err := r.getHealthEventsFromAnnotation(ctx, event)
 
 	// Only propagate events to ND/FR if they will modify node annotations
 	// Returning nil prevents unnecessary MongoDB writes and downstream processing
 	switch {
 	case err != nil:
 		if errors.Is(err, errNoQuarantineAnnotation) {
+			tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 			return nil
 		}
 
 		metrics.ProcessingErrors.WithLabelValues("get_node_annotations_error").Inc()
-		// Cannot proceed without valid annotation data
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return nil
 	case event.IsHealthy:
 		_, hasExistingCheck := healthEventsAnnotationMap.GetEvent(event)
 		if !hasExistingCheck {
+			tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 			return nil
 		}
 	case !r.isForceQuarantine(event) && !r.eventMatchesAnyRule(event, ruleSetEvals):
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return nil
 	}
 
@@ -636,6 +669,7 @@ func (r *Reconciler) handleAlreadyQuarantinedNode(
 	// Partial recovery: healthy event that doesn't fully unquarantine the node should
 	// not be propagated to ND/FR
 	if event.IsHealthy && stayQuarantined {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 		return nil
 	}
 
@@ -648,11 +682,14 @@ func (r *Reconciler) handleAlreadyQuarantinedNode(
 		status = model.UnQuarantined
 	}
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 	return &status
 }
 
-// evaluateRulesets evaluates all rulesets against the health event in parallel
+// evaluateRulesets evaluates all rulesets against the health event in parallel.
+// Returns the list of ruleset names that matched (RuleEvaluationSuccess).
 func (r *Reconciler) evaluateRulesets(
+	ctx context.Context,
 	event *model.HealthEventWithStatus,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
@@ -660,7 +697,10 @@ func (r *Reconciler) evaluateRulesets(
 	labelsMap *sync.Map,
 	isCordoned *atomic.Bool,
 	taintEffectPriorityMap map[keyValTaint]int,
-) {
+) []string {
+	ctx, span := tracing.StartSpan(ctx, "evaluate_rulesets")
+	defer span.End()
+
 	// Handle quarantine override (force quarantine without rule evaluation)
 	if event.HealthEvent.QuarantineOverrides != nil && event.HealthEvent.QuarantineOverrides.Force {
 		isCordoned.Store(true)
@@ -670,9 +710,13 @@ func (r *Reconciler) evaluateRulesets(
 		labelsMap.Store(r.cordonedReasonLabelKey,
 			formatCordonOrUncordonReasonValue(event.HealthEvent.Message, 63))
 
-		return
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+		span.SetAttributes(attribute.String("fault_quarantine.ruleset.override", "force_quarantine"))
+		return nil
 	}
 
+	var matched []string
+	var matchedMu sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, eval := range ruleSetEvals {
@@ -687,10 +731,13 @@ func (r *Reconciler) evaluateRulesets(
 
 			switch {
 			case ruleEvaluatedResult == common.RuleEvaluationSuccess:
+				matchedMu.Lock()
+				matched = append(matched, eval.GetName())
+				matchedMu.Unlock()
 				r.handleSuccessfulRuleEvaluation(
 					eval, rulesetsConfig, labelsMap, isCordoned, taintAppliedMap, taintEffectPriorityMap)
 			case err != nil:
-				r.handleRuleEvaluationError(event.HealthEvent, eval.GetName(), err)
+				r.handleRuleEvaluationError(ctx, event.HealthEvent, eval.GetName(), err)
 			default:
 				metrics.RulesetEvaluations.WithLabelValues(eval.GetName(), metrics.StatusFailed).Inc()
 			}
@@ -698,6 +745,13 @@ func (r *Reconciler) evaluateRulesets(
 	}
 
 	wg.Wait()
+	if len(matched) > 0 {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+		span.SetAttributes(attribute.Int("fault_quarantine.ruleset.matched_count", len(matched)))
+	} else {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
+	}
+	return matched
 }
 
 // handleSuccessfulRuleEvaluation processes a successful rule evaluation result
@@ -757,10 +811,19 @@ func (r *Reconciler) updateTaintMaps(
 
 // handleRuleEvaluationError handles errors during rule evaluation
 func (r *Reconciler) handleRuleEvaluationError(
+	ctx context.Context,
 	event *protos.HealthEvent,
 	evalName string,
 	err error,
 ) {
+	_, span := tracing.StartSpan(ctx, "rule_evaluation_error")
+	defer span.End()
+	tracing.SetOperationStatus(span, tracing.OperationStatusFault)
+	tracing.RecordError(span, err)
+	span.SetAttributes(
+		attribute.String("fault_quarantine.ruleset.name", evalName),
+		attribute.String("health_event.node_name", event.NodeName),
+	)
 	slog.Error("Rule evaluation failed", "ruleset", evalName, "node", event.NodeName, "error", err)
 	metrics.ProcessingErrors.WithLabelValues("ruleset_evaluation_error").Inc()
 	metrics.RulesetEvaluations.WithLabelValues(evalName, metrics.StatusFailed).Inc()
@@ -824,14 +887,21 @@ func (r *Reconciler) applyQuarantine(
 	annotationsMap map[string]string,
 	labelsMap *sync.Map,
 	isCordoned *atomic.Bool,
+	matchedRulesets []string,
 ) *model.Status {
 	ctx, span := tracing.StartSpan(ctx, "apply_quarantine")
 	defer span.End()
 
 	span.SetAttributes(
-		attribute.Bool("quarantine.action.cordon", isCordoned.Load()),
-		attribute.Int("quarantine.action.taint_count", len(taintsToBeApplied)),
+		attribute.Bool("fault_quarantine.action.cordon", isCordoned.Load()),
+		attribute.Bool("fault_quarantine.action.taint", len(taintsToBeApplied) > 0),
+		attribute.Int("fault_quarantine.action.taint_count", len(taintsToBeApplied)),
 	)
+	if len(matchedRulesets) > 0 {
+		span.SetAttributes(
+			attribute.String("fault_quarantine.ruleset.matched", strings.Join(matchedRulesets, ",")),
+		)
+	}
 
 	r.recordCordonEventInCircuitBreaker(event)
 
@@ -840,13 +910,14 @@ func (r *Reconciler) applyQuarantine(
 
 	if !updated {
 		slog.Info("Health event already exists for node, skipping quarantine", "node", event.HealthEvent.NodeName)
-
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return nil
 	}
 
 	if err := r.addHealthEventAnnotation(healthEvents, annotationsMap); err != nil {
 		slog.Error("Failed to add health event annotation", "error", err, "node", event.HealthEvent.NodeName)
-
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return nil
 	}
 
@@ -857,7 +928,8 @@ func (r *Reconciler) applyQuarantine(
 		slog.Error("Failed to cleanup manual uncordon annotation",
 			"error", err, "node", event.HealthEvent.NodeName)
 		metrics.ProcessingErrors.WithLabelValues("cleanup_manual_uncordon_annotation_error").Inc()
-
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return nil
 	}
 
@@ -879,6 +951,14 @@ func (r *Reconciler) applyQuarantine(
 		return true
 	})
 
+	span.SetAttributes(
+		attribute.Bool("fault_quarantine.labels_applied", len(labels) > 0),
+		attribute.Bool("fault_quarantine.annotations_applied", len(annotationsMap) > 0),
+	)
+	if reason, ok := labels[r.cordonedReasonLabelKey]; ok && reason != "" {
+		span.SetAttributes(attribute.String("fault_quarantine.cordon_reason", reason))
+	}
+
 	err := r.k8sClient.QuarantineNodeAndSetAnnotations(
 		ctx,
 		event.HealthEvent.NodeName,
@@ -891,9 +971,11 @@ func (r *Reconciler) applyQuarantine(
 		slog.Error("Failed to taint and cordon node", "node", event.HealthEvent.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("taint_and_cordon_error").Inc()
 		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
 		span.SetAttributes(
-			attribute.String("error.type", "taint_and_cordon_error"),
-			attribute.String("event.processing_status", "error"),
+			attribute.String("fault_quarantine.error.type", "taint_and_cordon_error"),
+			attribute.String("fault_quarantine.error.message", err.Error()),
+			attribute.String("fault_quarantine.event.processing_status", "error"),
 		)
 
 		return nil
@@ -906,6 +988,7 @@ func (r *Reconciler) applyQuarantine(
 	span.SetAttributes(
 		attribute.String("event.processing_status", "Quarantined"),
 	)
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 
 	status := model.Quarantined
 
@@ -1014,9 +1097,14 @@ func (r *Reconciler) handleQuarantinedNode(
 	event *protos.HealthEvent,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 ) bool {
-	healthEventsAnnotationMap, annotations, err := r.getHealthEventsFromAnnotation(event)
+	ctx, span := tracing.StartSpan(ctx, "handle_quarantined_node")
+	defer span.End()
+
+	healthEventsAnnotationMap, annotations, err := r.getHealthEventsFromAnnotation(ctx, event)
 	if err != nil {
 		metrics.ProcessingErrors.WithLabelValues("get_node_annotations_error").Inc()
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return !errors.Is(err, errNoQuarantineAnnotation)
 	}
 
@@ -1053,6 +1141,8 @@ func (r *Reconciler) handleQuarantinedNode(
 	updatedHealthEventsMap, err := r.removeEventFromAnnotation(ctx, event)
 	if err != nil {
 		slog.Error("Failed to update health events annotation after recovery", "error", err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return true
 	}
 
@@ -1064,6 +1154,8 @@ func (r *Reconciler) handleQuarantinedNode(
 		if err != nil {
 			slog.Error("Failed to uncordon node", "error", err, "node", event.NodeName)
 			metrics.ProcessingErrors.WithLabelValues("uncordon_error").Inc()
+			tracing.SetOperationStatus(span, tracing.OperationStatusError)
+			tracing.RecordError(span, err)
 		}
 
 		return isUncordoned
@@ -1074,23 +1166,30 @@ func (r *Reconciler) handleQuarantinedNode(
 		"failingChecksCount", updatedHealthEventsMap.Count(),
 		"checks", updatedHealthEventsMap.GetAllCheckNames())
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 	return true
 }
 
 func (r *Reconciler) getHealthEventsFromAnnotation(
+	ctx context.Context,
 	event *protos.HealthEvent,
 ) (*healthEventsAnnotation.HealthEventsAnnotationMap, map[string]string, error) {
+	ctx, span := tracing.StartSpan(ctx, "get_health_events_from_annotation")
+	defer span.End()
+
 	annotations, err := r.getNodeQuarantineAnnotations(event.NodeName)
 	if err != nil {
 		slog.Error("Failed to get node annotations for node", "node", event.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("get_node_annotations_error").Inc()
-
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return nil, nil, fmt.Errorf("failed to get annotations: %w", err)
 	}
 
 	quarantineAnnotationStr, exists := annotations[common.QuarantineHealthEventAnnotationKey]
 	if !exists || quarantineAnnotationStr == "" {
 		slog.Info("No quarantine annotation found for node", "node", event.NodeName)
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return nil, nil, errNoQuarantineAnnotation
 	}
 
@@ -1107,10 +1206,13 @@ func (r *Reconciler) getHealthEventsFromAnnotation(
 			healthEventsMap = *healthEventsAnnotation.NewHealthEventsAnnotationMap()
 			healthEventsMap.AddOrUpdateEvent(&singleHealthEvent)
 		} else {
+			tracing.SetOperationStatus(span, tracing.OperationStatusError)
+			tracing.RecordError(span, err)
 			return nil, nil, fmt.Errorf("failed to unmarshal annotation for node %s: %w", event.NodeName, err)
 		}
 	}
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 	return &healthEventsMap, annotations, nil
 }
 
@@ -1165,6 +1267,9 @@ func (r *Reconciler) removeEventFromAnnotation(
 	ctx context.Context,
 	event *protos.HealthEvent,
 ) (*healthEventsAnnotation.HealthEventsAnnotationMap, error) {
+	ctx, span := tracing.StartSpan(ctx, "remove_event_from_annotation")
+	defer span.End()
+
 	// Capture the updated map based on the ACTUAL state after removal
 	updatedMap := healthEventsAnnotation.NewHealthEventsAnnotationMap()
 
@@ -1214,7 +1319,12 @@ func (r *Reconciler) removeEventFromAnnotation(
 	}
 
 	err := r.k8sClient.UpdateNode(ctx, event.NodeName, updateFn)
-
+	if err != nil {
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
+	} else {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+	}
 	return updatedMap, err
 }
 
@@ -1235,10 +1345,13 @@ func (r *Reconciler) performUncordon(
 		event, annotations)
 	if err != nil {
 		slog.Error("Failed to prepare uncordon params for node", "node", event.NodeName, "error", err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.RecordError(span, err)
 		return true, fmt.Errorf("failed to prepare uncordon params for node %s: %w", event.NodeName, err)
 	}
 
 	if len(taintsToBeRemoved) == 0 && !isUnCordon {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped)
 		return false, nil
 	}
 
@@ -1271,8 +1384,10 @@ func (r *Reconciler) performUncordon(
 		slog.Error("Failed to untaint and uncordon node", "node", event.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("untaint_and_uncordon_error").Inc()
 		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
 		span.SetAttributes(
-			attribute.String("error.type", "untaint_and_uncordon_error"),
+			attribute.String("fault_quarantine.error.type", "untaint_and_uncordon_error"),
+			attribute.String("fault_quarantine.error.message", err.Error()),
 		)
 
 		return true, fmt.Errorf("failed to untaint and uncordon node %s: %w", event.NodeName, err)
@@ -1281,16 +1396,11 @@ func (r *Reconciler) performUncordon(
 	r.updateUncordonMetrics(event.NodeName, taintsToBeRemoved, isUnCordon)
 
 	span.SetAttributes(
-		attribute.Bool("quarantine.action.uncordon", isUnCordon),
-		attribute.Bool("taints.removed", len(taintsToBeRemoved) > 0),
-		attribute.String("event.processing_status", "UnQuarantined"),
+		attribute.Bool("fault_quarantine.action.uncordon", isUnCordon),
+		attribute.Bool("fault_quarantine.taints.removed", len(taintsToBeRemoved) > 0),
+		attribute.String("fault_quarantine.event.processing_status", "UnQuarantined"),
 	)
-
-	span.SetAttributes(
-		attribute.Bool("quarantine.action.uncordon", isUnCordon),
-		attribute.Bool("taints.removed", len(taintsToBeRemoved) > 0),
-		attribute.String("event.processing_status", "UnQuarantined"),
-	)
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
 
 	return false, nil
 }

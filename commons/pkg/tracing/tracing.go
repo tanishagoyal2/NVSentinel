@@ -180,3 +180,23 @@ func RecordError(span trace.Span, err error, opts ...trace.EventOption) {
 func SpanFromContext(ctx context.Context) trace.Span {
 	return trace.SpanFromContext(ctx)
 }
+
+// Operation status values for fault_quarantine.operation.status and similar attributes.
+// Use these for consistent filtering in Grafana/TraceQL (e.g. {.fault_quarantine.operation.status="error"}).
+const (
+	OperationStatusSuccess   = "success"
+	OperationStatusError     = "error"
+	OperationStatusFault     = "fault"
+	OperationStatusThrottled = "throttled"
+	OperationStatusSkipped   = "skipped"
+	OperationStatusHalted    = "halted"
+)
+
+// SetOperationStatus sets the standard operation status attribute on a span.
+// status should be one of OperationStatus* constants.
+func SetOperationStatus(span trace.Span, status string) {
+	if span == nil {
+		return
+	}
+	span.SetAttributes(attribute.String("fault_quarantine.operation.status", status))
+}

@@ -322,7 +322,8 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 		metrics.ProcessingErrors.WithLabelValues("evaluate_event_error", nodeName).Inc()
 		tracing.RecordError(span, err)
 		span.SetAttributes(
-			attribute.String("error.type", "evaluate_event_error"),
+			attribute.String("node_drainer.error.type", "evaluate_event_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
 		)
 
 		return fmt.Errorf("failed to evaluate event: %w", err)
@@ -333,7 +334,7 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 		"action", actionResult.Action.String())
 
 	span.SetAttributes(
-		attribute.String("drain.action", actionResult.Action.String()),
+		attribute.String("node_drainer.drain.action", actionResult.Action.String()),
 	)
 
 	return r.executeAction(ctx, actionResult, healthEventWithStatus, event, database, eventID)
@@ -347,7 +348,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	case evaluator.ActionSkip:
 		span := tracing.SpanFromContext(ctx)
 		span.SetAttributes(
-			attribute.String("drain.status", "skipped"),
+			attribute.String("node_drainer.drain.status", "skipped"),
 		)
 		r.clearEventStatus(eventID, nodeName)
 		return r.executeSkip(ctx, nodeName, healthEvent, event, database)
@@ -366,16 +367,34 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	case evaluator.ActionEvictImmediate:
 		span := tracing.SpanFromContext(ctx)
 		span.SetAttributes(
-			attribute.String("drain.status", "in_progress"),
+			attribute.String("node_drainer.drain.status", "in_progress"),
 		)
+		if action.PartialDrainEntity != nil {
+			span.SetAttributes(
+				attribute.String("node_drainer.drain.scope", "partial"),
+				attribute.String("node_drainer.partial_drain.entity_type", action.PartialDrainEntity.EntityType),
+				attribute.String("node_drainer.partial_drain.entity_value", action.PartialDrainEntity.EntityValue),
+			)
+		} else {
+			span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
+		}
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		return r.executeImmediateEviction(ctx, action, healthEvent, action.PartialDrainEntity)
 
 	case evaluator.ActionEvictWithTimeout:
 		span := tracing.SpanFromContext(ctx)
 		span.SetAttributes(
-			attribute.String("drain.status", "in_progress"),
+			attribute.String("node_drainer.status", "in_progress"),
 		)
+		if action.PartialDrainEntity != nil {
+			span.SetAttributes(
+				attribute.String("node_drainer.drain.scope", "partial"),
+				attribute.String("node_drainer.partial_drain.entity_type", action.PartialDrainEntity.EntityType),
+				attribute.String("node_drainer.partial_drain.entity_value", action.PartialDrainEntity.EntityValue),
+			)
+		} else {
+			span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
+		}
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		return r.executeTimeoutEviction(ctx, action, healthEvent, eventID, action.PartialDrainEntity)
 
@@ -388,7 +407,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	case evaluator.ActionMarkAlreadyDrained:
 		span := tracing.SpanFromContext(ctx)
 		span.SetAttributes(
-			attribute.String("drain.status", "already_drained"),
+			attribute.String("node_drainer.status", "already_drained"),
 		)
 		r.clearEventStatus(eventID, nodeName)
 
@@ -403,7 +422,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		span := tracing.SpanFromContext(ctx)
 		statusStr := string(action.Status)
 		span.SetAttributes(
-			attribute.String("drain.status", statusStr),
+			attribute.String("node_drainer.status", statusStr),
 		)
 		r.clearEventStatus(eventID, nodeName)
 		return r.executeUpdateStatus(ctx, healthEvent, event, database, action.Status)
@@ -484,8 +503,17 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 	timeoutMinutes := int(action.Timeout.Minutes())
 
 	span.SetAttributes(
-		attribute.Int("drain.timeout_minutes", timeoutMinutes),
+		attribute.Int("node_drainer.timeout_minutes", timeoutMinutes),
 	)
+	if partialDrainEntity != nil {
+		span.SetAttributes(
+			attribute.String("node_drainer.drain.scope", "partial"),
+			attribute.String("node_drainer.partial_drain.entity_type", partialDrainEntity.EntityType),
+			attribute.String("node_drainer.partial_drain.entity_value", partialDrainEntity.EntityValue),
+		)
+	} else {
+		span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
+	}
 
 	// Check if this event has been cancelled before proceeding with timeout eviction
 	// This prevents force-deleting pods when a manual uncordon has happened
@@ -517,7 +545,7 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 			slog.Info("Event was cancelled during timeout eviction, stopping",
 				"node", nodeName, "eventID", eventID)
 			span.SetAttributes(
-				attribute.String("drain.status", "cancelled"),
+				attribute.String("node_drainer.status", "cancelled"),
 			)
 
 			return nil
@@ -526,15 +554,16 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 		metrics.ProcessingErrors.WithLabelValues("timeout_eviction_error", nodeName).Inc()
 		tracing.RecordError(span, err)
 		span.SetAttributes(
-			attribute.String("error.type", "timeout_eviction_error"),
-			attribute.String("drain.status", "failed"),
+			attribute.String("node_drainer.error.type", "timeout_eviction_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+			attribute.String("node_drainer.status", "failed"),
 		)
 
 		return fmt.Errorf("failed timeout eviction for node %s: %w", nodeName, err)
 	}
 
 	span.SetAttributes(
-		attribute.String("drain.status", "in_progress"),
+		attribute.String("node_drainer.status", "in_progress"),
 	)
 
 	return fmt.Errorf("timeout eviction initiated, requeuing for status verification")
@@ -958,11 +987,22 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 		PodsToDrain: podsToDrain,
 	}
 
+	if partialDrainEntity != nil {
+		span.SetAttributes(
+			attribute.String("node_drainer.drain.scope", "partial"),
+			attribute.String("node_drainer.partial_drain.entity_type", partialDrainEntity.EntityType),
+			attribute.String("node_drainer.partial_drain.entity_value", partialDrainEntity.EntityValue),
+		)
+	} else {
+		span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
+	}
+
 	crName, err := r.customDrainClient.CreateDrainCR(ctx, templateData)
 	if err != nil {
 		tracing.RecordError(span, err)
 		span.SetAttributes(
-			attribute.String("error.type", "custom_drain_cr_creation_error"),
+			attribute.String("node_drainer.error.type", "custom_drain_cr_creation_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
 		)
 		return r.handleCustomDrainCRCreationError(ctx, err, nodeName, healthEvent, event, database)
 	}
@@ -972,9 +1012,9 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 		"crName", crName)
 
 	span.SetAttributes(
-		attribute.String("drain.custom_cr.name", crName),
-		attribute.String("drain.custom_cr.status", "created"),
-		attribute.Bool("drain.custom_cr.created", true),
+		attribute.String("node_drainer.custom_cr.name", crName),
+		attribute.String("node_drainer.custom_cr.status", "created"),
+		attribute.Bool("node_drainer.custom_cr.created", true),
 	)
 
 	return fmt.Errorf("waiting for custom drain CR to complete: %s", crName)
