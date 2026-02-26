@@ -4,16 +4,90 @@
 
 To debug health events in NVSentinel, operators must manually correlate logs across multiple modules (platform-connector, fault-quarantine, node-drainer, fault-remediation, health-events-analyzer) to understand an event's complete lifecycle. OpenTelemetry traces eliminate this manual work by providing end-to-end visibility of each health event's journey through all modules in a single unified trace, making debugging faster and system behavior more transparent.
 
+## Overview: Trace, Span, and Span Attributes
+
+- **Trace** — A trace represents one request or workflow (e.g. one health event) as it moves through the system. It has a unique **trace ID** and is the top-level container for all related work. In NVSentinel, a single health event from ingestion through quarantine, drain, and remediation forms one trace.
+
+- **Span** — A span is a single unit of work within a trace (e.g. "process event", "create remediation CR", "run log collector"). Each span has a name, start and end time, and can have parent and child spans. Spans are nested: one trace contains many spans, and spans can contain child spans. Together they form a timeline and call graph for the event.
+
+- **Span attributes** — Key-value metadata attached to a span (e.g. `node.name`, `remediation.cr.name`, `event.processing_status`). They describe what happened during that span without needing to search logs. Attributes are used for filtering and grouping in tracing UIs (e.g. Grafana Tempo) and for understanding why a span succeeded or failed.
+
 ## How Can Traces Be Helpful?
 - **Module-level performance**: How long does fault-quarantine take vs node-drainer vs fault-remediation?
 - **Database query latency**: Time spent in MongoDB aggregation pipelines (health-events-analyzer)
 - **Granular level performance**: Time spent in cordon, taint, drain, and CR creation operations
 - **Event lifecycle tracking**: From detection → ingestion → quarantine → drain → remediation
+- **Remediation status**: Was the last remediation succeeded or failed? 
 - **Multi-module coordination**: See which modules are actively processing the same event like fault-quarantine and health-events-analyzer pick up event at the same time
-- **Resource contention**: Detect when multiple modules are competing for the same resources (K8s API, MongoDB)
-- **Context preservation**: All relevant event metadata is attached to spans, eliminating the need to search logs
+- **Context preservation**: All relevant event metadata is attached to spans, eliminating the need to login to the cluster and to search logs in each module
 - **Concurrent processing**: Understand how multiple events are processed simultaneously
-- **Circuit breaker activity**: Monitor when circuit breakers are triggered
+- **Circuit breaker activity**: Monitor when circuit breaker is triped
+
+## How Traces Are Different From Logs and Metrics?
+
+Logs are discrete, unordered (or time-ordered) messages from each service. To follow one health event across platform-connector, fault-quarantine, node-drainer, fault-remediation, and health-events-analyzer, you must search by event ID or node name, align timestamps, and mentally reconstruct the flow.
+Traces are structured around a single request or workflow: one trace ID ties together all spans from all modules for that event, with an explicit parent-child and timeline.
+
+- **End-to-end view of one event** — One trace shows the full path of one health event (ingestion → quarantine → drain → remediation). With logs you must correlate multiple services by hand.
+- **Timing and bottlenecks** — Spans have start/end times and nesting, so you see exactly where time was spent (e.g. DB query execution in health-events-analyzer vs draining operation in node-drainer). Logs give timestamps but not a single timeline or hierarchy.
+- **Structured context without log parsing** — Span attributes (e.g. `node.name`, `drain.status`, `event.processing_status`) are queryable and filterable in the trace UI. No need to grep or parse log lines.
+- **Cross-module flow** — Traces show which modules touched the same event and in what order. Logs are per-service; correlating across modules is manual.
+- **Failure diagnosis** — A failed span is visible in the trace with status and attributes; you see the failing step and its parent path. With logs you must infer causality from messages and timestamps.
+- **Performance and SLOs** — Trace-based latency percentiles and service maps are built-in. With logs you’d need custom metrics or log-based metrics to get the same view.
+
+Logs are useful for detailed, free-form messages (e.g. stack traces, debug dumps). Traces complement them by giving a structured, request-scoped view of *where*, *what* and *how long* work happened across the breakfix pipeline.
+Traces are not to replace logs — we are adding it as an additional feature alongside existing logging to improve debugging and analyze system performance.
+
+Metrics (e.g. Prometheus) are aggregated over time: counters, gauges, and histograms that answer "how much?" and "how fast on average?" (e.g. `fault_quarantine_event_handling_duration_seconds`, event counts per module).
+Traces are per-request: each health event gets one trace with spans across all modules, answering "what happened for this event?", "where did this event spend most time?" and "where this event handling failed and why?"
+
+- **Granularity:** Metrics are aggregated over time (e.g. p50/p99 latency, rate per minute). Traces are per event: one trace per health event.
+- **Question answered:** Metrics answer "How is the system behaving overall?" Traces answer "Why was this event slow or failed? Why was this node not remediated? "
+- **Use case:** Metrics support dashboards, alerting, SLOs, and capacity planning. Traces support debugging a specific event and finding bottlenecks in a single flow.
+
+## Architecture Diagram
+
+The following diagram shows how traces flow from NVSentinel modules to the Alloy gateway and onward to Grafana dashboard.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────-┐
+│                         NVSentinel (trace producers)                         │
+├────────────────────────────────────────────────────────────────────────────-─┤
+│  platform-connector   fault-quarantine   node-drainer   fault-remediation    │
+│  health-events-analyzer                                                      │
+│         │                    │                │                │             │
+│         │  OTLP (GRPC :4317) │                │                │             │
+│         └────────────────────┴────────────────┴────────────────┴─────────────┤
+│                                               │                              │
+└────────────────────────────────────────-──────┼──────────────────────────────┘
+                                               │
+                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Alloy Gateway (dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317)        │
+│  - Receives OTLP traces from all NVSentinel modules (no auth; in-cluster)    │
+│  - Batches and forwards to Panoptes                                          │
+│  - Authenticates to Panoptes via OAuth2 (panoptes secret in dgxc-alloy NS)   │
+└──────────────────────────────────────────────┬───────────────────────────────┘
+                                               │
+                                               │ OTLP HTTP + OAuth2 (auth done here)
+                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Panoptes (otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com)          │
+│  - Centralized trace storage                                                 │
+└──────────────────────────────────────────────┬───────────────────────────────┘
+                                               │
+                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────-┐
+│  Grafana Tempo → Grafana Dashboards (dashboards.telemetry.dgxc.ngc.nvidia.com)│
+│  - Trace explorer, service map, latency analysis                              │
+└──────────────────────────────────────────────────────────────────────────────-┘
+```
+
+**Trace flow summary:**
+
+1. **Ingestion**: Each NVSentinel module exports spans via OTLP over gRPC to `dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317`. No authentication is required from NVSentinel to the gateway (in-cluster, `OTEL_EXPORTER_OTLP_INSECURE=true`).
+2. **Gateway**: The Alloy gateway receives traces, batches them, and authenticates to Panoptes using OAuth2 (credentials from the `panoptes` secret in the `dgxc-alloy` namespace). 
+3. **Backend**: Panoptes stores traces; Grafana Tempo is used as the datasource for querying and visualizing traces in Grafana.
 
 ## What Are We Planning to Track from Each Module?
 
@@ -24,15 +98,16 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 | **Cordon + Taint Operation** | Determine if a health event resulted in quarantining a node (cordon, taint, or both). Critical for understanding what actions were taken. | `quarantine.action.cordon` (bool)<br>`quarantine.action.taint` (bool)<br>`event.processing_status = "Quarantined"` |
 | **Unquarantine Operation** | Determine if a health event resulted in unquarantining a node | `quarantine.action.uncordon` (bool)<br>`taints.removed` (bool)<br>`event.processing_status = "UnQuarantined"` |
 | **Event Processing Status** | Track event lifecycle from reception to completion. Helps identify bottlenecks, queue delays, and processing states. | `event.processing_status = "waiting_to_be_processed" → "processing"` |
-| **Processing Errors** | Track all errors that occur during event processing. Essential for debugging, identifying failure patterns, and understanding error rates. | `event.processing_status = "error"`<br>`error.type` = specific error type |
-| **Circuit Breaker State** | Track when circuit breakers are triggered to prevent excessive quarantine operations. Critical for understanding system protection mechanisms. | `quarantine.circuit_breaker.state` = "open", "closed", "half_open"<br>`quarantine.circuit_breaker.triggered` (bool) |
+| **Processing Errors** | Track all errors that occur during event processing. Essential for debugging, identifying failure patterns, and understanding error rates. | `event.processing_status = "error"`<br>`error.message` = error details |
+| **Node Labels and Annotations** | Track when and what labels/annotations were applied on the node. Helps verify what metadata was set for the event and debug scheduling or visibility issues. | `quarantine.labels_applied` (bool)<br>`quarantine.annotations_applied` (bool)<br>`quarantine.cordon_reason` (list, optional) |
+| **Ruleset Matched** | Track which ruleset(s) matched for the event. Explains why quarantine was triggered (which CEL rule matched); helps debug rule configuration, audit quarantine decisions, and filter traces by ruleset. | `quarantine.ruleset.matched` (string or list)<br>`quarantine.ruleset.names` (list, optional) |
 
 ### Node Drainer Actions to Track
 
 | What to Track? | Why? | Span Attributes |
 |----------------|------|----------------|
-| **Drain Status** | Track final drain status (succeeded, failed, cancelled, already_drained). Essential for understanding outcomes. | `drain.status` = "succeeded", "failed", "cancelled", "already_drained", "in_progress" |
-| **Timeout Eviction** | Track when pods are force-deleted after timeout. Critical for understanding timeout-based drain operations and stuck pods. | `drain.forceDeletedPods` = ["pod-0", "pod-1"]<br>`drain.timeout_eviction_count` (int) |
+| **Drain Status** | Track final drain status (succeeded, failed, cancelled, already_drained). | `drain.status` = "succeeded", "failed", "cancelled", "already_drained", "in_progress" |
+| **Timeout Eviction** | Track when pods are force-deleted after timeout. Important for understanding timeout-based drain operations and stuck pods. | `drain.forceDeletedPods` = ["pod-0", "pod-1"]<br>`drain.timeout_eviction_count` (int) |
 | **Partial vs Full Drain** | Track whether a partial drain (specific GPU) or full drain (entire node) was executed. Critical for understanding drain scope. | `drain.scope` = "partial" or "full"<br>`drain.partial_drain.entity_type` (string)<br>`drain.partial_drain.entity_value` (string) |
 | **Processing Errors** | Track all errors that occur during drain processing. Essential for debugging and identifying failure patterns. | `drain.status` = "error" or "failed"<br>`error.type` = specific error type<br>`error.message` (string)<br>Span status: `codes.Error` |
 | **Custom Drain CR Status** | Track custom drain CR creation and completion status. Critical for custom drain workflows. | `drain.custom_cr.name` (string)<br>`drain.custom_cr.status` (string)<br>`drain.custom_cr.created` (bool) |
@@ -44,9 +119,8 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 | **Remediation Action Type** | Determine which remediation action was executed (create CR, skip, cancellation, etc.). Critical for understanding what actions were taken. | `remediation.action.type` = "create_cr", "skip", "cancellation" |
 | **Event Skip Reasons** | Track why events are skipped (NONE action, already remediated, unsupported action). Important for understanding skipped remediations. | `remediation.action.skip` (bool)<br>`remediation.skip_reason` = "none_action", "already_remediated", "unsupported_action" |
 | **Existing CR Detection** | Track when remediation is skipped because a maintenance CR already exists. Important for understanding duplicate prevention. | `remediation.action.skip_existing_cr` (bool)<br>`remediation.existing_cr.name` (string)<br>`remediation.existing_cr.status` (string) |
-| **Remediation Status** | Track final remediation status (succeeded, failed). Essential for understanding outcomes. | `remediation.status` = "succeeded", "failed", "in_progress" |
+| **Remediation Status** | Track final remediation status (succeeded, failed). Essential for understanding outcomes. | `remediation.status` = "succeeded", "failed" |
 | **Processing Errors** | Track all errors that occur during remediation processing. Essential for debugging and identifying failure patterns. | `remediation.status` = "error" or "failed"<br>`error.type` = specific error type<br>`error.message` (string)<br>Span status: `codes.Error` |
-| **CR Creation Details** | Track maintenance CR creation including template rendering and API calls. Helps debug CR creation failures. | `remediation.cr.name` (string)<br>`remediation.cr.kind` (string)<br>`remediation.cr.api_version` (string)<br>`remediation.cr.template_rendered` (bool) |
 
 ### Health-Events-Analyzer Actions to Track
 
@@ -63,104 +137,52 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 |----------------|------|----------------|
 | **gRPC Event Reception** | Track when health events are received from monitors. Critical for understanding event ingestion. | `platform_connector.grpc.event_received` (bool)<br>`platform_connector.grpc.events_count` (int)<br>`platform_connector.grpc.duration_ms` (float) |
 | **Event Persistence** | Track MongoDB write operations. Essential for understanding database performance. | `platform_connector.db.operation` = "insert", "update"<br>`platform_connector.db.duration_ms` (float)<br>`platform_connector.db.error` (string, if failed) |
-| **Node Condition Updates** | Track Kubernetes node condition updates. Important for understanding K8s API performance. | `platform_connector.k8s.node_condition.updated` (bool)<br>`platform_connector.k8s.node_condition.duration_ms` (float) |
+| **Node Condition Updates** | Track Kubernetes node condition updates. | `platform_connector.k8s.node_condition.updated` (bool) |
 | **Processing Errors** | Track errors during event ingestion and processing. Essential for debugging ingestion failures. | `platform_connector.error.type` = "grpc_error", "db_error", "k8s_error"<br>`platform_connector.error.message` (string)<br>Span status: `codes.Error` |
+
+### Event Exporter Actions to Track
+
+| What to Track? | Why? | Span Attributes |
+|----------------|------|----------------|
+| **Transform to CloudEvents** | Track transform success/failure and duration. Event-exporter converts health events to CloudEvents before publish; failures here block delivery to the sink. | `event_exporter.transform.success` (bool)<br>`event_exporter.transform.duration_ms` (float)<br>`event_exporter.transform.error` (string, if failed) |
+| **Publish to Sink** | Track publish outcome, retry count, and latency. Essential to see if events reached the external sink (e.g. HTTP) and whether retries were needed. | `event_exporter.publish.status` = "success", "failure"<br>`event_exporter.publish.retry_count` (int)<br>`event_exporter.publish.duration_ms` (float)<br>`event_exporter.publish.error_type` (string, if failed; e.g. "max_retries_exceeded") |
+| **Processing Errors** | Track unmarshal, transform, and publish errors. Essential for debugging why events were not exported. | `event_exporter.error.type` = "unmarshal_error", "transform_error", "publish_error"<br>`event_exporter.error.message` (string)<br>Span status: `codes.Error` |
+| **Backfill** | Track when event-exporter runs a backfill (replay of historical events). Helps correlate export latency or load with backfill runs. | `event_exporter.backfill.in_progress` (bool)<br>`event_exporter.backfill.events_processed` (int)<br>`event_exporter.backfill.duration_ms` (float) |
+
+### Janitor (GPUReset Controller) Actions to Track
+The janitor reconciles GPUReset custom resources: it tears down GPU/managed services on the node, creates a reset Job, waits for job completion, then restores services. Tracking these actions helps debug why a reset succeeded, failed, or stalled.
+
+| What to Track? | Why? | Span Attributes |
+|----------------|------|----------------|
+| **Reconcile Phase / Condition** | Track which phase the GPUReset is in (Pending, InProgress, Succeeded, Failed) and the current condition (Ready, ServicesTornDown, ResetJobCreated, ResetJobCompleted, ServicesRestored). Essential to see where a reset is stuck or why it failed. | `janitor.gpureset.name` (string)<br>`janitor.gpureset.phase` = "Pending", "InProgress", "Succeeded", "Failed", "Terminating", "Unknown"<br>`janitor.gpureset.condition` (string)<br>`janitor.gpureset.reason` (string) |
+| **Node Lock** | Track when the controller acquires or releases the node lock (distributed lock). Explains ResourceContention and requeue behavior. | `janitor.node_lock.acquired` (bool)<br>`janitor.node_lock.node` (string) |
+| **Service Teardown / Restore** | Track teardown and restore of GPU/managed services. | `janitor.services.teardown.success` (bool)<br>`janitor.services.teardown.duration_ms` (float)<br>`janitor.services.restore.success` (bool)<br>`janitor.services.restore.duration_ms` (float) |
+| **Reset Job** | Track reset Job creation and completion. The Job runs the actual GPU reset on the node. | `janitor.reset_job.created` (bool)<br>`janitor.reset_job.name` (string)<br>`janitor.reset_job.completed` (bool)<br>`janitor.reset_job.failed` (bool) |
+| **Completion / Failure Reason** | Track final outcome and failure reason (e.g. NodeNotFound, ResetJobFailed, ServiceTeardownTimeoutExceeded). Critical for understanding why a reset did not succeed. | `janitor.gpureset.completion_time` (string, optional)<br>`janitor.gpureset.failure_reason` (string; e.g. "ResetJobFailed", "ServiceRestoreFailed")<br>`event.processing_status` = "succeeded", "failed" |
+| **Processing Errors** | Track errors during reconcile (e.g. job creation failure, drift detection). Essential for debugging janitor failures. | `janitor.error.type` = "job_creation_failed", "teardown_timeout", "restore_failed", "node_not_found"<br>`janitor.error.message` (string)<br>Span status: `codes.Error` |
+
+### Janitor-Provider (CSP gRPC) Actions to Track
+
+| What to Track? | Why? | Span Attributes |
+|----------------|------|----------------|
+| **SendRebootSignal** | Track when a reboot signal is sent to the CSP for a node. Essential to confirm the reboot was requested and to measure CSP API latency. | `janitor_provider.reboot.sent` (bool)<br>`janitor_provider.reboot.request_ref` (string)<br>`janitor_provider.reboot.node` (string)<br>`janitor_provider.reboot.duration_ms` (float) |
+| **IsNodeReady** | Track node readiness checks after reboot. Helps debug "reset job ran but node never came back" scenarios. | `janitor_provider.node_ready.ready` (bool) |
+| **SendTerminateSignal** | Track when a terminate signal is sent to the CSP. Used for node termination flows. | `janitor_provider.terminate.sent` (bool)<br>`janitor_provider.terminate.request_ref` (string) |
+| **Processing Errors** | Track gRPC or CSP API errors (e.g. provider ID missing, CSP throttling). Essential for debugging provider failures. | `janitor_provider.error.type` = "grpc_error", "csp_api_error"<br>`janitor_provider.error.message` (string)<br>Span status: `codes.Error` |
 
 ## Trace Context Propagation
 
 ### Why Do We Need Context Propagation?
 
-Without trace context propagation, each service in NVSentinel would create **separate, disconnected traces**. This would make it impossible to see the complete journey of a health event through the system. Here's why it's critical:
+Without trace context propagation, each service would create its own trace with a different trace ID. You would see multiple unrelated traces (one per module) and would have to correlate logs, timestamps, and event IDs by hand to understand the full lifecycle of a health event. That makes it hard to see where time was spent, where failures occurred, or why an event was slow.
 
-#### The Problem Without Context Propagation
-
-Imagine a health event flows through NVSentinel like this:
-
-```
-GPU Monitor → Platform Connector → MongoDB → Fault Quarantine → Node Drainer → Fault Remediation
-```
-
-**Without context propagation**, you'd see:
-- **Trace 1** (GPU Monitor): "Detected GPU error on node-123"
-- **Trace 2** (Platform Connector): "Received event, stored in DB" 
-- **Trace 3** (Fault Quarantine): "Quarantined node-123"
-- **Trace 4** (Node Drainer): "Drained node-123"
-- **Trace 5** (Fault Remediation): "Created remediation CR"
-
-These are **5 separate traces with different trace IDs**. To debug why an event took 5 minutes, you'd need to:
-1. Manually correlate logs across 5 different services
-2. Match timestamps and event IDs
-3. Hope the event IDs are consistent across services
-4. Manually piece together the timeline
-
-**This is exactly the problem we're trying to solve!**
-
-#### The Solution With Context Propagation
-
-**With context propagation**, you'd see:
-- **Single Trace** (trace_id: `abc123`):
-  - Span 1 (GPU Monitor): "Detected GPU error on node-123"
-  - Span 2 (Platform Connector): "Received event, stored in DB" (child of Span 1)
-  - Span 3 (Fault Quarantine): "Quarantined node-123" (child of Span 2)
-  - Span 4 (Node Drainer): "Drained node-123" (child of Span 3)
-  - Span 5 (Fault Remediation): "Created remediation CR" (child of Span 4)
-
-All spans share the **same trace ID** (`abc123`), so you can:
-- View the **entire event lifecycle in one trace**
-- See **exactly where time was spent** (which span is longest)
-- **Instantly identify bottlenecks** without manual correlation
-- **Debug failures** by following the trace from start to failure point
-
-#### Real-World Example
-
-**Scenario**: A health event takes 5 minutes to complete, but you don't know why.
-
-**Without context propagation**:
-```
-1. Check GPU Monitor logs → "Event detected at 10:00:00"
-2. Check Platform Connector logs → "Event received at 10:00:01" 
-3. Check Fault Quarantine logs → "Event processed at 10:02:30" (2.5 min delay!)
-4. Check Node Drainer logs → "Event processed at 10:03:00"
-5. Check Fault Remediation logs → "Event processed at 10:05:00"
-6. Manually calculate: 2.5 min delay between Platform Connector and Fault Quarantine
-```
-
-**With context propagation**:
-```
-1. Open trace viewer, search for event ID
-2. See single trace showing:
-   - Platform Connector: 1 second
-   - [GAP: 2.5 minutes] ← Immediately visible!
-   - Fault Quarantine: 30 seconds
-   - Node Drainer: 2 minutes
-   - Fault Remediation: 30 seconds
-3. Click on the gap → See it's waiting in MongoDB change stream queue
-```
+With context propagation, the trace ID is carried with the event (e.g. in metadata) from one module to the next. Every module that handles the same event continues the same trace and adds its own spans. The result is a single trace that shows the entire journey of the event—from ingestion through quarantine, drain, and remediation—so you can see the full timeline, spot bottlenecks, and debug failures in one place.
 
 ### Cross-Service Trace Continuity
 
-NVSentinel uses distributed tracing to maintain trace context across all modules. There are two approaches for storing trace context:
+NVSentinel uses distributed tracing to maintain trace context across all modules.
 
-**Option A: Trace ID in HealthEvent.metadata**
-```
-Health Monitor (creates ROOT trace, trace_id: abc123)
-    │
-    │ [1. gRPC Call - trace context in HealthEvent.metadata field]
-    ▼
-Platform Connector (extracts from event.metadata, continues trace abc123)
-    │
-    │ [2. MongoDB Storage - trace context already in event.metadata]
-    ▼
-MongoDB (stores event with trace context in healthevent.metadata)
-    │
-    │ [3. MongoDB Change Streams - trace context extracted from healthevent.metadata]
-    ├──► Fault Quarantine (continues trace abc123)
-    ├──► Node Drainer (continues trace abc123)
-    ├──► Fault Remediation (continues trace abc123)
-    └──► Health Events Analyzer (continues trace abc123)
-```
-
-**Option B: Trace ID as Separate MongoDB Field (Recommended)**
+**Trace ID as Separate MongoDB Field (Recommended)**
 ```
 Health Monitor (sends event, NO trace context)
     │
@@ -176,7 +198,10 @@ MongoDB (stores event with trace_id as separate field)
     ├──► Fault Quarantine (continues trace abc123)
     ├──► Node Drainer (continues trace abc123)
     ├──► Fault Remediation (continues trace abc123)
-    └──► Health Events Analyzer (continues trace abc123)
+    ├──► Health Events Analyzer (continues trace abc123)
+    ├──► Event Exporter (continues trace abc123)
+    ├──► Janitor (continues trace abc123)
+    └──► Janitor provider (continues trace abc123)
 ```
 
 **All modules share the same trace ID (`abc123`)** - this is only possible with context propagation at each step.
@@ -225,109 +250,10 @@ Trace context is stored as a separate top-level field in the MongoDB document, k
 2. Platform-connector generates trace ID and sets it when creating `HealthEventWithStatus`
 3. All fault handling modules can access `healthEventWithStatus.TraceID` after unmarshaling
 
-**Pros**:
+
 - **Separates observability from business logic** - trace_id is not mixed with health event data
 - **Consistent with current unmarshaling approach** - modules already unmarshal into `HealthEventWithStatus` struct
-- **Easier to query and index** - trace_id as top-level field can be indexed separately
-- **No health monitor changes needed** - health monitors don't need to be OpenTelemetry-aware
-- **Cleaner data model** - observability data separate from business data
-
-**Cons**:
-- Requires struct changes to `HealthEventWithStatus`
-- Platform-connector must generate trace ID (loses detection phase visibility)
-- Trace starts at ingestion, not detection
-
-**Recommendation**: Use **Option B** for cleaner separation of concerns and consistency with the current unmarshaling pattern. The trade-off of losing detection phase visibility is acceptable for the benefits of cleaner architecture.
-
-   **How it works technically**:
-   - Health monitor creates a trace and span when detecting an event
-   - Health monitor **adds trace ID to `HealthEvent.metadata`**:
-     ```go
-     healthEvent.Metadata["trace_id"] = traceID
-     ```
-   - Health monitor sends gRPC call with `HealthEvents` protobuf (trace context is already in the event)
-   - Platform-connector receives the event and **extracts trace context from `metadata` field**
-   - Platform-connector continues the same trace (same trace ID) and creates a child span
-   - When storing in MongoDB, **trace context is already in the event metadata** - automatically persisted with the event
-   - Downstream modules extract trace context from MongoDB document's `healthevent.metadata` field
-   
-   **Why this approach**:
-   - **Simpler implementation** - no gRPC interceptors needed
-   - **Trace context travels with the event** - automatically stored in MongoDB with the event
-   - **No separate storage step** - trace context is already in the event data
-   - Leverages existing `metadata` field (no protobuf schema changes needed)
-   - Since trace context needs to survive MongoDB storage anyway, storing it in metadata from the start is the most efficient approach
-
-2. **MongoDB Change Streams (CRITICAL)**: This is the **bridge** between platform-connector and all fault handling modules. Trace context is stored in health event documents when platform-connector persists events, and extracted when fault handling modules process events from change streams.
-
-   **How trace context is stored in MongoDB**:
-   
-   **Option A (metadata field)**:
-   - Trace context is already in `HealthEvent.metadata` field (added by health monitor)
-   - When platform-connector stores the event, trace context is automatically persisted in MongoDB as part of the event document
-   - MongoDB document structure: `healthevent.metadata.trace_id`
-   
-   **Option B (separate field - Recommended)**:
-   - Platform-connector generates trace ID and stores it as a separate top-level field
-   - MongoDB document structure: `trace_id` (top-level field, separate from `healthevent`)
-   - Document structure:
-     ```json
-     {
-       "_id": "...",
-       "trace_id": "abc123",
-       "createdAt": "...",
-       "healthevent": { ... },
-       "healtheventstatus": { ... }
-     }
-     ```
-   
-   **How fault handling modules extract trace context**:
-   
-   **Option A (metadata field)**:
-   - When processing events from MongoDB change streams, modules extract trace ID from the document:
-     - Extract from `healthevent.metadata.trace_id`
-     - Access via: `healthEvent.Metadata["trace_id"]`
-   
-   **Option B (separate field - Recommended)**:
-   - Modules unmarshal change stream events into `HealthEventWithStatus` struct (existing pattern)
-   - Trace ID is automatically extracted as part of the struct: `healthEventWithStatus.TraceID`
-   - Access via: `healthEventWithStatus.TraceID`
-   
-   Modules then continue the same trace (same trace ID) and create child spans
-   
-   This ensures:
-   - Events maintain their trace context even when stored in MongoDB
-   - **Fault-quarantine, node-drainer, fault-remediation, and health-events-analyzer can continue the same trace** (without this, each would create a new trace with a different trace ID)
-   - End-to-end visibility from event detection → ingestion → quarantine → drain → remediation
-   - **Without this propagation, you'd lose trace continuity** - the fault handling modules would appear as disconnected traces, defeating the purpose of distributed tracing
-
-3. **Span Relationships**: 
-   - **Parent-child relationships**: Each module creates child spans under the parent event trace
-   - **Follows-from relationships**: When health-events-analyzer creates a new event, it creates a "follows-from" relationship to the original event trace
-
-
-#### How Context Propagation Works
-
-Trace context contains:
-- **Trace ID**: Unique identifier for the entire request/event flow (this is all we need to continue the trace)
-
-This context is:
-1. **Added to HealthEvent.metadata** field by health monitors when creating events (only trace_id is needed)
-2. **Stored in MongoDB documents** automatically when events are persisted (trace ID is part of the event)
-3. **Extracted from MongoDB** when downstream modules process events from change streams
-4. **Manually propagated** by adding trace ID to the event metadata field
-
-**Note**: Only the trace ID is needed because:
-- OpenTelemetry automatically generates new span IDs for child spans
-- Parent-child relationships are handled automatically when creating spans with the same trace ID
-- Trace flags (sampling) are not critical for basic trace continuation
-
-### Trace ID Correlation
-
-All spans for a single health event share the same trace ID, allowing:
-- **Unified view**: See all processing steps for an event in a single trace view
-- **Event correlation**: Link related events (e.g., original event and analyzer-generated event) through trace relationships
-- **Cross-module debugging**: Follow an event through the entire pipeline without manually correlating logs
+- **No health monitor changes needed** - health monitors don't need to be OpenTelemetry-aware, any new custom/nvsentinel health monitor doesn't need to have changes for traces 
 
 ## Implementation Details
 
@@ -337,21 +263,7 @@ All spans for a single health event share the same trace ID, allowing:
 
 The trace ID creation depends on which trace context propagation option you choose:
 
-#### Option A: Health Monitor Creates Root Trace
-
-**Health Monitor** creates the root trace when it detects a health event:
-- **Root Span**: Created in health monitor (e.g., `gpu_health_monitor.detect_event`)
-- **Trace ID generated here** in the health monitor
-- Trace context is propagated via grpc connection to platform-connector
-- **Advantages**:
-  - Complete end-to-end visibility from detection → ingestion → processing
-  - Can see detection latency (time between actual fault and detection)
-  - Better for understanding monitor performance
-- **Disadvantages**:
-  - Requires tracing instrumentation in all health monitors
-  - Health monitors need to be OpenTelemetry-aware
-
-#### Option B: Platform-Connector Creates Root Trace (Recommended)
+#### Platform-Connector Creates Root Trace
 
 **Platform-Connector** creates the root trace when it receives a health event via gRPC:
 - **Root Span**: Created when platform-connector receives a health event via gRPC
@@ -364,10 +276,6 @@ The trace ID creation depends on which trace context propagation option you choo
   - Health monitors don't need OpenTelemetry instrumentation
   - Cleaner separation of observability from business logic
   - Consistent with current unmarshaling pattern
-- **Disadvantages**:
-  - Loses visibility into detection phase
-  - Can't see monitor-side latency or issues
-  - Trace starts at ingestion, not detection
 
 **(Platform-Connector creates trace, stored as separate field)**:
 ```
@@ -375,11 +283,10 @@ Health Monitor:
   1. Detect event
   2. Make gRPC call with:
      - Health event data (protobuf)
-     - NO trace context ← NO PROPAGATION NEEDED
 
 Platform Connector:
   1. Receive gRPC call
-  2. Create NEW trace (trace_id: abc123) ← GENERATED HERE
+  2. Create NEW trace (trace_id: abc123)
   3. Create root span: "platform_connector.receive_event"
   4. Store event in MongoDB with trace_id as separate top-level field
   5. Start new trace (trace_id: abc123)
@@ -403,7 +310,6 @@ Platform Connector:
 - **OTLP Exporter**: Export traces via OTLP (OpenTelemetry Protocol) to Alloy gateway, which forwards to Panoptes (Tempo backend)
 - **Batch Export**: Use batching to reduce overhead (handled by Alloy gateway)
 - **Retry Logic**: Implement retry logic for failed exports (handled by Alloy gateway)
-- **Fallback**: Console exporter for local development and debugging (when `OTEL_EXPORTER_OTLP_ENDPOINT` is not set)
 
 ### Backend Integration: Alloy Gateway + Panoptes
 
@@ -414,11 +320,11 @@ NVSentinel uses **Grafana Alloy Gateway** as the OTLP receiver, which forwards t
 ```
 NVSentinel Modules (platform-connector, fault-quarantine, etc.)
     │
-    │ [OTLP gRPC/HTTP]
+    │ [OTLP gRPC :4317]
     ▼
-Alloy Gateway (dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local)
+Alloy Gateway (dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317)
     │
-    │ [OTLP HTTP with OAuth2]
+    │ [OTLP HTTP]
     ▼
 Panoptes (otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com)
     │
@@ -437,18 +343,12 @@ Each NVSentinel module (platform-connector, fault-quarantine, node-drainer, faul
 
 ```yaml
 env:
-  # OTLP endpoint - Alloy gateway service
+  # OTLP endpoint - Alloy gateway service (gRPC on 4317)
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317"  # gRPC endpoint
-    # OR use HTTP endpoint:
-    # value: "http://dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4318"
+    value: "dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317"
   
   # Use insecure connection (ClusterIP service, no TLS)
   - name: OTEL_EXPORTER_OTLP_INSECURE
-    value: "true"
-  
-  # Enable tracing
-  - name: OTEL_TRACES_ENABLED
     value: "true"
   
   # Service name for trace identification
@@ -456,13 +356,11 @@ env:
     value: "platform-connector"  # or "fault-quarantine", "node-drainer", etc.
 ```
 
-**Note**: The exact port (4317 for gRPC or 4318 for HTTP) depends on your cluster's Alloy gateway configuration. Check the service definition to confirm which protocol is available.
-
 #### Alloy Gateway Configuration
 
 The Alloy gateway needs to be configured to forward traces to Panoptes. This is typically managed by the observability team. The configuration should include:
 
-1. **OTLP Receiver**: Already configured to receive traces on ports 4317 (gRPC) and/or 4318 (HTTP)
+1. **OTLP Receiver**: Configured to receive traces on port 4317 (gRPC); NVSentinel modules send traces via OTLP gRPC to this port
 2. **Traces Processor**: Batch processing for traces
 3. **Traces Exporter**: Forward traces to Panoptes traces endpoint:
    - Endpoint: `https://otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com`
@@ -470,10 +368,12 @@ The Alloy gateway needs to be configured to forward traces to Panoptes. This is 
 
 **Example Alloy Config Addition** (managed by observability team):
 
+NVSentinel modules send traces via OTLP gRPC; the gateway must expose the gRPC receiver on port 4317.
+
 ```alloy
 otelcol.receiver.otlp "input" {
   grpc {
-    endpoint = "0.0.0.0:4317"
+    endpoint = "0.0.0.0:4317"  # NVSentinel modules send traces here (OTLP gRPC)
   }
   http {
     endpoint = "0.0.0.0:4318"
@@ -481,18 +381,20 @@ otelcol.receiver.otlp "input" {
   output {
     logs = [otelcol.exporter.otlphttp.panoptes_logs.input]
     metrics = [otelcol.exporter.otlphttp.panoptes_metrics.input]
-    traces = [otelcol.processor.batch.traces.input]  // ADD THIS
+    traces = [otelcol.processor.batch.traces.input]
   }
 }
 
+// ADD THIS
 otelcol.processor.batch "traces" {
   timeout = "1s"
   send_batch_size = 512
   output {
-    traces = [otelcol.exporter.otlphttp.panoptes_traces.input]  // ADD THIS
+    traces = [otelcol.exporter.otlphttp.panoptes_traces.input]  
   }
 }
 
+// ADD THIS
 otelcol.auth.oauth2 "panoptes_traces" {
   client_id = convert.nonsensitive(remote.kubernetes.secret.panoptes.data["client_id"])
   client_secret = remote.kubernetes.secret.panoptes.data["client_secret"]
@@ -500,22 +402,11 @@ otelcol.auth.oauth2 "panoptes_traces" {
   scopes = ["api://dgxc-lgtm-otel-gateway-prod/.default"]
 }
 
+// ADD THIS
 otelcol.exporter.otlphttp "panoptes_traces" {
   client {
     auth = otelcol.auth.oauth2.panoptes_traces.handler
     endpoint = "https://otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com"
-  }
-  sending_queue {
-    enabled = true
-    sizer = "bytes"
-    num_consumers = 32
-    queue_size = 3221225472
-    batch {
-      sizer = "bytes"
-      flush_timeout = "1s"
-      min_size = 1048576  // 1MB
-      max_size = 2097152  // 2MB
-    }
   }
 }
 ```
@@ -528,57 +419,24 @@ Once traces are flowing through Alloy to Panoptes, they can be viewed in Grafana
 - **Tempo Datasource**: Already configured (UID: `ce6qyv88u86bkc`)
 - **Trace Explorer**: Navigate to Explore → Select Tempo datasource → Search by trace ID or service name
 
-#### Benefits of Alloy Gateway Approach
-
-- **Centralized Collection**: All traces flow through a single gateway
-- **No Direct Credentials**: NVSentinel modules don't need Panoptes OAuth2 credentials
-- **Consistent with Existing Infrastructure**: Uses the same observability pipeline as logs and metrics
-- **Automatic Retry and Batching**: Alloy handles retries and batching automatically
-- **Unified Dashboard**: Traces appear in the same Grafana instance as logs and metrics
-
 ## Integration with Existing Observability
 
-### Metrics Integration
-
-Traces complement existing Prometheus metrics:
-- **Metrics**: Provide aggregated statistics (e.g., average processing time)
-- **Traces**: Provide detailed per-event breakdowns (e.g., why this specific event was slow)
-
-### Logs Integration
-
-Traces enhance log analysis:
-- **Logs**: Provide detailed text descriptions of what happened
-- **Traces**: Provide structured context and timing information
-- **Correlation**: Use trace IDs in logs to correlate log entries with trace spans
-
 ### Grafana Dashboards
-
 Traces can be visualized in Grafana using Tempo:
 - **Trace explorer**: Navigate individual traces
 - **Service map**: Visualize service dependencies and interactions
 - **Latency heatmaps**: Identify latency patterns
 - **Error rate**: Track error rates by service
 
-## Benefits Summary
-
-1. **Faster Debugging**: Reduce time to identify root causes from hours to minutes
-2. **Performance Insights**: Identify bottlenecks and optimization opportunities
-3. **System Understanding**: Gain visibility into complex distributed workflows
-4. **Proactive Monitoring**: Detect issues before they become critical
-5. **Better SLOs**: Measure and improve service level objectives
-6. **Reduced MTTR**: Faster mean time to resolution through better observability
-
 ## Next Steps
 
 1. **Alloy Gateway Configuration**: Coordinate with observability team to add traces forwarding to Alloy gateway config (forward traces to Panoptes traces endpoint)
 2. **Instrument Core Modules**: Add tracing to platform-connector, fault-quarantine, node-drainer, fault-remediation, and health-events-analyzer
 3. **Configure OTLP Export**: Set environment variables in NVSentinel modules to send traces to Alloy gateway:
-   - `OTEL_EXPORTER_OTLP_ENDPOINT=dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317`
+   - `OTEL_EXPORTER_OTLP_ENDPOINT=http://dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317`
    - `OTEL_EXPORTER_OTLP_INSECURE=true`
-   - `OTEL_TRACES_ENABLED=true`
    - `OTEL_SERVICE_NAME=<module-name>`
 4. **Trace Context Propagation**: Implement trace context storage and retrieval in MongoDB change streams (Option B: separate field)
 5. **Grafana Dashboards**: Create dashboards for trace visualization and analysis in Grafana
 6. **Documentation**: Create runbooks for common trace-based debugging scenarios
 7. **Testing**: Validate trace completeness and accuracy in test environments
-
