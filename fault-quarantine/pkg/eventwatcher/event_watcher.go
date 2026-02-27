@@ -21,10 +21,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/metrics"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
 	"github.com/nvidia/nvsentinel/store-client/pkg/query"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type EventWatcher struct {
@@ -43,6 +45,12 @@ type LastProcessedObjectIDStore interface {
 	StoreLastProcessedObjectID(objID string)
 	LoadLastProcessedObjectID() (string, bool)
 }
+
+// DocumentIDContextKey is the context key for the store document ID.
+// ProcessEvent uses this to set health_event.id on the span when the event is received from the event watcher.
+type documentIDContextKeyType struct{}
+
+var DocumentIDContextKey = documentIDContextKeyType{}
 
 type EventWatcherInterface interface {
 	Start(ctx context.Context) error
@@ -173,6 +181,10 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	}
 
 	w.lastProcessedObjectID.StoreLastProcessedObjectID(eventID)
+
+	// Pass document ID in context so ProcessEvent can set health_event.id on the span
+	// when we have received the event from the event watcher.
+	ctx = context.WithValue(ctx, DocumentIDContextKey, eventID)
 
 	startTime := time.Now()
 
@@ -403,6 +415,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	var latestEvent struct {
 		ID          string    `bson:"_id" json:"_id"`
 		CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
+		TraceID     string    `bson:"traceid"`
 		HealthEvent struct {
 			NodeName           string       `bson:"nodename" json:"nodeName"`
 			GeneratedTimestamp *dbTimestamp `bson:"generatedtimestamp" json:"generatedTimestamp"`
@@ -452,6 +465,9 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		return nil
 	}
 
+	ctx, span := tracing.StartSpanFromTraceID(ctx, latestEvent.TraceID, "cancel_latest_quarantining_events")
+	defer span.End()
+
 	// Update all events from the current quarantine session (Quarantined + AlreadyQuarantined)
 	// This includes the first event and all subsequent events that occurred after it
 	updateFilter := query.New().Build(query.And(
@@ -469,6 +485,12 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 
 	updateResult, err := w.databaseClient.UpdateManyDocuments(ctx, updateFilter, update)
 	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		span.SetAttributes(
+			attribute.String("fault_quarantine.error.type", "error_cancelling_quarantining_events"),
+			attribute.String("fault_quarantine.error.message", err.Error()),
+		)
 		return fmt.Errorf("error cancelling quarantining events for node %s: %w", nodeName, err)
 	}
 
@@ -485,6 +507,10 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		nodeName,
 	)
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+	span.SetAttributes(
+		attribute.String("fault_quarantine.event.node_quarantined", string(model.Cancelled)),
+	)
 	return nil
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
+	"go.opentelemetry.io/otel/trace"
 	_ "github.com/nvidia/nvsentinel/store-client/pkg/datastore/providers"
 	"github.com/nvidia/nvsentinel/store-client/pkg/factory"
 )
@@ -90,48 +91,69 @@ func createClientFactory(databaseClientCertMountPath string) (*factory.ClientFac
 }
 
 func (r *DatabaseStoreConnector) FetchAndProcessHealthMetric(ctx context.Context) {
-	// Build an in-memory cache of entity states from existing documents in the database
 	for {
 		select {
 		case <-ctx.Done():
 			slog.Info("Context canceled, exiting health metric processing loop")
 			return
 		default:
-			healthEvents, quit := r.ringBuffer.Dequeue()
+			item, quit := r.ringBuffer.Dequeue()
 			if quit {
 				slog.Info("Queue signaled shutdown, exiting processing loop")
 				return
 			}
 
+			healthEvents := item.Events
 			if healthEvents == nil || len(healthEvents.GetEvents()) == 0 {
-				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 				continue
 			}
 
-			err := r.insertHealthEvents(ctx, healthEvents)
+			// Continue the trace from the gRPC handler so one trace shows both store and K8s processing.
+			batchCtx := trace.ContextWithRemoteSpanContext(ctx, item.ParentSpanContext)
+			batchCtx, span := tracing.StartSpan(batchCtx, "platform_connector.store.fetch_and_process_health_metric")
+			eventCount := len(healthEvents.GetEvents())
+			span.SetAttributes(
+				attribute.Int("platform_connector.store.batch_event_count", eventCount),
+			)
+			if eventCount > 0 && healthEvents.GetEvents()[0] != nil {
+				span.SetAttributes(attribute.String("platform_connector.store.node_name", healthEvents.GetEvents()[0].GetNodeName()))
+			}
+
+			err := r.insertHealthEvents(batchCtx, healthEvents)
 			if err != nil {
-				retryCount := r.ringBuffer.NumRequeues(healthEvents)
+				retryCount := r.ringBuffer.NumRequeues(item)
+				tracing.RecordError(span, err)
+				span.SetAttributes(
+					attribute.String("platform_connector.store.error", err.Error()),
+					attribute.Int("platform_connector.store.retry_count", retryCount),
+					attribute.Int("platform_connector.store.max_retries", r.maxRetries),
+				)
 				if retryCount < r.maxRetries {
+					span.SetAttributes(attribute.String("platform_connector.store.outcome", "retry"))
 					slog.Warn("Error inserting health events, will retry with exponential backoff",
 						"error", err,
 						"retryCount", retryCount,
 						"maxRetries", r.maxRetries,
-						"eventCount", len(healthEvents.GetEvents()))
+						"eventCount", eventCount)
 
-					r.ringBuffer.AddRateLimited(healthEvents)
+					r.ringBuffer.AddRateLimited(item)
 				} else {
+					span.SetAttributes(attribute.String("platform_connector.store.outcome", "dropped"))
 					slog.Error("Max retries exceeded, dropping health events permanently",
 						"error", err,
 						"retryCount", retryCount,
 						"maxRetries", r.maxRetries,
-						"eventCount", len(healthEvents.GetEvents()),
+						"eventCount", eventCount,
 						"firstEventNodeName", healthEvents.GetEvents()[0].GetNodeName(),
 						"firstEventCheckName", healthEvents.GetEvents()[0].GetCheckName())
-					r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+					r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 				}
 			} else {
-				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+				span.SetAttributes(attribute.String("platform_connector.store.outcome", "success"))
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 			}
+			span.End()
 		}
 	}
 }
@@ -229,7 +251,8 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 		slog.Error("InsertMany failed", "error", err)
 		tracing.RecordError(dbSpan, err)
 		dbSpan.SetAttributes(
-			attribute.String("platform_connector.db.error", err.Error()),
+			attribute.String("platform_connector.error.type", "insert_many_failed"),
+			attribute.String("platform_connector.error.message", err.Error()),
 		)
 
 		return fmt.Errorf("insertMany failed: %w", err)

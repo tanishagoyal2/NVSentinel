@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
 
@@ -47,6 +51,18 @@ const (
 // updateNodeConditions updates node conditions for a single node.
 // All healthEvents must belong to the same node; callers must partition by NodeName.
 func (r *K8sConnector) updateNodeConditions(ctx context.Context, healthEvents []*protos.HealthEvent) (bool, error) {
+	ctx, span := tracing.StartSpan(ctx, "platform_connector.k8s.node_conditions_updated")
+	defer span.End()
+
+	nodeName := ""
+	if len(healthEvents) > 0 && healthEvents[0] != nil {
+		nodeName = healthEvents[0].NodeName
+	}
+	span.SetAttributes(
+		attribute.String("platform_connector.k8s.node_name", nodeName),
+		attribute.Int("platform_connector.k8s.node_condition_events_count", len(healthEvents)),
+	)
+
 	sortedHealthEvents := sortHealthEventsByTimestamp(healthEvents)
 	conditionEventsMap := buildConditionEventsMap(sortedHealthEvents)
 
@@ -152,7 +168,11 @@ func (r *K8sConnector) processNodeCondition(node *corev1.Node, conditionType cor
 	messages = r.aggregateEventMessages(messages, events)
 
 	if len(messages) > 0 {
-		matchedCondition.Message = r.truncateNodeConditionMessage(messages)
+		truncated, message := r.truncateNodeConditionMessage(messages)
+		matchedCondition.Message = message
+		span.SetAttributes(
+			attribute.Bool("platform_connector.k8s.truncate_node_condition_message", truncated),
+		)
 		matchedCondition.Status = corev1.ConditionTrue
 		matchedCondition.Reason = r.updateHealthEventReason(latestEvent.CheckName, false)
 	} else {
@@ -342,6 +362,15 @@ func (r *K8sConnector) removeImpactedEntitiesMessages(messages []string,
 }
 
 func (r *K8sConnector) writeNodeEvent(ctx context.Context, event *corev1.Event, nodeName string) error {
+	ctx, span := tracing.StartSpan(ctx, "platform_connector.k8s.node_event_write")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("platform_connector.k8s.node_name", nodeName),
+		attribute.String("platform_connector.k8s.event_reason", event.Reason),
+		attribute.String("platform_connector.k8s.event_type", string(event.Type)),
+	)
+
 	err := retry.OnError(retry.DefaultRetry, func(err error) bool {
 		return apierrors.IsConflict(err) || isTemporaryError(err)
 	}, func() error {
@@ -365,11 +394,16 @@ func (r *K8sConnector) writeNodeEvent(ctx context.Context, event *corev1.Event, 
 				_, err = r.clientset.CoreV1().Events(DefaultNamespace).Update(ctx, &existingEvent, metav1.UpdateOptions{})
 				if err != nil {
 					nodeEventOperationsCounter.WithLabelValues(nodeName, OperationUpdate, StatusFailed).Inc()
+					span.SetAttributes(
+						attribute.String("platform_connector.k8s.error.type", "node_event_update_failed"),
+						attribute.String("platform_connector.k8s.error.message", err.Error()),
+					)
 					return fmt.Errorf("failed to update event for node %s: %w", nodeName, err)
-				} else {
-					nodeEventOperationsCounter.WithLabelValues(nodeName, OperationUpdate, StatusSuccess).Inc()
 				}
-
+				nodeEventOperationsCounter.WithLabelValues(nodeName, OperationUpdate, StatusSuccess).Inc()
+				span.SetAttributes(
+					attribute.Bool("platform_connector.k8s.node_event_updated", true),
+				)
 				return nil
 			}
 		}
@@ -381,13 +415,19 @@ func (r *K8sConnector) writeNodeEvent(ctx context.Context, event *corev1.Event, 
 		if err != nil {
 			nodeEventOperationsCounter.WithLabelValues(nodeName, OperationCreate, StatusFailed).Inc()
 			return fmt.Errorf("failed to create event for node %s: %w", nodeName, err)
-		} else {
-			nodeEventOperationsCounter.WithLabelValues(nodeName, OperationCreate, StatusSuccess).Inc()
 		}
+		nodeEventOperationsCounter.WithLabelValues(nodeName, OperationCreate, StatusSuccess).Inc()
 
 		return nil
 	})
 
+	if err != nil {
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("platform_connector.k8s.all_retries_failed", "node_event_create_failed"),
+			attribute.String("platform_connector.k8s.error.message", err.Error()),
+		)
+	}
 	return err
 }
 
@@ -483,7 +523,10 @@ func (r *K8sConnector) createK8sEvent(healthEvent *protos.HealthEvent) *corev1.E
 	}
 }
 
-func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
+func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) (nodeConditionsUpdated bool, nodeEventsWritten int, err error) {
+	ctx, span := tracing.StartSpan(ctx, "platform_connector.k8s.process_health_events")
+	defer span.End()
+
 	processableEvents := filterProcessableEvents(healthEvents)
 
 	eventsByNode := groupEventsByNode(processableEvents)
@@ -512,7 +555,15 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 					firstErr = fmt.Errorf("failed to write node event for %s: %w", healthEvent.NodeName, err)
 				} else {
 					slog.Error("Failed to write node event", "node", healthEvent.NodeName, "error", err)
+					tracing.RecordError(span, err)
+					span.SetAttributes(
+						attribute.String("platform_connector.k8s.error.type", "node_event_create_failed"),
+						attribute.String("platform_connector.k8s.error.message", err.Error()),
+					)
+					return nodeConditionsUpdated, nodeEventsWritten, fmt.Errorf("failed to write node event for %s: %w", healthEvent.NodeName, err)
 				}
+				span.SetAttributes(attribute.Bool("platform_connector.k8s.node_event_created", true))
+				nodeEventsWritten++
 			}
 		}
 	}
@@ -548,7 +599,7 @@ func (r *K8sConnector) processNodeConditionUpdates(ctx context.Context,
 	nodeConditionUpdateDuration.Observe(float64(time.Since(start).Milliseconds()))
 	nodeConditionUpdateCounter.WithLabelValues(StatusSuccess).Inc()
 
-	return nil
+	return nodeConditionsUpdated, nodeEventsWritten, nil
 }
 
 // isTemporaryError checks if the error is a temporary network error that should be retried
@@ -750,7 +801,7 @@ func compactMessageField(msg string, maxLen int) string {
 //     to compactMessageFieldLen bytes, preserving entity identifiers needed for recovery.
 //  2. If compacted messages still exceed the limit, truncate the last entry at the byte level
 //     to fill the remaining space.
-func (r *K8sConnector) truncateNodeConditionMessage(messages []string) string {
+func (r *K8sConnector) truncateNodeConditionMessage(messages []string) (bool, string) {
 	maxLen := int(r.config.MaxNodeConditionMessageLength)
 
 	// When messages exceed the limit, first remove identity-duplicates (same
@@ -800,5 +851,5 @@ func (r *K8sConnector) truncateNodeConditionMessage(messages []string) string {
 		result.WriteString(truncationSuffix)
 	}
 
-	return result.String()
+	return truncated, result.String()
 }

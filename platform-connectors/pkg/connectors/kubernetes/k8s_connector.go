@@ -20,10 +20,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
 )
 
@@ -106,18 +109,45 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 			slog.Info("k8sConnector queue received stop signal")
 			return
 		default:
-			healthEvents, quit := r.ringBuffer.Dequeue()
+			item, quit := r.ringBuffer.Dequeue()
 			if quit {
 				slog.Info("Queue signaled shutdown, exiting processing loop")
 				return
 			}
 
-			if err := r.processHealthEvents(ctx, healthEvents); err != nil {
-				slog.Error("Not able to process healthEvent", "error", err)
-				r.ringBuffer.HealthMetricEleProcessingFailed(healthEvents)
-			} else {
-				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+			healthEvents := item.Events
+			if healthEvents == nil || len(healthEvents.GetEvents()) == 0 {
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
+				continue
 			}
+
+			// Continue the trace from the gRPC handler so one trace shows both store and K8s processing.
+			batchCtx := trace.ContextWithRemoteSpanContext(ctx, item.ParentSpanContext)
+			batchCtx, span := tracing.StartSpan(batchCtx, "platform_connector.k8s.fetch_and_process_health_metric")
+			span.SetAttributes(
+				attribute.Int("platform_connector.k8s.batch_event_count", len(healthEvents.GetEvents())),
+			)
+			if healthEvents.GetEvents()[0] != nil {
+				span.SetAttributes(attribute.String("platform_connector.k8s.node_name", healthEvents.GetEvents()[0].NodeName))
+			}
+
+			nodeConditionsUpdated, nodeEventsWritten, err := r.processHealthEvents(batchCtx, healthEvents)
+			if err != nil {
+				slog.Error("Not able to process healthEvent", "error", err)
+				tracing.RecordError(span, err)
+				span.SetAttributes(
+					attribute.String("platform_connector.k8s.error.type", "not_able_to_process_health_event"),
+					attribute.String("platform_connector.k8s.error.message", err.Error()),
+				)
+				r.ringBuffer.HealthMetricEleProcessingFailed(item)
+			} else {
+				span.SetAttributes(
+					attribute.Bool("platform_connector.k8s.node_conditions_updated", nodeConditionsUpdated),
+					attribute.Int("platform_connector.k8s.node_events_written", nodeEventsWritten),
+				)
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
+			}
+			span.End()
 		}
 	}
 }
