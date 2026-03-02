@@ -37,6 +37,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/janitor/api/v1alpha1"
 	"github.com/nvidia/nvsentinel/janitor/pkg/config"
 	"github.com/nvidia/nvsentinel/janitor/pkg/distributedlock"
@@ -103,15 +108,30 @@ func (r *GPUResetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-
 		return ctrl.Result{}, fmt.Errorf("failed to get GPUReset %s: %w", req.NamespacedName, err)
 	}
 
+	// Start main span for this reconcile; set GPUReset status attributes (phase, condition, reason) per design 028.
+	ctx, span := tracing.StartSpan(ctx, "janitor.gpureset.reconcile")
+	defer func() {
+		if span != nil {
+			span.End()
+		}
+	}()
+	setGPUResetSpanAttributes(span, &gpuReset)
+
 	reconcileDelete := !gpuReset.DeletionTimestamp.IsZero()
+
 	completedReconciling := gpuReset.Status.CompletionTime != nil
 
 	if !completedReconciling || reconcileDelete {
 		locked := r.NodeLock.LockNode(ctx, &gpuReset, gpuReset.Spec.NodeName)
+		if span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.node_lock.acquired", locked),
+				attribute.String("janitor.node_lock.node", gpuReset.Spec.NodeName),
+			)
+		}
 		if !locked {
 			return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 		}
@@ -127,6 +147,14 @@ func (r *GPUResetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 
 		result, err := r.reconcileHelper(ctx, &gpuReset)
+		if err != nil && span != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(
+				attribute.String("janitor.error.type", "reconcile_error"),
+				attribute.String("janitor.error.message", err.Error()),
+			)
+		}
 		// We will always re-queue the object and check if Unlock is needed on the next reconcile rather than
 		// re-fetch the object or require reconcileHelper to specify it completed reconciling. If the controller
 		// forces a re-queue by returning an error or setting a RequeueAfter, we will respect that re-queue behavior,
@@ -146,6 +174,29 @@ func (r *GPUResetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// setGPUResetSpanAttributes sets janitor span attributes from GPUReset status (phase, condition, reason).
+func setGPUResetSpanAttributes(span trace.Span, gr *v1alpha1.GPUReset) {
+	if span == nil || gr == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("janitor.gpureset.name", gr.Name),
+		attribute.String("janitor.gpureset.phase", string(gr.Status.Phase)),
+		attribute.String("janitor.gpureset.node", gr.Spec.NodeName),
+	}
+	if len(gr.Status.Conditions) > 0 {
+		last := gr.Status.Conditions[len(gr.Status.Conditions)-1]
+		attrs = append(attrs,
+			attribute.String("janitor.gpureset.condition", last.Type),
+			attribute.String("janitor.gpureset.reason", last.Reason),
+		)
+	}
+	if gr.Status.CompletionTime != nil {
+		attrs = append(attrs, attribute.String("janitor.gpureset.completion_time", gr.Status.CompletionTime.Format(time.RFC3339)))
+	}
+	span.SetAttributes(attrs...)
 }
 
 func (r *GPUResetReconciler) reconcileHelper(ctx context.Context, gr *v1alpha1.GPUReset) (ctrl.Result, error) {
@@ -353,7 +404,15 @@ func (r *GPUResetReconciler) tearDownServices(ctx context.Context, gr *v1alpha1.
 
 	if timeSinceInProgress > teardownTimeout {
 		log.Error(nil, "Managed service teardown timeout exceeded", "manager", managerName, "timeout", teardownTimeout)
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.services.teardown.success", false),
+				attribute.String("janitor.error.type", "teardown_timeout"),
+				attribute.String("janitor.error.message", fmt.Sprintf("teardown timeout %v exceeded", teardownTimeout)),
+			)
+			span.RecordError(errors.New("teardown timeout exceeded"))
+			span.SetStatus(codes.Error, "teardown timeout exceeded")
+		}
 		return r.reconcileTerminalFailure(ctx, gr, v1alpha1.ReasonServiceTeardownTimeoutExceeded,
 			fmt.Sprintf("Failed to teardown %s managed services within the timeout period", managerName))
 	}
@@ -361,12 +420,18 @@ func (r *GPUResetReconciler) tearDownServices(ctx context.Context, gr *v1alpha1.
 	node, err := r.getNode(gr.Spec.NodeName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			if span := tracing.SpanFromContext(ctx); span != nil {
+				span.SetAttributes(
+					attribute.String("janitor.error.type", "node_not_found"),
+					attribute.String("janitor.error.message", "target node for GPU reset was not found"),
+				)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
 			return r.reconcileTerminalFailure(ctx, gr, v1alpha1.NodeNotFound, "Target node for GPU reset was not found")
 		}
-
 		// Likely transient, errors during node retrieval
 		log.V(1).Info("Failed to get node for service teardown", "node", gr.Spec.NodeName)
-
 		return ctrl.Result{}, fmt.Errorf("failed to get node %s for service teardown: %w", gr.Spec.NodeName, err)
 	}
 
@@ -419,7 +484,11 @@ func (r *GPUResetReconciler) tearDownServices(ctx context.Context, gr *v1alpha1.
 				managerName)); err != nil {
 			return ctrl.Result{}, err
 		}
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.services.teardown.success", true),
+			)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -461,7 +530,11 @@ func (r *GPUResetReconciler) createJob(ctx context.Context, gr *v1alpha1.GPURese
 	if err := r.Status().Patch(ctx, updatedGR, client.MergeFrom(gr)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to patch GPUReset %s status: %w", gr.Name, err)
 	}
-
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.String("janitor.reset_job.name", jobName),
+		)
+	}
 	log.V(1).Info("Successfully claimed GPU reset job", "job", jobName, "namespace", jobNamespace)
 
 	return ctrl.Result{}, nil
@@ -497,31 +570,50 @@ func (r *GPUResetReconciler) checkJobStatus(ctx context.Context, gr *v1alpha1.GP
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Error(err, "GPU reset job not found, it may have been deleted", "job", jobName, "namespace", jobNamespace)
+			if span := tracing.SpanFromContext(ctx); span != nil {
+				span.SetAttributes(
+					attribute.String("janitor.error.type", "reset_job_not_found"),
+					attribute.String("janitor.error.message", "Job for GPU reset was not found"),
+				)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
 			return r.reconcileTerminalFailure(ctx, gr, v1alpha1.ReasonResetJobNotFound, "Job for GPU reset was not found")
 		}
-
 		return ctrl.Result{}, fmt.Errorf("failed to get Job %s/%s: %w", jobNamespace, jobName, err)
 	}
 
 	if job.Status.Succeeded > 0 {
 		log.V(1).Info("GPU reset job completed successfully", "job", job.Name, "namespace", job.Namespace)
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.reset_job.completed", true),
+				attribute.Bool("janitor.reset_job.failed", false),
+			)
+		}
 		if err := r.updateCondition(ctx, gr, v1alpha1.ResetJobCompleted, metav1.ConditionTrue,
 			v1alpha1.ReasonResetJobSucceeded, "GPU(s) reset successfully"); err != nil {
 			return ctrl.Result{}, err
 		}
-
 		return ctrl.Result{}, nil
 	}
 
 	if job.Status.Failed > 0 {
 		log.Info("GPU reset job failed", "job", job.Name, "namespace", job.Namespace)
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.reset_job.completed", true),
+				attribute.Bool("janitor.reset_job.failed", true),
+				attribute.String("janitor.error.type", "reset_job_failed"),
+				attribute.String("janitor.error.message", "GPU reset job failed"),
+			)
+			span.RecordError(errors.New("GPU reset job failed"))
+			span.SetStatus(codes.Error, "GPU reset job failed")
+		}
 		if err := r.updateCondition(ctx, gr, v1alpha1.ResetJobCompleted, metav1.ConditionTrue,
 			v1alpha1.ReasonResetJobFailed, "GPU reset failed"); err != nil {
 			return ctrl.Result{}, err
 		}
-
 		return ctrl.Result{}, nil
 	}
 
@@ -569,7 +661,15 @@ func (r *GPUResetReconciler) restoreServices(ctx context.Context, gr *v1alpha1.G
 
 	if timeSinceInProgress > restoreTimeout {
 		log.Error(nil, "Managed service restoration timeout exceeded", "manager", managerName, "timeout", restoreTimeout)
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.services.restore.success", false),
+				attribute.String("janitor.error.type", "restore_timeout"),
+				attribute.String("janitor.error.message", fmt.Sprintf("restore timeout %v exceeded", restoreTimeout)),
+			)
+			span.RecordError(errors.New("restore timeout exceeded"))
+			span.SetStatus(codes.Error, "restore timeout exceeded")
+		}
 		return r.reconcileTerminalFailure(ctx, gr, v1alpha1.ReasonRestoreTimeoutExceeded,
 			fmt.Sprintf("failed to restore %s managed services within the timeout period", managerName))
 	}
@@ -628,7 +728,9 @@ func (r *GPUResetReconciler) restoreServices(ctx context.Context, gr *v1alpha1.G
 			v1alpha1.ReasonServiceRestoreSucceeded, fmt.Sprintf("%s managed services are Ready", managerName)); err != nil {
 			return ctrl.Result{}, err
 		}
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(attribute.Bool("janitor.services.restore.success", true))
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -651,6 +753,12 @@ func (r *GPUResetReconciler) reconcileCompletion(ctx context.Context, gr *v1alph
 	}
 
 	log.Info("GPU reset successful", "node", nodeName)
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.String("event.processing_status", "succeeded"),
+			attribute.String("janitor.gpureset.completion_time", metav1.Now().Format(time.RFC3339)),
+		)
+	}
 
 	updatedGR := gr.DeepCopy()
 	now := metav1.Now()
@@ -759,7 +867,14 @@ func (r *GPUResetReconciler) getOrCreateJob(ctx context.Context, gr *v1alpha1.GP
 			log.V(1).Info("GPU reset job already exists", "job", gpuResetJob.Name, "namespace", gpuResetJob.Namespace)
 			return ctrl.Result{}, nil
 		}
-
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.String("janitor.error.type", "job_creation_failed"),
+				attribute.String("janitor.error.message", err.Error()),
+			)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to create job %s/%s for GPUReset %s: %w", gpuResetJob.Namespace,
 			gpuResetJob.Name, gr.Name, err)
 	}
@@ -770,7 +885,12 @@ func (r *GPUResetReconciler) getOrCreateJob(ctx context.Context, gr *v1alpha1.GP
 		v1alpha1.ReasonResetJobCreationSucceeded, "GPU reset job created"); err != nil {
 		return ctrl.Result{}, err
 	}
-
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.Bool("janitor.reset_job.created", true),
+			attribute.String("janitor.reset_job.name", jobName),
+		)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -993,6 +1113,16 @@ func (r *GPUResetReconciler) reconcileTerminalFailure(
 	nodeName := gr.Spec.NodeName
 
 	log.Error(errors.New(message), "terminal failure", "node", nodeName, "reason", reason)
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.String("event.processing_status", "failed"),
+			attribute.String("janitor.gpureset.failure_reason", string(reason)),
+			attribute.String("janitor.error.type", string(reason)),
+			attribute.String("janitor.error.message", message),
+		)
+		span.RecordError(errors.New(message))
+		span.SetStatus(codes.Error, message)
+	}
 
 	updatedGR := gr.DeepCopy()
 

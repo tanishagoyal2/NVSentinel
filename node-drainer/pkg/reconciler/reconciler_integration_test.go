@@ -1410,7 +1410,7 @@ func enqueueHealthEvent(ctx context.Context, t *testing.T, queueMgr queue.EventQ
 		nodeName:        nodeName,
 		nodeQuarantined: model.Quarantined,
 	})
-	require.NoError(t, queueMgr.EnqueueEventGeneric(ctx, nodeName, event, collection, healthEventStore))
+	require.NoError(t, queueMgr.EnqueueEventGeneric(ctx, nodeName, event, collection, healthEventStore, nil))
 }
 
 func processHealthEvent(ctx context.Context, t *testing.T, r *reconciler.Reconciler, collection *MockMongoCollection,
@@ -1628,7 +1628,7 @@ func TestReconciler_CancelledEventWithOngoingDrain(t *testing.T) {
 	eventID := fmt.Sprintf("%v", document["_id"])
 
 	healthEventStore := newMockHealthEventStore(nil, nil)
-	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event, setup.mockCollection, healthEventStore)
+	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event, setup.mockCollection, healthEventStore, nil)
 	require.NoError(t, err)
 
 	assertNodeLabel(t, setup.client, setup.ctx, nodeName, statemanager.DrainingLabelValue)
@@ -1673,7 +1673,7 @@ func TestReconciler_UnQuarantinedEventCancelsOngoingDrain(t *testing.T) {
 	})
 
 	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, quarantinedEvent, setup.mockCollection,
-		setup.healthEventStore)
+		setup.healthEventStore, nil)
 	require.NoError(t, err)
 
 	assertNodeLabel(t, setup.client, setup.ctx, nodeName, statemanager.DrainingLabelValue)
@@ -1687,7 +1687,7 @@ func TestReconciler_UnQuarantinedEventCancelsOngoingDrain(t *testing.T) {
 		nodeQuarantined: model.UnQuarantined,
 	})
 	err = setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, unquarantinedEvent, setup.mockCollection,
-		setup.healthEventStore)
+		setup.healthEventStore, nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -1731,10 +1731,10 @@ func TestReconciler_MultipleEventsOnNodeCancelledByUnQuarantine(t *testing.T) {
 	})
 	event2["_id"] = nodeName + "-event-2"
 
-	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event1, setup.mockCollection, setup.healthEventStore)
+	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event1, setup.mockCollection, setup.healthEventStore, nil)
 	require.NoError(t, err)
 
-	err = setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event2, setup.mockCollection, setup.healthEventStore)
+	err = setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event2, setup.mockCollection, setup.healthEventStore, nil)
 	require.NoError(t, err)
 
 	assertNodeLabel(t, setup.client, setup.ctx, nodeName, statemanager.DrainingLabelValue)
@@ -1747,7 +1747,7 @@ func TestReconciler_MultipleEventsOnNodeCancelledByUnQuarantine(t *testing.T) {
 		nodeQuarantined: model.UnQuarantined,
 	})
 	err = setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, unquarantinedEvent, setup.mockCollection,
-		setup.healthEventStore)
+		setup.healthEventStore, nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -2065,7 +2065,7 @@ func TestMetrics_PodEvictionDuration(t *testing.T) {
 		event["healtheventstatus"] = status
 	}
 
-	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event, setup.mockCollection, setup.healthEventStore)
+	err := setup.queueMgr.EnqueueEventGeneric(setup.ctx, nodeName, event, setup.mockCollection, setup.healthEventStore, nil)
 	require.NoError(t, err)
 
 	assertPodsEvicted(t, setup.client, setup.ctx, "immediate-test")

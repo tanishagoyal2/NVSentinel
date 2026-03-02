@@ -22,10 +22,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
+	"go.opentelemetry.io/otel/attribute"
 	v1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +38,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
@@ -659,7 +662,7 @@ func (i *Informers) DeletePodsAfterTimeout(ctx context.Context, nodeName string,
 		}
 
 		// After force deleting, requeue to verify pods are gone
-		return fmt.Errorf("force deleted %d pods, requeueing to verify deletion on node %s", len(remainingPods), nodeName)
+		return fmt.Errorf("force deleted %d pods, requeuing to verify deletion on node %s", len(remainingPods), nodeName)
 	}
 
 	metrics.NodeDrainTimeout.WithLabelValues(nodeName).Set(1)
@@ -703,13 +706,15 @@ func (i *Informers) getNodeDrainTimeout(timeout int,
 }
 
 func (i *Informers) forceDeletePods(ctx context.Context, pods []*v1.Pod) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.force_delete_pods")
+	defer span.End()
+
 	gracePeriod := int64(0)
 
 	var wg sync.WaitGroup
-
 	var mu sync.Mutex
-
 	var result *multierror.Error
+	var forceDeletedPods []string
 
 	for _, pod := range pods {
 		wg.Add(1)
@@ -728,20 +733,29 @@ func (i *Informers) forceDeletePods(ctx context.Context, pods []*v1.Pod) error {
 						"namespace", p.Namespace,
 						"error", err)
 					mu.Lock()
-
 					result = multierror.Append(result, fmt.Errorf("pod %s/%s: %w", p.Namespace, p.Name, err))
-
 					mu.Unlock()
 				}
 			} else {
 				slog.Info("Force deleted pod in namespace",
 					"pod", p.Name,
 					"namespace", p.Namespace)
+				mu.Lock()
+				forceDeletedPods = append(forceDeletedPods, fmt.Sprintf("%s/%s", p.Namespace, p.Name))
+				mu.Unlock()
 			}
 		}(pod)
 	}
 
 	wg.Wait()
+
+	if len(forceDeletedPods) > 0 {
+		sort.Strings(forceDeletedPods)
+		span.SetAttributes(
+			attribute.String("node_drainer.force_deleted_pods", strings.Join(forceDeletedPods, ",")),
+			attribute.Int("node_drainer.force_deleted_pods_count", len(forceDeletedPods)),
+		)
+	}
 
 	return result.ErrorOrNil()
 }

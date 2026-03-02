@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
@@ -44,9 +45,10 @@ func (m *eventQueueManager) SetDataStoreEventProcessor(processor DataStoreEventP
 	m.dataStoreEventProcessor = processor
 }
 
-// EnqueueEventGeneric enqueues an event using the new database-agnostic interface
+// EnqueueEventGeneric enqueues an event using the new database-agnostic interface.
+// If drainSessionSpan is non-nil, it is used as the trace root (event data is on that span); worker will not create a new one.
 func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName string, event datastore.Event,
-	database DataStore, healthEventStore datastore.HealthEventStore) error {
+	database DataStore, healthEventStore datastore.HealthEventStore, drainSessionSpan trace.Span) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("context cancelled while enqueueing event for node %s: %w", nodeName, ctx.Err())
 	}
@@ -58,6 +60,7 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 	}
 
 	eventID := utils.ExtractEventID(event)
+	traceID := ExtractTraceIDFromEvent(event)
 
 	nodeEvent := NodeEvent{
 		NodeName:         nodeName,
@@ -65,6 +68,8 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 		Event:            &event,
 		Database:         database,
 		HealthEventStore: healthEventStore,
+		TraceID:          traceID,
+		DrainSessionSpan: drainSessionSpan,
 	}
 
 	slog.Debug("Enqueueing event", "nodeName", nodeName, "eventID", eventID)
@@ -82,4 +87,42 @@ func (m *eventQueueManager) Shutdown() {
 	m.queue.ShutDown()
 	close(m.shutdown)
 	slog.Info("Workqueue shutdown complete")
+}
+
+// ExtractTraceIDFromEvent returns the trace_id from the event document (or fullDocument) for trace continuity.
+func ExtractTraceIDFromEvent(event datastore.Event) string {
+	doc := event
+	if fullDoc, ok := event["fullDocument"].(map[string]interface{}); ok {
+		doc = fullDoc
+	}
+	if tid, ok := doc["trace_id"].(string); ok {
+		return tid
+	}
+	return ""
+}
+
+// DrainSessionMetrics accumulates durations and drain scope across process_event cycles so the drain_session span can show a single total.
+type DrainSessionMetrics struct {
+	ImmediateEvictionDurationMs     int64
+	AwaitingPodCompletionDurationMs int64
+	DrainScope                      string
+	PartialDrainEntityType          string
+	PartialDrainEntityValue         string
+}
+
+type drainSessionMetricsContextKey struct{}
+
+var drainSessionMetricsKey = drainSessionMetricsContextKey{}
+
+// ContextWithDrainSessionMetrics attaches metrics to ctx so the reconciler can add durations without creating per-cycle spans.
+func ContextWithDrainSessionMetrics(ctx context.Context, m *DrainSessionMetrics) context.Context {
+	return context.WithValue(ctx, drainSessionMetricsKey, m)
+}
+
+// DrainSessionMetricsFromContext returns the accumulator from ctx, or nil if not set.
+func DrainSessionMetricsFromContext(ctx context.Context) *DrainSessionMetrics {
+	if m, _ := ctx.Value(drainSessionMetricsKey).(*DrainSessionMetrics); m != nil {
+		return m
+	}
+	return nil
 }

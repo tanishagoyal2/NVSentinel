@@ -415,7 +415,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	var latestEvent struct {
 		ID          string    `bson:"_id" json:"_id"`
 		CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
-		TraceID     string    `bson:"traceid"`
+		TraceID     string    `bson:"trace_id"`
 		HealthEvent struct {
 			NodeName           string       `bson:"nodename" json:"nodeName"`
 			GeneratedTimestamp *dbTimestamp `bson:"generatedtimestamp" json:"generatedTimestamp"`
@@ -465,6 +465,8 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		return nil
 	}
 
+	slog.Info("Found trace ID for cancelling quarantining events", "traceID", latestEvent.TraceID)
+
 	ctx, span := tracing.StartSpanFromTraceID(ctx, latestEvent.TraceID, "cancel_latest_quarantining_events")
 	defer span.End()
 
@@ -486,7 +488,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	updateResult, err := w.databaseClient.UpdateManyDocuments(ctx, updateFilter, update)
 	if err != nil {
 		tracing.RecordError(span, err)
-		tracing.SetOperationStatus(span, tracing.OperationStatusError)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 		span.SetAttributes(
 			attribute.String("fault_quarantine.error.type", "error_cancelling_quarantining_events"),
 			attribute.String("fault_quarantine.error.message", err.Error()),
@@ -507,7 +509,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		nodeName,
 	)
 
-	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess)
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "fault_quarantine")
 	span.SetAttributes(
 		attribute.String("fault_quarantine.event.node_quarantined", string(model.Cancelled)),
 	)

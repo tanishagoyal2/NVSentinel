@@ -19,11 +19,59 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
+
+func AddHealthEventStatusAttributes(span trace.Span, healthEventStatus *model.HealthEventStatus) {
+	if span == nil || healthEventStatus == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{}
+
+	// ===== Scalar Fields (nil-safe: newly inserted events often have nil for optional status fields) =====
+	nodeQuarantined := ""
+	if healthEventStatus.NodeQuarantined != nil {
+		nodeQuarantined = string(*healthEventStatus.NodeQuarantined)
+	}
+	attrs = append(attrs, attribute.String("health_event_status.node_quarantined", nodeQuarantined))
+
+	quarantineFinishTs := ""
+	if healthEventStatus.QuarantineFinishTimestamp != nil {
+		quarantineFinishTs = healthEventStatus.QuarantineFinishTimestamp.Format(time.RFC3339Nano)
+	}
+	attrs = append(attrs, attribute.String("health_event_status.quarantine_finish_timestamp", quarantineFinishTs))
+
+	attrs = append(attrs,
+		attribute.String("health_event_status.user_pod_eviction.status", string(healthEventStatus.UserPodsEvictionStatus.Status)),
+		attribute.String("health_event_status.user_pod_eviction.message", healthEventStatus.UserPodsEvictionStatus.Message),
+	)
+
+	drainFinishTs := ""
+	if healthEventStatus.DrainFinishTimestamp != nil {
+		drainFinishTs = healthEventStatus.DrainFinishTimestamp.Format(time.RFC3339Nano)
+	}
+	attrs = append(attrs, attribute.String("health_event_status.drain_finish_timestamp", drainFinishTs))
+
+	faultRemediated := false
+	if healthEventStatus.FaultRemediated != nil {
+		faultRemediated = *healthEventStatus.FaultRemediated
+	}
+	attrs = append(attrs, attribute.Bool("health_event_status.fault_remediated", faultRemediated))
+
+	lastRemediationTs := ""
+	if healthEventStatus.LastRemediationTimestamp != nil {
+		lastRemediationTs = healthEventStatus.LastRemediationTimestamp.Format(time.RFC3339Nano)
+	}
+	attrs = append(attrs, attribute.String("health_event_status.last_remediation_timestamp", lastRemediationTs))
+
+	// Set all attributes at once (more efficient)
+	span.SetAttributes(attrs...)
+}
 
 // AddHealthEventAttributes adds all HealthEvent fields to a span as attributes
 // Uses indexed attributes for arrays and flattened prefix for maps

@@ -128,8 +128,9 @@ preflight:
   # Tracing configuration for OpenTelemetry
   tracing:
     enabled: true
-    endpoint: "tempo.nvsentinel.svc.cluster.local:4317"
     insecure: true
+    collector:
+      exportEndpoint: "http://tempo.nvsentinel.svc.cluster.local:4318"
 
 mongodb-store:
   useBitnami: true

@@ -186,17 +186,16 @@ func SpanFromContext(ctx context.Context) trace.Span {
 const (
 	OperationStatusSuccess   = "success"
 	OperationStatusError     = "error"
-	OperationStatusFault     = "fault"
 	OperationStatusThrottled = "throttled"
+	OperationStatusCancelled = "cancelled"
 	OperationStatusSkipped   = "skipped"
-	OperationStatusHalted    = "halted"
 )
 
 // SetOperationStatus sets the standard operation status attribute on a span.
 // status should be one of OperationStatus* constants.
-func SetOperationStatus(span trace.Span, status string) {
+func SetOperationStatus(span trace.Span, status string, service string) {
 	if span == nil {
 		return
 	}
-	span.SetAttributes(attribute.String("fault_quarantine.operation.status", status))
+	span.SetAttributes(attribute.String(fmt.Sprintf("%s.operation.status", service), status))
 }

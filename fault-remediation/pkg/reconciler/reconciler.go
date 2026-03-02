@@ -119,12 +119,14 @@ func (r *FaultRemediationReconciler) Reconcile(
 
 	// Extract trace ID and continue trace
 	ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.HealthEventWithStatus.TraceID, "process_event")
-	defer span.End()
+	defer func() {
+		if span != nil {
+			span.End()
+		}
+	}()
 
-	// Add health event attributes to span
-	if healthEventWithStatus.HealthEvent != nil {
-		tracing.AddHealthEventAttributes(span, healthEventWithStatus.HealthEvent)
-	}
+	// Add health event attributes to span (nil-safe: span and optional status fields)
+	tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventWithStatus.HealthEventStatus)
 
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined

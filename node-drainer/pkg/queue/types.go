@@ -17,6 +17,7 @@ package queue
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
@@ -29,6 +30,19 @@ type NodeEvent struct {
 	Event            *datastore.Event           // Database-agnostic event data
 	HealthEventStore datastore.HealthEventStore // New database-agnostic interface
 	Database         DataStore                  // New database-agnostic interface
+
+	// TraceID is the OpenTelemetry trace ID of the health event (from store). Used to start node_drainer.drain_session in the same trace.
+	TraceID string
+	// DrainSessionSpan is the parent span for all process_event cycles for this item. Set on first process, ended when processing completes (no requeue).
+	DrainSessionSpan trace.Span
+
+	// Cumulative durations across all process_event cycles for this drain session. Set on drain_session span when it ends.
+	ImmediateEvictionDurationMs     int64
+	AwaitingPodCompletionDurationMs int64
+	// Drain scope (set once when action is known); recorded on drain_session span when it ends.
+	DrainScope              string
+	PartialDrainEntityType  string
+	PartialDrainEntityValue string
 
 	// Deprecated fields for backward compatibility
 	EventBSON *map[string]interface{} // DEPRECATED: Use Event instead
@@ -51,9 +65,9 @@ type DataStoreEventProcessor interface {
 // EventProcessor interface has been removed - use DataStoreEventProcessor instead
 
 type EventQueueManager interface {
-	// New database-agnostic method
+	// New database-agnostic method. drainSessionSpan optional: when set, event data is on this trace root (created at first enqueue).
 	EnqueueEventGeneric(ctx context.Context, nodeName string, event datastore.Event, database DataStore,
-		healthEventStore datastore.HealthEventStore) error
+		healthEventStore datastore.HealthEventStore, drainSessionSpan trace.Span) error
 
 	// Deprecated EnqueueEvent method has been removed - use EnqueueEventGeneric instead
 

@@ -232,7 +232,18 @@ func startEventWatcher(ctx context.Context, components *initializer.Components, 
 		// Consume events from the change stream
 		for event := range components.EventWatcher.Events() {
 			// Preprocess and enqueue the event
-			// This sets the initial status to InProgress and enqueues the event for processing
+
+			healthEventWithStatus := model.HealthEventWithStatus{}
+			if err := event.UnmarshalDocument(&healthEventWithStatus); err != nil {
+				slog.Error("Failed to extract health event with status", "error", err)
+				continue
+			}
+
+			ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.TraceID, "node_drainer.event_watcher.event")
+			defer span.End()
+
+			tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventStatus)
+
 			if err := components.Reconciler.PreprocessAndEnqueueEvent(ctx, event); err != nil {
 				// Don't send to criticalError - just log and continue processing other events
 				slog.Error("Failed to preprocess and enqueue event", "error", err)
@@ -323,7 +334,7 @@ func handleColdStart(ctx context.Context, components *initializer.Components) er
 		// Create adapter to bridge interface differences
 		dbAdapter := &dataStoreAdapter{DatabaseClient: components.DatabaseClient}
 
-		if err := components.QueueManager.EnqueueEventGeneric(ctx, nodeName, event, dbAdapter, healthStore); err != nil {
+		if err := components.QueueManager.EnqueueEventGeneric(ctx, nodeName, event, dbAdapter, healthStore, nil); err != nil {
 			slog.Error("Failed to enqueue cold start event", "error", err, "nodeName", nodeName)
 		} else {
 			slog.Info("Re-queued event from cold start", "nodeName", nodeName)

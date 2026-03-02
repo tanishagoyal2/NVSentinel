@@ -126,6 +126,21 @@ global:
     maxAgeDays: 30  # Maximum age of rotated log files in days
     compress: true  # Compress rotated log files
 
+  # OpenTelemetry tracing configuration
+  tracing:
+    enabled: false
+    insecure: true
+    # Override to send directly to a specific endpoint (e.g. Alloy) instead of the in-namespace collector.
+    # When empty, modules auto-target the otel-collector subchart service.
+    endpoint: ""
+    collector:
+      image:
+        repository: otel/opentelemetry-collector-contrib
+        tag: "0.120.0"
+      # Backend endpoint the collector forwards traces to (e.g. Tempo, Panoptes).
+      exportEndpoint: ""
+      debug: false
+
   nodeSelector: {}
   tolerations:
     - operator: Exists

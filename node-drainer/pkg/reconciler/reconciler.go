@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package reconciler implements the node-drainer event processing logic.
+//
+// Span attribute conventions for tracing:
+//   - node_drainer.processing_status: Pipeline/stage of the event (e.g. "enqueued", "draining").
+//     Answers: "Where is this event in the node-drainer pipeline?"
+//   - node_drainer.user_pods_eviction_status: The eviction result we persist to the DB (model.Status:
+//     InProgress, Succeeded, Failed, AlreadyDrained, Cancelled). Set when writing to MongoDB.
+//     Answers: "What is the stored eviction outcome for this document?"
+//   - Operation outcome (requeue, cancel, etc.) is inferred from span name, operation status, and error attributes.
 package reconciler
 
 import (
@@ -131,6 +140,9 @@ func (r *Reconciler) Shutdown() {
 //
 // This matches the behavior of the main branch's mongodb/event_watcher.go:preprocessAndEnqueueEvent
 func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client.Event) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.reconciler.preprocess_and_enqueue_event")
+	defer span.End()
+
 	// Unmarshal the full document
 	var document map[string]any
 	if err := event.UnmarshalDocument(&document); err != nil {
@@ -155,6 +167,11 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 			"node", healthEventWithStatus.HealthEvent.NodeName,
 			"status", healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status)
 
+		span.SetAttributes(
+			attribute.String("node_drainer.reconciler.status", "skipped"),
+			attribute.String("node_drainer.reconciler.message", "already in terminal state"),
+		)
+
 		return nil
 	}
 
@@ -168,10 +185,15 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 		documentID, nodeName, (*model.Status)(&healthEventWithStatus.HealthEventStatus.NodeQuarantined)); shouldSkip {
 		slog.Debug("Event skipped due to cancellation", "node", nodeName)
 
+		span.SetAttributes(
+			attribute.String("node_drainer.reconciler.status", "skipped"),
+			attribute.String("node_drainer.reconciler.message", fmt.Sprintf("event skipped due to %s status", *healthEventWithStatus.HealthEventStatus.NodeQuarantined)),
+		)
+
 		return nil
 	}
 
-	// Set initial status to InProgress and enqueue
+	// Set initial status to InProgress and enqueue (trace root with event data created here when we have health event)
 	return r.setInitialStatusAndEnqueue(ctx, document, documentID, nodeName)
 }
 
@@ -214,6 +236,9 @@ func (r *Reconciler) handleEventCancellation(
 // setInitialStatusAndEnqueue sets the initial status to InProgress and enqueues the event
 func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document map[string]any,
 	documentID any, nodeName string) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.set_initial_status_and_enqueue")
+	defer span.End()
+
 	// Set initial status to StatusInProgress (idempotent - only updates if not already set)
 	filter := map[string]any{
 		"_id": documentID,
@@ -230,13 +255,33 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 
 	result, err := r.databaseClient.UpdateDocument(ctx, filter, update)
 	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "set_initial_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to update initial status: %w", err)
 	}
 
 	r.logStatusUpdateResult(result, nodeName, documentID)
 
-	// Enqueue to the queue manager
-	return r.queueManager.EnqueueEventGeneric(ctx, nodeName, document, r.databaseClient, r.healthEventStore)
+	// Enqueue to the queue manager. Pass nil for drainSessionSpan so the worker creates the
+	// node_drainer.drain_session span from the event's TraceID. That span is only ended when the
+	// worker completes, so duration/scope attributes are set on it before End() and appear in traces.
+	if err := r.queueManager.EnqueueEventGeneric(ctx, nodeName, datastore.Event(document), r.databaseClient, r.healthEventStore, nil); err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "enqueue_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		return err
+	}
+
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
+	span.SetAttributes(attribute.String("node_drainer.processing_status", "enqueued")) // pipeline stage
+	return nil
 }
 
 // logStatusUpdateResult logs the result of the status update
@@ -283,16 +328,15 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 
 	healthEventWithStatus, err := r.parseHealthEventFromEvent(event, nodeName)
 	if err != nil {
+		_, span := tracing.StartSpan(ctx, "node_drainer.process_event")
+		defer span.End()
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "parse_event_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return err
-	}
-
-	// Extract trace ID and continue trace
-	ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.TraceID, "process_event")
-	defer span.End()
-
-	// Add health event attributes to span
-	if healthEventWithStatus.HealthEvent != nil {
-		tracing.AddHealthEventAttributes(span, healthEventWithStatus.HealthEvent)
 	}
 
 	eventID := utils.ExtractEventID(event)
@@ -311,31 +355,42 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 
 	if r.isEventCancelled(eventID, nodeName, (*model.Status)(&nodeQuarantinedStatus)) {
 		slog.Info("Event was cancelled, performing cleanup", "node", nodeName, "eventID", eventID)
+		_, span := tracing.StartSpan(ctx, "node_drainer.handle_cancelled_event")
+		span.SetAttributes(attribute.String("node_drainer.drain.action", "cancelled"))
 
-		return r.handleCancelledEvent(ctx, nodeName, &healthEventWithStatus, event, database, eventID)
+		err := r.handleCancelledEvent(ctx, nodeName, &healthEventWithStatus, event, database, eventID)
+		if err != nil {
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "handle_cancelled_event_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+		}
+		span.End()
+		return err
 	}
 
 	r.markEventInProgress(eventID, nodeName)
 
 	actionResult, err := r.evaluator.EvaluateEventWithDatabase(ctx, healthEventWithStatus, database, healthEventStore)
 	if err != nil {
+		_, span := tracing.StartSpan(ctx, "node_drainer.evaluate_event")
 		metrics.ProcessingErrors.WithLabelValues("evaluate_event_error", nodeName).Inc()
 		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
 		span.SetAttributes(
 			attribute.String("node_drainer.error.type", "evaluate_event_error"),
 			attribute.String("node_drainer.error.message", err.Error()),
 		)
 
+		span.End()
 		return fmt.Errorf("failed to evaluate event: %w", err)
 	}
 
 	slog.Info("Evaluated action for node",
 		"node", nodeName,
 		"action", actionResult.Action.String())
-
-	span.SetAttributes(
-		attribute.String("node_drainer.drain.action", actionResult.Action.String()),
-	)
 
 	return r.executeAction(ctx, actionResult, healthEventWithStatus, event, database, eventID)
 }
@@ -344,12 +399,19 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	healthEvent model.HealthEventWithStatus, event datastore.Event, database queue.DataStore, eventID string) error {
 	nodeName := healthEvent.HealthEvent.NodeName
 
+	// Set drain scope once on session metrics so drain_session span gets it at end (avoids repeating on every execute_check_completion).
+	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
+		if action.PartialDrainEntity != nil {
+			drainMetrics.DrainScope = "partial"
+			drainMetrics.PartialDrainEntityType = action.PartialDrainEntity.EntityType
+			drainMetrics.PartialDrainEntityValue = action.PartialDrainEntity.EntityValue
+		} else {
+			drainMetrics.DrainScope = "full"
+		}
+	}
+
 	switch action.Action {
 	case evaluator.ActionSkip:
-		span := tracing.SpanFromContext(ctx)
-		span.SetAttributes(
-			attribute.String("node_drainer.drain.status", "skipped"),
-		)
 		r.clearEventStatus(eventID, nodeName)
 		return r.executeSkip(ctx, nodeName, healthEvent, event, database)
 
@@ -365,38 +427,34 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return r.executeCustomDrain(ctx, action, healthEvent, event, database, action.PartialDrainEntity)
 
 	case evaluator.ActionEvictImmediate:
-		span := tracing.SpanFromContext(ctx)
-		span.SetAttributes(
-			attribute.String("node_drainer.drain.status", "in_progress"),
-		)
-		if action.PartialDrainEntity != nil {
-			span.SetAttributes(
-				attribute.String("node_drainer.drain.scope", "partial"),
-				attribute.String("node_drainer.partial_drain.entity_type", action.PartialDrainEntity.EntityType),
-				attribute.String("node_drainer.partial_drain.entity_value", action.PartialDrainEntity.EntityValue),
-			)
-		} else {
-			span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
-		}
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
-		return r.executeImmediateEviction(ctx, action, healthEvent, action.PartialDrainEntity)
+		err := r.executeImmediateEviction(ctx, action, healthEvent, action.PartialDrainEntity)
+		if err != nil && !strings.Contains(err.Error(), "requeuing") {
+			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "immediate_eviction_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+			span.End()
+		}
+		return err
 
 	case evaluator.ActionEvictWithTimeout:
-		span := tracing.SpanFromContext(ctx)
-		span.SetAttributes(
-			attribute.String("node_drainer.status", "in_progress"),
-		)
-		if action.PartialDrainEntity != nil {
-			span.SetAttributes(
-				attribute.String("node_drainer.drain.scope", "partial"),
-				attribute.String("node_drainer.partial_drain.entity_type", action.PartialDrainEntity.EntityType),
-				attribute.String("node_drainer.partial_drain.entity_value", action.PartialDrainEntity.EntityValue),
-			)
-		} else {
-			span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
-		}
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
-		return r.executeTimeoutEviction(ctx, action, healthEvent, eventID, action.PartialDrainEntity)
+		err := r.executeTimeoutEviction(ctx, action, healthEvent, eventID, action.PartialDrainEntity)
+		if err != nil && !strings.Contains(err.Error(), "requeuing") {
+			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "timeout_eviction_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+			span.End()
+		}
+		return err
 
 	case evaluator.ActionCheckCompletion:
 		slog.Debug("Executing ActionCheckCompletion", "node", nodeName)
@@ -405,30 +463,50 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return r.executeCheckCompletion(ctx, action, healthEvent, action.PartialDrainEntity)
 
 	case evaluator.ActionMarkAlreadyDrained:
-		span := tracing.SpanFromContext(ctx)
-		span.SetAttributes(
-			attribute.String("node_drainer.status", "already_drained"),
-		)
 		r.clearEventStatus(eventID, nodeName)
 
 		err := r.executeMarkAlreadyDrained(ctx, healthEvent, event, database, action.Status)
 		if err == nil {
 			r.deleteCustomDrainCRIfEnabled(ctx, nodeName, eventID)
+		} else {
+			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "mark_already_drained_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+			span.End()
 		}
 
 		return err
 
 	case evaluator.ActionUpdateStatus:
-		span := tracing.SpanFromContext(ctx)
-		statusStr := string(action.Status)
-		span.SetAttributes(
-			attribute.String("node_drainer.status", statusStr),
-		)
 		r.clearEventStatus(eventID, nodeName)
-		return r.executeUpdateStatus(ctx, healthEvent, event, database, action.Status)
+		err := r.executeUpdateStatus(ctx, healthEvent, event, database, action.Status)
+		if err != nil {
+			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "update_status_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+			span.End()
+		}
+		return nil
 
 	default:
-		return fmt.Errorf("unknown action: %s", action.Action.String())
+		err := fmt.Errorf("unknown action: %s", action.Action.String())
+		_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "unknown_action"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		span.End()
+		return err
 	}
 }
 
@@ -448,6 +526,9 @@ func (r *Reconciler) handleMarkAlreadyDrained(ctx context.Context, eventID, node
 func (r *Reconciler) executeSkip(ctx context.Context,
 	nodeName string, healthEvent model.HealthEventWithStatus,
 	event datastore.Event, database queue.DataStore) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_skip")
+	defer span.End()
+
 	slog.Info("Skipping event for node", "node", nodeName)
 
 	if healthEvent.HealthEventStatus.NodeQuarantined == string(model.UnQuarantined) {
@@ -466,7 +547,12 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 			slog.Error("Failed to update MongoDB status for unquarantined node",
 				"node", nodeName,
 				"error", err)
-
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "update_status_unquarantined_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
 			return fmt.Errorf("failed to update MongoDB status for node %s: %w", nodeName, err)
 		}
 
@@ -476,21 +562,34 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 	}
 
 	r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, false)
-
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return nil
 }
 
 func (r *Reconciler) executeImmediateEviction(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, partialDrainEntity *protos.Entity) error {
+	start := time.Now()
 	nodeName := healthEvent.HealthEvent.NodeName
+
 	for _, namespace := range action.Namespaces {
 		if err := r.informers.EvictAllPodsInImmediateMode(ctx, namespace, nodeName, action.Timeout,
 			partialDrainEntity); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("immediate_eviction_error", nodeName).Inc()
+			span := tracing.SpanFromContext(ctx)
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "immediate_eviction_error"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
 			return fmt.Errorf("failed immediate eviction for namespace %s on node %s: %w", namespace, nodeName, err)
 		}
 	}
 
+	// Accumulate duration on drain_session so one total is shown instead of multiple spans
+	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
+		drainMetrics.ImmediateEvictionDurationMs += time.Since(start).Milliseconds()
+	}
 	return fmt.Errorf("immediate eviction completed, requeuing for status verification")
 }
 
@@ -505,6 +604,7 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 	span.SetAttributes(
 		attribute.Int("node_drainer.timeout_minutes", timeoutMinutes),
 	)
+
 	if partialDrainEntity != nil {
 		span.SetAttributes(
 			attribute.String("node_drainer.drain.scope", "partial"),
@@ -528,8 +628,8 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 		slog.Info("Event cancelled, aborting timeout eviction",
 			"node", nodeName,
 			"eventID", eventID)
-
-		// Return nil (success) to stop requeueing - the event was handled via cancellation
+		tracing.SetOperationStatus(span, tracing.OperationStatusCancelled, "node_drainer")
+		// Return nil (success) to stop requeuing - the event was handled via cancellation
 		return nil
 	}
 
@@ -544,33 +644,29 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 		if (checkEventExists && checkEventStatus == model.Cancelled) || checkNodeCancelled {
 			slog.Info("Event was cancelled during timeout eviction, stopping",
 				"node", nodeName, "eventID", eventID)
-			span.SetAttributes(
-				attribute.String("node_drainer.status", "cancelled"),
-			)
-
+			tracing.SetOperationStatus(span, tracing.OperationStatusCancelled, "node_drainer")
 			return nil
 		}
 
 		metrics.ProcessingErrors.WithLabelValues("timeout_eviction_error", nodeName).Inc()
-		tracing.RecordError(span, err)
 		span.SetAttributes(
 			attribute.String("node_drainer.error.type", "timeout_eviction_error"),
 			attribute.String("node_drainer.error.message", err.Error()),
-			attribute.String("node_drainer.status", "failed"),
 		)
 
 		return fmt.Errorf("failed timeout eviction for node %s: %w", nodeName, err)
 	}
 
-	span.SetAttributes(
-		attribute.String("node_drainer.status", "in_progress"),
-	)
-
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("timeout eviction initiated, requeuing for status verification")
 }
 
 func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, partialDrainEntity *protos.Entity) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_check_completion")
+	defer span.End()
+
+	start := time.Now()
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	allPodsComplete := true
@@ -580,6 +676,12 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 	for _, namespace := range action.Namespaces {
 		pods, err := r.informers.FindEvictablePodsInNamespaceAndNode(namespace, nodeName, partialDrainEntity)
 		if err != nil {
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "failed_to_check_pods"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
 			return fmt.Errorf("failed to check pods in namespace %s on node %s: %w", namespace, nodeName, err)
 		}
 
@@ -593,6 +695,9 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 	}
 
 	if !allPodsComplete {
+		span.SetAttributes(
+			attribute.String("node_drainer.waiting_for_pods", strings.Join(remainingPods, ", ")),
+		)
 		sort.Strings(remainingPods)
 
 		message := fmt.Sprintf("Waiting for following pods to finish: %v", remainingPods)
@@ -603,22 +708,35 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 			slog.Error("Failed to update node event",
 				"node", nodeName,
 				"error", err)
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "failed_to_update_node_event"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
 		}
-
-		slog.Info("Pods still running on node, requeueing for later check",
+		slog.Info("Pods still running on node, requeuing for later check",
 			"node", nodeName,
 			"remainingPods", remainingPods)
-
+		if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
+			drainMetrics.AwaitingPodCompletionDurationMs += time.Since(start).Milliseconds()
+		}
 		return fmt.Errorf("waiting for pods to complete: %d pods remaining", len(remainingPods))
 	}
 
+	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
+		drainMetrics.AwaitingPodCompletionDurationMs += time.Since(start).Milliseconds()
+	}
 	slog.Info("All pods completed on node", "node", nodeName)
-
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("pod completion verified, requeuing for status update")
 }
 
 func (r *Reconciler) executeMarkAlreadyDrained(ctx context.Context,
 	healthEvent model.HealthEventWithStatus, event datastore.Event, database queue.DataStore, status model.Status) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_mark_already_drained")
+	defer span.End()
+
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
@@ -631,12 +749,26 @@ func (r *Reconciler) executeMarkAlreadyDrained(ctx context.Context,
 	podsEvictionStatus := healthEvent.HealthEventStatus.UserPodsEvictionStatus
 	podsEvictionStatus.Status = string(status)
 
-	return r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus,
+	err := r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus,
 		nodeName, metrics.DrainStatusSkipped)
+	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		return err
+	}
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
+	return nil
 }
 
 func (r *Reconciler) executeUpdateStatus(ctx context.Context, healthEvent model.HealthEventWithStatus,
 	event datastore.Event, database queue.DataStore, status model.Status) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_update_status")
+	defer span.End()
+
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
@@ -661,32 +793,69 @@ func (r *Reconciler) executeUpdateStatus(ctx context.Context, healthEvent model.
 			"node", nodeName,
 			"error", err)
 		metrics.ProcessingErrors.WithLabelValues("label_update_error", nodeName).Inc()
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "label_update_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		// Continue to update DB status
 	}
 
-	return r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus,
+	err := r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus,
 		nodeName, metrics.DrainStatusDrained)
+	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		return err
+	}
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
+	return nil
 }
 
 func (r *Reconciler) updateNodeDrainStatus(ctx context.Context,
 	nodeName string, healthEvent *model.HealthEventWithStatus, isDraining bool) {
 	if healthEvent.HealthEventStatus.NodeQuarantined == string(model.UnQuarantined) {
-		if _, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
-			nodeName, statemanager.DrainingLabelValue, true); err != nil {
+		ctx, span := tracing.StartSpan(ctx, "node_drainer.update_node_drain_status")
+		span.SetAttributes(attribute.String("node_drainer.k8s.action", "remove_draining_label"))
+		_, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
+			nodeName, statemanager.DrainingLabelValue, true)
+		if err != nil {
 			slog.Error("Failed to remove draining label for unquarantined node",
 				"node", nodeName,
 				"error", err)
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "update_nvsentinel_state_label"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+		} else {
+			tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 		}
-
+		span.End()
 		return
 	}
 
 	if isDraining {
-		if _, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
-			nodeName, statemanager.DrainingLabelValue, false); err != nil {
+		_, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
+			nodeName, statemanager.DrainingLabelValue, false)
+		if err != nil {
+			_, span := tracing.StartSpan(ctx, "node_drainer.update_node_drain_status")
 			slog.Error("Failed to update node label to draining",
 				"node", nodeName,
 				"error", err)
 			metrics.ProcessingErrors.WithLabelValues("label_update_error", nodeName).Inc()
+			tracing.RecordError(span, err)
+			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+			span.SetAttributes(
+				attribute.String("node_drainer.error.type", "update_nvsentinel_state_label"),
+				attribute.String("node_drainer.error.message", err.Error()),
+			)
+			span.End()
 		}
 	}
 }
@@ -694,9 +863,16 @@ func (r *Reconciler) updateNodeDrainStatus(ctx context.Context,
 func (r *Reconciler) updateNodeUserPodsEvictedStatus(ctx context.Context, database queue.DataStore,
 	event datastore.Event, userPodsEvictionStatus *protos.OperationStatus,
 	nodeName string, drainStatus string) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.update_user_pods_eviction_status")
+	defer span.End()
 	// Extract the document ID (preserving native type for MongoDB)
 	documentID, err := utils.ExtractDocumentIDNative(event)
 	if err != nil {
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "extract_document_id_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to extract document ID: %w", err)
 	}
 
@@ -722,10 +898,21 @@ func (r *Reconciler) updateNodeUserPodsEvictedStatus(ctx context.Context, databa
 	_, err = database.UpdateDocument(ctx, filter, update)
 	if err != nil {
 		metrics.ProcessingErrors.WithLabelValues("update_status_error", nodeName).Inc()
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("error updating document with ID: %v, error: %w", documentID, err)
 	}
 
 	r.observeEvictionDurationIfSucceeded(event, userPodsEvictionStatus)
+
+	span.SetAttributes(
+		attribute.String("node_drainer.user_pods_eviction_status", string(userPodsEvictionStatus.Status)),
+	)
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 
 	slog.Info("Health event status has been updated",
 		"documentID", documentID,
@@ -908,6 +1095,13 @@ func (r *Reconciler) clearEventStatus(eventID string, nodeName string) {
 func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 	healthEvent *model.HealthEventWithStatus, event datastore.Event, database queue.DataStore,
 	eventID string) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.handle_cancelled_event")
+	defer span.End()
+
+	if healthEvent.HealthEvent != nil {
+		span.SetAttributes(attribute.String("node_drainer.check_name", healthEvent.HealthEvent.CheckName))
+	}
+
 	r.clearEventStatus(eventID, nodeName)
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
@@ -925,7 +1119,12 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 		slog.Error("Failed to update MongoDB status for cancelled event",
 			"node", nodeName,
 			"error", err)
-
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_cancelled_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to update MongoDB status for cancelled event on node %s: %w", nodeName, err)
 	}
 
@@ -936,9 +1135,16 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 		slog.Error("Failed to remove draining label for cancelled event",
 			"node", nodeName,
 			"error", err)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", err.Error()),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
 	}
 
 	metrics.CancelledEvent.WithLabelValues(nodeName, healthEvent.HealthEvent.CheckName).Inc()
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	slog.Info("Successfully cleaned up cancelled event", "node", nodeName, "eventID", eventID)
 
 	return nil
@@ -1000,6 +1206,7 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 	crName, err := r.customDrainClient.CreateDrainCR(ctx, templateData)
 	if err != nil {
 		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
 		span.SetAttributes(
 			attribute.String("node_drainer.error.type", "custom_drain_cr_creation_error"),
 			attribute.String("node_drainer.error.message", err.Error()),
@@ -1013,10 +1220,8 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 
 	span.SetAttributes(
 		attribute.String("node_drainer.custom_cr.name", crName),
-		attribute.String("node_drainer.custom_cr.status", "created"),
-		attribute.Bool("node_drainer.custom_cr.created", true),
 	)
-
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("waiting for custom drain CR to complete: %s", crName)
 }
 
@@ -1055,10 +1260,24 @@ func (r *Reconciler) handleCustomDrainCRCreationError(
 	event datastore.Event,
 	database queue.DataStore,
 ) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.handle_custom_drain_cr_creation_error")
+	defer span.End()
+
 	var noMatchErr *meta.NoKindMatchError
 	if !errors.As(err, &noMatchErr) {
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "custom_drain_cr_creation_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to create custom drain CR for node %s: %w", nodeName, err)
 	}
+
+	span.SetAttributes(
+		attribute.String("node_drainer.error.type", "custom_drain_cr_creation_error"),
+		attribute.String("node_drainer.error.message", err.Error()),
+	)
 
 	slog.Error("Custom drain CRD not found - marking drain as failed",
 		"node", nodeName,
@@ -1068,22 +1287,35 @@ func (r *Reconciler) handleCustomDrainCRCreationError(
 
 	metrics.CustomDrainCRDNotFound.WithLabelValues(nodeName).Inc()
 
-	if err := r.setDrainFailedStatus(ctx, healthEvent, event, database,
-		fmt.Sprintf("Custom drain CRD not found: %v", err)); err != nil {
+	if setErr := r.setDrainFailedStatus(ctx, healthEvent, event, database,
+		fmt.Sprintf("Custom drain CRD not found: %v", err)); setErr != nil {
 		slog.Error("Failed to update drain failed status",
 			"node", nodeName,
-			"error", err)
-
-		return fmt.Errorf("failed to update drain failed status: %w", err)
+			"error", setErr)
+		tracing.RecordError(span, setErr)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "set_drain_failed_status_error"),
+			attribute.String("node_drainer.error.message", setErr.Error()),
+		)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		return fmt.Errorf("failed to update drain failed status: %w", setErr)
 	}
 
-	if _, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
-		nodeName, statemanager.DrainFailedLabelValue, false); err != nil {
+	if _, labelErr := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
+		nodeName, statemanager.DrainFailedLabelValue, false); labelErr != nil {
 		slog.Error("Failed to update node label to drain-failed",
 			"node", nodeName,
-			"error", err)
+			"error", labelErr)
+		tracing.RecordError(span, labelErr)
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_nvsentinel_state_label"),
+			attribute.String("node_drainer.error.message", labelErr.Error()),
+		)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		return fmt.Errorf("failed to update node label to drain-failed: %w", labelErr)
 	}
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return nil
 }
 
@@ -1094,8 +1326,22 @@ func (r *Reconciler) setDrainFailedStatus(
 	database queue.DataStore,
 	reason string,
 ) error {
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.set_drain_failed_status")
+	defer span.End()
+
+	nodeName := healthEvent.HealthEvent.NodeName
+	span.SetAttributes(
+		attribute.String("node_drainer.fail_reason", reason),
+	)
+
 	documentID, err := utils.ExtractDocumentIDNative(event)
 	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "extract_document_id_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to extract document ID: %w", err)
 	}
 
@@ -1112,11 +1358,18 @@ func (r *Reconciler) setDrainFailedStatus(
 
 	_, err = database.UpdateDocument(ctx, filter, update)
 	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
+		span.SetAttributes(
+			attribute.String("node_drainer.error.type", "update_drain_failed_status_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		return fmt.Errorf("failed to update MongoDB drain failed status: %w", err)
 	}
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	slog.Info("Updated drain status to failed",
-		"node", healthEvent.HealthEvent.NodeName,
+		"node", nodeName,
 		"reason", reason)
 
 	return nil

@@ -247,7 +247,7 @@ func TestK8sNodeConditions(t *testing.T) {
 	for testCase, healthEvent := range healthEventsList {
 		healthEvents := protos.HealthEvents{Version: 1, Events: make([]*protos.HealthEvent, 0)}
 		healthEvents.Events = append(healthEvents.Events, healthEvent.healthEvent)
-		err := k8sConnector.processHealthEvents(ctx, &healthEvents)
+		_, _, err := k8sConnector.processHealthEvents(ctx, &healthEvents)
 		if err != nil {
 			t.Errorf("Failed to process healthEvent for testCase %d with err %s", testCase, err)
 		}
@@ -347,7 +347,7 @@ func TestK8sNodeEvents(t *testing.T) {
 	for _, event := range healthEventsList {
 		healthEvents.Events = append(healthEvents.Events, event.healthEvent)
 	}
-	err = k8sConnector.processHealthEvents(ctx, &healthEvents)
+	_, _, err = k8sConnector.processHealthEvents(ctx, &healthEvents)
 	if err != nil {
 		t.Errorf("Failed to process healthEvents with err %s", err)
 	}
@@ -1576,7 +1576,7 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 				Version: 1,
 				Events:  tc.healthEvents,
 			}
-			err = connector.processHealthEvents(localCtx, healthEvents)
+			_, _, err = connector.processHealthEvents(localCtx, healthEvents)
 			require.NoError(t, err, "processHealthEvents should not return error")
 
 			node, err := localClientSet.CoreV1().Nodes().Get(localCtx, nodeName, metav1.GetOptions{})
@@ -1752,7 +1752,7 @@ func TestTruncateConditionMessage(t *testing.T) {
 				},
 			}
 
-			result := connector.truncateNodeConditionMessage(tc.messages)
+			_, result := connector.truncateNodeConditionMessage(tc.messages)
 
 			t.Logf("Test: %s", tc.description)
 			t.Logf("Max limit: %d, Result length: %d", tc.maxNodeConditionMessageLength, len(result))

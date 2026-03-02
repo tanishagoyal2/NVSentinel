@@ -76,3 +76,6 @@ dependencies:
   - name: slurm-drain-monitor
     version: "0.1.0"
     condition: global.slurmDrainMonitor.enabled
+  - name: otel-collector
+    version: "0.1.0"
+    condition: global.tracing.enabled

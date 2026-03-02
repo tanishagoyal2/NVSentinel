@@ -89,7 +89,7 @@ func TestK8sConnector_WithEnvtest_NodeConditionUpdate(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process health events")
 
 	updatedNode, err := cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})
@@ -171,7 +171,7 @@ func TestK8sConnector_WithEnvtest_NodeConditionClear(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process health events")
 
 	updatedNode, err := cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})
@@ -228,7 +228,7 @@ func TestK8sConnector_WithEnvtest_NodeEventCreation(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process health events")
 
 	events, err := cli.CoreV1().Events("").List(ctx, metav1.ListOptions{
@@ -408,7 +408,7 @@ func TestK8sConnector_WithEnvtest_MultipleEventsForSameNode(t *testing.T) {
 		},
 	}
 
-	err = connector.processHealthEvents(ctx, healthEventsProto)
+	_, _, err = connector.processHealthEvents(ctx, healthEventsProto)
 	require.NoError(t, err)
 
 	node, err = cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})
@@ -532,7 +532,7 @@ func TestK8sConnector_WithEnvtest_EventCountIncrement(t *testing.T) {
 		Events: []*protos.HealthEvent{healthEvent},
 	}
 
-	err = connector.processHealthEvents(ctx, healthEventsProto)
+	_, _, err = connector.processHealthEvents(ctx, healthEventsProto)
 	require.NoError(t, err)
 
 	events, err := cli.CoreV1().Events(DefaultNamespace).List(ctx, metav1.ListOptions{
@@ -541,7 +541,7 @@ func TestK8sConnector_WithEnvtest_EventCountIncrement(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, len(events.Items) > 0, "event was not created")
 
-	err = connector.processHealthEvents(ctx, healthEventsProto)
+	_, _, err = connector.processHealthEvents(ctx, healthEventsProto)
 	require.NoError(t, err)
 
 	events, err = cli.CoreV1().Events(DefaultNamespace).List(ctx, metav1.ListOptions{
@@ -588,7 +588,7 @@ func TestK8sConnector_WithEnvtest_NodeNotFound(t *testing.T) {
 		},
 	}
 
-	err := k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err := k8sConn.processHealthEvents(ctx, healthEvents)
 	if err != nil {
 		assert.Contains(t, err.Error(), "not found")
 	}
@@ -619,7 +619,7 @@ func TestK8sConnector_WithEnvtest_EmptyHealthEvents(t *testing.T) {
 		Events:  []*protos.HealthEvent{},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "should handle empty events list")
 }
 
@@ -666,7 +666,7 @@ func TestK8sConnector_WithEnvtest_MultipleEntities(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process health events")
 
 	updatedNode, err := cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})
@@ -725,7 +725,7 @@ func TestK8sConnector_WithEnvtest_SpecialCharactersInMessage(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process health events with special characters")
 
 	updatedNode, err := cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})
@@ -950,7 +950,7 @@ func TestK8sConnector_WithEnvtest_MultipleCheckTypes(t *testing.T) {
 		},
 	}
 
-	err = k8sConn.processHealthEvents(ctx, healthEvents)
+	_, _, err = k8sConn.processHealthEvents(ctx, healthEvents)
 	require.NoError(t, err, "failed to process multiple health events")
 
 	updatedNode, err := cli.CoreV1().Nodes().Get(ctx, "test-node", metav1.GetOptions{})

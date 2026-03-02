@@ -30,9 +30,9 @@ import (
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
-	"go.opentelemetry.io/otel/trace"
 	_ "github.com/nvidia/nvsentinel/store-client/pkg/datastore/providers"
 	"github.com/nvidia/nvsentinel/store-client/pkg/factory"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type DatabaseStoreConnector struct {
@@ -222,7 +222,7 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 
 		// Add health event attributes to span (for first event in batch)
 		if i == 0 {
-			tracing.AddHealthEventAttributes(span, clonedHealthEvent)
+			tracing.AddHealthEventAttributes(span, healthEventWithStatusObj.HealthEvent)
 			span.SetAttributes(
 				attribute.Int("platform_connector.grpc.events_count", len(healthEvents.GetEvents())),
 			)

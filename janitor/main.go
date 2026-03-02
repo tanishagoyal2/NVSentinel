@@ -43,6 +43,7 @@ import (
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	janitordgxcnvidiacomv1alpha1 "github.com/nvidia/nvsentinel/janitor/api/v1alpha1"
 	"github.com/nvidia/nvsentinel/janitor/pkg/config"
 	"github.com/nvidia/nvsentinel/janitor/pkg/controller"
@@ -93,6 +94,10 @@ func main() {
 
 	if err := auditlogger.InitAuditLogger("janitor"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	if err := tracing.InitTracing("janitor"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	slogHandler := slog.Default().Handler()
