@@ -20,9 +20,9 @@ logLevel: info
 clientCertMountPath: /etc/ssl/client-certs
 
 image:
-  repository: ghcr.io/nvidia/nvsentinel/node-drainer
-  pullPolicy: IfNotPresent
-  tag: ""
+  repository: nvcr.io/nv-ngc-devops/node-drainer
+  pullPolicy: Always
+  tag: "testing"
 
 podAnnotations: {}
 

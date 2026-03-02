@@ -21,9 +21,9 @@ logLevel: info
 clientCertMountPath: /etc/ssl/client-certs
 
 image:
-  repository: ghcr.io/nvidia/nvsentinel/fault-remediation
-  pullPolicy: IfNotPresent
-  tag: ""
+  repository: nvcr.io/nv-ngc-devops/fault-remediation
+  pullPolicy: Always
+  tag: "testing"
 
 resources: 
   limits:

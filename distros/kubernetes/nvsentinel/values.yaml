@@ -15,7 +15,7 @@
 global:
   dryRun: false
   image:
-    tag: "main"
+    tag: "main-a801e4b"
   initContainerImage:
     repository: docker.io/bitnamilegacy/os-shell
     tag: "12-debian-12-r30"
@@ -154,15 +154,15 @@ global:
   healthEventsAnalyzer:
     enabled: false
   faultQuarantine:
-    enabled: false
+    enabled: true
   nodeDrainer:
-    enabled: false
+    enabled: true
   faultRemediation:
-    enabled: false
+    enabled: true
   janitor:
-    enabled: false
+    enabled: true
   janitorProvider:
-    enabled: false
+    enabled: true
   cspHealthMonitor:
     enabled: false
   syslogHealthMonitor:
@@ -176,7 +176,7 @@ global:
     metricsPort: 9001
     cleanupMetricsPort: 9002
   mongodbStore:
-    enabled: false
+    enabled: true
   kubernetesObjectMonitor:
     enabled: false
   eventExporter:
@@ -197,9 +197,9 @@ networkPolicy:
 
 platformConnector:
   image:
-    repository: ghcr.io/nvidia/nvsentinel/platform-connectors
-    pullPolicy: IfNotPresent
-    tag: ""
+    repository: nvcr.io/nv-ngc-devops/platform-connectors
+    pullPolicy: Always
+    tag: "testing"
 
   resources:
     limits:
