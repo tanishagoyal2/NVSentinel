@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -93,7 +94,8 @@ func (m *NodeAnnotationManager) GetRemediationState(
 	return &state, node, nil
 }
 
-// UpdateRemediationState updates the node annotation with new remediation state
+// UpdateRemediationState updates the node annotation with new remediation state.
+// Uses retry.RetryOnConflict to handle concurrent modifications to the node object.
 func (m *NodeAnnotationManager) UpdateRemediationState(ctx context.Context, nodeName string,
 	group string, crName string, actionName string) error {
 	err := retry.RetryOnConflict(conflictBackoff, func() error {
@@ -142,7 +144,8 @@ func (m *NodeAnnotationManager) UpdateRemediationState(ctx context.Context, node
 	return nil
 }
 
-// ClearRemediationState removes the remediation state annotation from a node
+// ClearRemediationState removes the remediation state annotation from a node.
+// Uses retry.RetryOnConflict to handle concurrent modifications to the node object.
 func (m *NodeAnnotationManager) ClearRemediationState(ctx context.Context, nodeName string) error {
 	err := retry.RetryOnConflict(conflictBackoff, func() error {
 		node := &corev1.Node{}
@@ -172,7 +175,8 @@ func (m *NodeAnnotationManager) ClearRemediationState(ctx context.Context, nodeN
 		return fmt.Errorf("failed to clear remediation state for node %s: %w", nodeName, err)
 	}
 
-	return nil
+		return nil
+	})
 }
 
 // RemoveGroupsFromState removes multiple groups from the remediation state in a single atomic read-modify-write

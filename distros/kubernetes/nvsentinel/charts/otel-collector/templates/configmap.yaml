@@ -20,13 +20,15 @@ metadata:
     {{- include "otel-collector.labels" . | nindent 4 }}
 data:
   otel-collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: "0.0.0.0:13133"
+
     receivers:
       otlp:
         protocols:
           grpc:
             endpoint: "0.0.0.0:4317"
-          http:
-            endpoint: "0.0.0.0:4318"
 
     processors:
       batch:
@@ -36,18 +38,12 @@ data:
     exporters:
       otlphttp:
         endpoint: {{ .Values.global.tracing.collector.exportEndpoint | quote }}
-      {{- if .Values.global.tracing.collector.debug }}
-      debug:
-        verbosity: detailed
-      {{- end }}
 
     service:
+      extensions: [health_check]
       pipelines:
         traces:
           receivers: [otlp]
           processors: [batch]
           exporters:
             - otlphttp
-            {{- if .Values.global.tracing.collector.debug }}
-            - debug
-            {{- end }}

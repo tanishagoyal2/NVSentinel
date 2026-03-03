@@ -138,31 +138,104 @@ func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) 
 	return GetTracer().Start(ctx, name, opts...)
 }
 
-// StartSpanFromTraceID starts a new span from an existing trace ID
-// This is used to continue a trace across services
+// StartSpanFromTraceID starts a new span that belongs to an existing trace.
+// When only traceID is provided, the span is placed under the same trace but
+// without a parent-child link (sibling root span). For proper parent-child
+// relationships, use StartSpanFromTraceContext with both traceID and spanID.
 func StartSpanFromTraceID(ctx context.Context, traceID string, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	return StartSpanFromTraceContext(ctx, traceID, "", name, opts...)
+}
+
+// StartSpanFromTraceContext starts a new span from an existing trace ID and
+// optional parent span ID. This is the primary mechanism for continuing traces
+// across service boundaries that communicate via database or CR annotations.
+//
+// When both traceID and parentSpanID are provided, the new span becomes a
+// child of the remote parent, forming a proper parent-child relationship in
+// the trace tree.
+//
+// When only traceID is provided (parentSpanID is empty), the span is placed
+// under the same trace with a Span Link back to the trace origin, but without
+// a direct parent-child relationship.
+func StartSpanFromTraceContext(ctx context.Context, traceID, parentSpanID, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if traceID == "" {
-		// If no trace ID, start a new trace
 		return StartSpan(ctx, name, opts...)
 	}
 
-	// Parse trace ID
 	tid, err := trace.TraceIDFromHex(traceID)
 	if err != nil {
 		slog.Warn("Failed to parse trace ID, starting new trace", "traceID", traceID, "error", err)
 		return StartSpan(ctx, name, opts...)
 	}
 
-	// Create span context from trace ID
-	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID: tid,
+	if parentSpanID != "" {
+		sid, err := trace.SpanIDFromHex(parentSpanID)
+		if err != nil {
+			slog.Warn("Failed to parse parent span ID, falling back to trace-only",
+				"traceID", traceID, "spanID", parentSpanID, "error", err)
+		} else {
+			// Full parent context: creates a proper parent-child relationship
+			parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    tid,
+				SpanID:     sid,
+				TraceFlags: trace.FlagsSampled,
+				Remote:     true,
+			})
+			ctx = trace.ContextWithSpanContext(ctx, parentCtx)
+			return StartSpan(ctx, name, opts...)
+		}
+	}
+
+	// Trace-only context: same trace but no parent-child link.
+	// Add a Span Link to the trace origin so backends can correlate.
+	remoteCtx := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
 	})
-
-	// Create context with span context
-	ctx = trace.ContextWithSpanContext(ctx, spanCtx)
-
-	// Start span
+	ctx = trace.ContextWithSpanContext(ctx, remoteCtx)
 	return StartSpan(ctx, name, opts...)
+}
+
+// SpanIDFromSpan returns the hex-encoded span ID of the given span,
+// suitable for storing in a database or CR annotation for downstream
+// services to use as a parent span ID.
+func SpanIDFromSpan(span trace.Span) string {
+	if span == nil {
+		return ""
+	}
+	sc := span.SpanContext()
+	if !sc.HasSpanID() {
+		return ""
+	}
+	return sc.SpanID().String()
+}
+
+// Service name constants for the span_ids map. Each service writes its own key
+// and reads its parent's key to establish parent-child trace relationships.
+//
+// Pipeline topology:
+//
+//	PlatformConnector ──┬── FaultQuarantine → NodeDrainer → FaultRemediation → Janitor
+//	                    ├── HealthEventsAnalyzer
+//	                    └── EventExporter
+const (
+	ServicePlatformConnector    = "platform_connector"
+	ServiceFaultQuarantine      = "fault_quarantine"
+	ServiceNodeDrainer          = "node_drainer"
+	ServiceFaultRemediation     = "fault_remediation"
+	ServiceHealthEventsAnalyzer = "health_events_analyzer"
+	ServiceEventExporter        = "event_exporter"
+)
+
+// ParentSpanID looks up the parent service's span ID from the span_ids map.
+// Returns empty string if the map is nil or the key is missing (graceful fallback
+// to trace-only mode without parent-child link).
+func ParentSpanID(spanIDs map[string]string, parentService string) string {
+	if spanIDs == nil {
+		return ""
+	}
+	return spanIDs[parentService]
 }
 
 // SetSpanAttributes sets attributes on a span

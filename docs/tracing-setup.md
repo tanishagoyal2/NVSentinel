@@ -230,7 +230,9 @@ kubectl logs -n nvsentinel tempo-0 | grep -E "ACTIVE|changing instance state.*AC
 - Grafana to Tempo connectivity: Should return `ready`
 - Ingester status: Should show `ACTIVE` state
 
-### Step 8: Configure NVSentinel Services
+### Step 8: Configure NVSentinel Services (and Tilt)
+
+**When using the Tilt cluster:** Tempo and Grafana are installed automatically by the Tiltfile (`tilt/Tiltfile`). After `tilt up`, open Grafana at http://localhost:3000 (port-forward 3000:3000 is configured). No manual Helm install is needed.
 
 Tracing is configured via Helm values in `values-tilt.yaml`:
 
@@ -427,6 +429,26 @@ Ensure only one Tempo installation method is used:
    kubectl get pods -n nvsentinel -l app.kubernetes.io/name=tempo -o yaml | grep labels -A 5
    ```
 
+### Issue 4b: "http2: frame too large" / "frame header looked like an HTTP/1.1 header"
+
+**Symptoms:**
+- Grafana (or another component) logs: `http2: failed reading the frame payload: http2: frame too large, note that the frame header looked like an HTTP/1.1 header`
+- Or: `error reading server preface: ... connection error: desc = "..."`
+
+**Cause:** A client is using **gRPC (HTTP/2)** to connect to Tempo on port **3200**. Port 3200 is Tempo's **HTTP API** (HTTP/1.1) for querying (e.g. `/ready`, `/api/search`). OTLP gRPC must use port **4317**.
+
+**Port reference:**
+| Port  | Protocol   | Use                          |
+|-------|------------|------------------------------|
+| 3200  | HTTP/1.1   | Tempo HTTP API (query, ready) |
+| 4317  | gRPC (HTTP/2) | OTLP trace ingestion        |
+| 4318  | HTTP/1.1   | OTLP HTTP ingestion          |
+
+**Solution:**
+1. **Grafana Tempo datasource:** Must use only HTTP and port 3200 (e.g. `url: http://tempo.nvsentinel.svc.cluster.local:3200`). Do not point any gRPC client at 3200.
+2. **NVSentinel services (OTLP export):** Must use port **4317** for `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `tempo.nvsentinel.svc.cluster.local:4317`). Check `values-tilt.yaml` and any Helm values for `global.tracing.endpoint`.
+3. If the error is from `grafana-apiserver`, ensure Grafana's Tempo datasource is configured as HTTP only (no gRPC). Upgrading Grafana or the Tempo datasource plugin may fix incorrect gRPC usage against 3200.
+
 ### Issue 5: Port 3000 Already in Use
 
 **Solution:**
@@ -509,6 +531,16 @@ kubectl get configmap -n nvsentinel -l app.kubernetes.io/name=grafana \
 - Traces include spans from different services (e.g., `platform-connectors` and `fault-quarantine`)
 
 ## Verification
+
+### Trace setup complete
+
+Tracing is **fully set up** when:
+
+1. **Cluster:** Tempo and Grafana are installed (Steps 1–6), and NVSentinel is deployed with `global.tracing.enabled: true` (e.g. in `values-tilt.yaml`).
+2. **Services:** `platform-connectors`, `fault-quarantine`, and `node-drainer` have OTEL env vars set (see checklist below) and send spans to Tempo.
+3. **Grafana:** You can open Explore → Tempo, run a query (e.g. `{}` or by service name), and see traces with spans from the three services.
+
+Use the **Quick Cluster Setup Checklist** at the end of this doc to verify each item.
 
 ### Check Trace Ingestion
 
@@ -932,7 +964,7 @@ Use this checklist to verify your cluster setup is complete:
 - [ ] Port-forward is running: `ps aux | grep "port-forward.*grafana"`
 - [ ] Grafana is accessible: `curl http://localhost:3000/api/health`
 - [ ] Tracing enabled in values-tilt.yaml: `grep -A 3 "tracing:" distros/kubernetes/nvsentinel/values-tilt.yaml`
-- [ ] Services have OTEL env vars: Check fault-quarantine and platform-connectors pods
+- [ ] Services have OTEL env vars: Check fault-quarantine, platform-connectors, and node-drainer pods
 
 ---
 

@@ -439,17 +439,22 @@ func (r *Reconciler) ProcessEvent(
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) *model.Status {
-	// Extract trace ID and continue trace
-	ctx, span := tracing.StartSpanFromTraceID(ctx, event.TraceID, "process_event")
+	parentSpanID := tracing.ParentSpanID(event.SpanIDs, tracing.ServicePlatformConnector)
+	ctx, span := tracing.StartSpanFromTraceContext(ctx, event.TraceID, parentSpanID, "fault_quarantine.process_event")
 	defer span.End()
+
+	// Store this span's ID so the event watcher can persist it for downstream services.
+	if event.SpanIDs == nil {
+		event.SpanIDs = make(map[string]string)
+	}
+	event.SpanIDs[tracing.ServiceFaultQuarantine] = tracing.SpanIDFromSpan(span)
 
 	if id, ok := ctx.Value(eventwatcher.DocumentIDContextKey).(string); ok && id != "" {
 		event.HealthEvent.Id = id
 	}
 
-	// Add health event attributes to span
 	if event.HealthEvent != nil {
-		tracing.AddHealthEventStatusAttributes(span, &event.HealthEventStatus)
+		tracing.AddHealthEventStatusAttributes(span, &event.HealthEventStatus, event.HealthEvent.Id)
 	}
 
 	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {
@@ -521,7 +526,7 @@ func (r *Reconciler) handleEvent(
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) *model.Status {
-	ctx, span := tracing.StartSpan(ctx, "handle_event")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.handle_event")
 	defer span.End()
 
 	annotations, quarantineAnnotationExists := r.hasExistingQuarantine(event.HealthEvent.NodeName)
@@ -631,7 +636,7 @@ func (r *Reconciler) handleAlreadyQuarantinedNode(
 	event *protos.HealthEvent,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 ) *model.Status {
-	ctx, span := tracing.StartSpan(ctx, "handle_already_quarantined_node")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.handle_already_quarantined_node")
 	defer span.End()
 
 	healthEventsAnnotationMap, _, err := r.getHealthEventsFromAnnotation(ctx, event)
@@ -699,7 +704,7 @@ func (r *Reconciler) evaluateRulesets(
 	isCordoned *atomic.Bool,
 	taintEffectPriorityMap map[keyValTaint]int,
 ) []string {
-	ctx, span := tracing.StartSpan(ctx, "evaluate_rulesets")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.evaluate_rulesets")
 	defer span.End()
 
 	// Handle quarantine override (force quarantine without rule evaluation)
@@ -817,7 +822,7 @@ func (r *Reconciler) handleRuleEvaluationError(
 	evalName string,
 	err error,
 ) {
-	_, span := tracing.StartSpan(ctx, "rule_evaluation_error")
+	_, span := tracing.StartSpan(ctx, "fault_quarantine.rule_evaluation_error")
 	defer span.End()
 	tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 	tracing.RecordError(span, err)
@@ -890,7 +895,7 @@ func (r *Reconciler) applyQuarantine(
 	isCordoned *atomic.Bool,
 	matchedRulesets []string,
 ) *model.Status {
-	ctx, span := tracing.StartSpan(ctx, "apply_quarantine")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.apply_quarantine")
 	defer span.End()
 
 	span.SetAttributes(
@@ -1102,7 +1107,7 @@ func (r *Reconciler) handleQuarantinedNode(
 	event *protos.HealthEvent,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 ) bool {
-	ctx, span := tracing.StartSpan(ctx, "handle_quarantined_node")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.handle_quarantined_node")
 	defer span.End()
 
 	healthEventsAnnotationMap, annotations, err := r.getHealthEventsFromAnnotation(ctx, event)
@@ -1191,7 +1196,7 @@ func (r *Reconciler) getHealthEventsFromAnnotation(
 	ctx context.Context,
 	event *protos.HealthEvent,
 ) (*healthEventsAnnotation.HealthEventsAnnotationMap, map[string]string, error) {
-	ctx, span := tracing.StartSpan(ctx, "get_health_events_from_annotation")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.get_health_events_from_annotation")
 	defer span.End()
 
 	annotations, err := r.getNodeQuarantineAnnotations(event.NodeName)
@@ -1292,7 +1297,7 @@ func (r *Reconciler) removeEventFromAnnotation(
 	ctx context.Context,
 	event *protos.HealthEvent,
 ) (*healthEventsAnnotation.HealthEventsAnnotationMap, error) {
-	ctx, span := tracing.StartSpan(ctx, "remove_event_from_annotation")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.remove_event_from_annotation")
 	defer span.End()
 
 	// Capture the updated map based on the ACTUAL state after removal
@@ -1362,7 +1367,7 @@ func (r *Reconciler) performUncordon(
 	event *protos.HealthEvent,
 	annotations map[string]string,
 ) (bool, error) {
-	ctx, span := tracing.StartSpan(ctx, "perform_uncordon")
+	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.perform_uncordon")
 	defer span.End()
 
 	slog.Info("All entities recovered for check - proceeding with uncordon",

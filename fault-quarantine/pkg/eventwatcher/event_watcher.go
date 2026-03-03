@@ -195,8 +195,9 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	}
 
 	status := w.processEventCallback(ctx, &healthEventWithStatus)
+
 	if status != nil {
-		if err := w.updateNodeQuarantineStatus(ctx, recordUUID, status); err != nil {
+		if err := w.updateNodeQuarantineStatus(ctx, recordUUID, status, healthEventWithStatus.SpanIDs); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("update_quarantine_status_error").Inc()
 			slog.Error("Failed to update node quarantine status", "error", err)
 
@@ -386,8 +387,10 @@ func (w *EventWatcher) updateNodeQuarantineStatus(
 	ctx context.Context,
 	eventID string,
 	nodeQuarantinedStatus *model.Status,
+	spanIDs map[string]string,
 ) error {
-	err := client.UpdateHealthEventNodeQuarantineStatus(ctx, w.databaseClient, eventID, string(*nodeQuarantinedStatus))
+	err := client.UpdateHealthEventNodeQuarantineStatusWithSpanID(ctx, w.databaseClient, eventID,
+		string(*nodeQuarantinedStatus), spanIDs)
 	if err != nil {
 		return fmt.Errorf("error updating node quarantine status: %w", err)
 	}

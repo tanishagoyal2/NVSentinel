@@ -111,8 +111,10 @@ func (r *GPUResetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, fmt.Errorf("failed to get GPUReset %s: %w", req.NamespacedName, err)
 	}
 
-	// Start main span for this reconcile; set GPUReset status attributes (phase, condition, reason) per design 028.
-	ctx, span := tracing.StartSpan(ctx, "janitor.gpureset.reconcile")
+	annotations := gpuReset.GetAnnotations()
+	traceID := annotations["nvsentinel.nvidia.com/trace-id"]
+	spanID := annotations["nvsentinel.nvidia.com/span-id"]
+	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.gpureset.reconcile")
 	defer func() {
 		if span != nil {
 			span.End()

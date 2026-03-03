@@ -23,6 +23,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
+
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
 	"github.com/nvidia/nvsentinel/store-client/pkg/utils"
@@ -61,6 +63,14 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 
 	eventID := utils.ExtractEventID(event)
 	traceID := ExtractTraceIDFromEvent(event)
+	spanIDs := ExtractSpanIDsFromEvent(event)
+
+	// Resolve the parent span ID at enqueue time from the span_ids map.
+	// Node-drainer is downstream of fault-quarantine in the pipeline.
+	parentSpanID := ""
+	if spanIDs != nil {
+		parentSpanID = spanIDs[tracing.ServiceFaultQuarantine]
+	}
 
 	nodeEvent := NodeEvent{
 		NodeName:         nodeName,
@@ -69,6 +79,7 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 		Database:         database,
 		HealthEventStore: healthEventStore,
 		TraceID:          traceID,
+		ParentSpanID:     parentSpanID,
 		DrainSessionSpan: drainSessionSpan,
 	}
 
@@ -99,6 +110,32 @@ func ExtractTraceIDFromEvent(event datastore.Event) string {
 		return tid
 	}
 	return ""
+}
+
+// ExtractSpanIDsFromEvent returns the span_ids map from the event document (or fullDocument).
+func ExtractSpanIDsFromEvent(event datastore.Event) map[string]string {
+	doc := event
+	if fullDoc, ok := event["fullDocument"].(map[string]interface{}); ok {
+		doc = fullDoc
+	}
+	raw, ok := doc["span_ids"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch m := raw.(type) {
+	case map[string]interface{}:
+		result := make(map[string]string, len(m))
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				result[k] = s
+			}
+		}
+		return result
+	case map[string]string:
+		return m
+	default:
+		return nil
+	}
 }
 
 // DrainSessionMetrics accumulates durations and drain scope across process_event cycles so the drain_session span can show a single total.

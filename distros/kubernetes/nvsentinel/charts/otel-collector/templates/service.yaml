@@ -25,9 +25,5 @@ spec:
       port: 4317
       targetPort: otlp-grpc
       protocol: TCP
-    - name: otlp-http
-      port: 4318
-      targetPort: otlp-http
-      protocol: TCP
   selector:
     {{- include "otel-collector.selectorLabels" . | nindent 4 }}

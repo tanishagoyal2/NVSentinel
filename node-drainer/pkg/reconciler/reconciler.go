@@ -892,6 +892,12 @@ func (r *Reconciler) updateNodeUserPodsEvictedStatus(ctx context.Context, databa
 		updateFields["healtheventstatus.drainfinishtimestamp"] = timestamppb.Now()
 	}
 
+	// Propagate this span's ID atomically with the status update so
+	// fault-remediation creates a proper child span.
+	if drainSpanID := tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx)); drainSpanID != "" {
+		updateFields["span_ids."+tracing.ServiceNodeDrainer] = drainSpanID
+	}
+
 	filter := map[string]any{"_id": documentID}
 	update := map[string]any{"$set": updateFields}
 

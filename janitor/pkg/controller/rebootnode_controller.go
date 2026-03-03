@@ -23,6 +23,7 @@ import (
 
 	"log/slog"
 
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cspv1alpha1 "github.com/nvidia/nvsentinel/api/gen/go/csp/v1alpha1"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	janitordgxcnvidiacomv1alpha1 "github.com/nvidia/nvsentinel/janitor/api/v1alpha1"
 	grpcclient "github.com/nvidia/nvsentinel/janitor/pkg/client"
 	"github.com/nvidia/nvsentinel/janitor/pkg/config"
@@ -80,6 +82,20 @@ func (r *RebootNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, req.NamespacedName, &rebootNode); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	annotations := rebootNode.GetAnnotations()
+	traceID := annotations["nvsentinel.nvidia.com/trace-id"]
+	if traceID == "" {
+		slog.Error("traceID is empty")
+		return ctrl.Result{}, errors.New("traceID is empty")
+	}
+	spanID := annotations["nvsentinel.nvidia.com/span-id"]
+	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.rebootnode.reconcile")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("janitor.rebootnode.name", rebootNode.Name),
+		attribute.String("janitor.rebootnode.node", rebootNode.Spec.NodeName),
+	)
 
 	completedReconciling := rebootNode.Status.CompletionTime != nil
 	if !completedReconciling {
@@ -229,7 +245,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 
 		slog.Error("Node ready status check failed", "node", node.Name, "error", nodeReadyErr)
 
-		return r.completeNodeReadyCheck(rebootNode, node, metav1.ConditionFalse, "Failed",
+		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionFalse, "Failed",
 			fmt.Sprintf("Node status could not be checked from CSP: %s", nodeReadyErr), metrics.StatusFailed)
 	}
 
@@ -237,14 +253,14 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 		slog.Info("Node reached ready state post-reboot", "node", node.Name)
 		metrics.GlobalMetrics.RecordActionMTTR(metrics.ActionTypeReboot, time.Since(rebootNode.CreationTimestamp.Time))
 
-		return r.completeNodeReadyCheck(rebootNode, node, metav1.ConditionTrue, "Succeeded",
+		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionTrue, "Succeeded",
 			"Node reached ready state post-reboot", metrics.StatusSucceeded)
 	}
 
 	if time.Since(rebootNode.Status.StartTime.Time) > r.getRebootTimeout() {
 		slog.Error("Node reboot timed out", "node", node.Name, "timeout", r.getRebootTimeout())
 
-		return r.completeNodeReadyCheck(rebootNode, node, metav1.ConditionFalse, "Timeout",
+		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionFalse, "Timeout",
 			"Node failed to return to ready state after timeout duration", metrics.StatusFailed)
 	}
 
@@ -252,6 +268,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 }
 
 func (r *RebootNodeReconciler) completeNodeReadyCheck(
+	ctx context.Context,
 	rebootNode *janitordgxcnvidiacomv1alpha1.RebootNode, node *corev1.Node,
 	conditionStatus metav1.ConditionStatus, reason, message, metricsStatus string,
 ) ctrl.Result {
@@ -264,6 +281,14 @@ func (r *RebootNodeReconciler) completeNodeReadyCheck(
 		LastTransitionTime: metav1.Now(),
 	})
 	metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeReboot, metricsStatus, node.Name)
+
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.String("janitor.rebootnode.status", metricsStatus),
+			attribute.String("janitor.rebootnode.reason", reason),
+			attribute.Bool("janitor.rebootnode.node_ready", conditionStatus == metav1.ConditionTrue),
+		)
+	}
 
 	return ctrl.Result{}
 }
@@ -365,6 +390,13 @@ func (r *RebootNodeReconciler) sendRebootSignalAndSetCondition(
 			LastTransitionTime: metav1.Now(),
 		})
 
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			span.SetAttributes(
+				attribute.Bool("janitor.rebootnode.signal_sent", true),
+				attribute.String("janitor.rebootnode.request_ref", rsp.RequestId),
+			)
+		}
+
 		return ctrl.Result{RequeueAfter: 30 * time.Second}
 	}
 
@@ -384,6 +416,15 @@ func (r *RebootNodeReconciler) sendRebootSignalAndSetCondition(
 		LastTransitionTime: metav1.Now(),
 	})
 	metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeReboot, metrics.StatusFailed, node.Name)
+
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span.SetAttributes(
+			attribute.Bool("janitor.rebootnode.signal_sent", false),
+			attribute.String("janitor.error.type", "reboot_signal_failed"),
+			attribute.String("janitor.error.message", rebootErr.Error()),
+		)
+		tracing.RecordError(span, rebootErr)
+	}
 
 	return ctrl.Result{}
 }

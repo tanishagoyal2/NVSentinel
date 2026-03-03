@@ -231,32 +231,29 @@ func startEventWatcher(ctx context.Context, components *initializer.Components, 
 
 		// Consume events from the change stream
 		for event := range components.EventWatcher.Events() {
-			// Preprocess and enqueue the event
-
 			healthEventWithStatus := model.HealthEventWithStatus{}
 			if err := event.UnmarshalDocument(&healthEventWithStatus); err != nil {
 				slog.Error("Failed to extract health event with status", "error", err)
 				continue
 			}
 
-			ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.TraceID, "node_drainer.event_watcher.event")
-			defer span.End()
+			parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
+			eventCtx, span := tracing.StartSpanFromTraceContext(ctx, healthEventWithStatus.TraceID, parentSpanID, "node_drainer.event_watcher.event")
 
-			tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventStatus)
+			tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
 
-			if err := components.Reconciler.PreprocessAndEnqueueEvent(ctx, event); err != nil {
-				// Don't send to criticalError - just log and continue processing other events
+			if err := components.Reconciler.PreprocessAndEnqueueEvent(eventCtx, event); err != nil {
 				slog.Error("Failed to preprocess and enqueue event", "error", err)
+				span.End()
 				continue
 			}
 
-			// Mark the event as processed (save resume token) AFTER successful preprocessing
-			// Extract the resume token from the event to avoid race condition
 			resumeToken := event.GetResumeToken()
-			if err := components.EventWatcher.MarkProcessed(ctx, resumeToken); err != nil {
-				// Don't send to criticalError - just log and continue
+			if err := components.EventWatcher.MarkProcessed(eventCtx, resumeToken); err != nil {
 				slog.Error("Error updating resume token", "error", err)
 			}
+
+			span.End()
 		}
 
 		slog.Info("Event watcher stopped")

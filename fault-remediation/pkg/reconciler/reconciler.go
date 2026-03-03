@@ -117,8 +117,9 @@ func (r *FaultRemediationReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
-	// Extract trace ID and continue trace
-	ctx, span := tracing.StartSpanFromTraceID(ctx, healthEventWithStatus.HealthEventWithStatus.TraceID, "process_event")
+	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
+	ctx, span := tracing.StartSpanFromTraceContext(ctx, healthEventWithStatus.HealthEventWithStatus.TraceID,
+		parentSpanID, "fault_remediation.process_event")
 	defer func() {
 		if span != nil {
 			span.End()
@@ -126,7 +127,7 @@ func (r *FaultRemediationReconciler) Reconcile(
 	}()
 
 	// Add health event attributes to span (nil-safe: span and optional status fields)
-	tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventWithStatus.HealthEventStatus)
+	tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
 
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined
@@ -220,7 +221,7 @@ func (r *FaultRemediationReconciler) runLogCollector(
 		return ctrl.Result{}, nil
 	}
 
-	ctx, span := tracing.StartSpan(ctx, "log_collector_started")
+	ctx, span := tracing.StartSpan(ctx, "fault_remediation.log_collector_started")
 	defer span.End()
 
 	slog.Info("Log collector feature enabled; running log collector for node",
@@ -265,7 +266,7 @@ func (r *FaultRemediationReconciler) performRemediation(ctx context.Context,
 
 	remediationLabelValue := statemanager.RemediationSucceededLabelValue
 
-	ctx, crSpan := tracing.StartSpan(ctx, "remediation_cr_created")
+	ctx, crSpan := tracing.StartSpan(ctx, "fault_remediation.remediation_cr_created")
 	crName, createMaintenanceResourceError := r.Config.RemediationClient.CreateMaintenanceResource(ctx,
 		healthEventData, groupConfig)
 	if createMaintenanceResourceError != nil {
@@ -512,7 +513,7 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 	}
 
 	// Span: remediation finished (CR created and status updated)
-	_, finishSpan := tracing.StartSpan(ctx, "remediation_finished")
+	_, finishSpan := tracing.StartSpan(ctx, "fault_remediation.remediation_finished")
 	finishSpan.SetAttributes(
 		attribute.String("remediation.cr.name", crName),
 		attribute.String("remediation.status", "succeeded"),

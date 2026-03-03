@@ -31,8 +31,11 @@ type NodeEvent struct {
 	HealthEventStore datastore.HealthEventStore // New database-agnostic interface
 	Database         DataStore                  // New database-agnostic interface
 
-	// TraceID is the OpenTelemetry trace ID of the health event (from store). Used to start node_drainer.drain_session in the same trace.
+	// TraceID is the OpenTelemetry trace ID of the health event (from store).
 	TraceID string
+	// ParentSpanID is the resolved span ID of the upstream service, extracted from
+	// the span_ids map at enqueue time using the known pipeline topology.
+	ParentSpanID string
 	// DrainSessionSpan is the parent span for all process_event cycles for this item. Set on first process, ended when processing completes (no requeue).
 	DrainSessionSpan trace.Span
 

@@ -55,7 +55,7 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 	if nodeEvent.DrainSessionSpan == nil {
 		if nodeEvent.TraceID != "" {
 			var spanCtx context.Context
-			spanCtx, nodeEvent.DrainSessionSpan = tracing.StartSpanFromTraceID(ctx, nodeEvent.TraceID, "node_drainer.drain_session")
+			spanCtx, nodeEvent.DrainSessionSpan = tracing.StartSpanFromTraceContext(ctx, nodeEvent.TraceID, nodeEvent.ParentSpanID, "node_drainer.drain_session")
 			tracing.SetSpanAttributes(nodeEvent.DrainSessionSpan,
 				attribute.String("node_drainer.node_name", nodeEvent.NodeName),
 				attribute.String("node_drainer.event_id", nodeEvent.EventID),

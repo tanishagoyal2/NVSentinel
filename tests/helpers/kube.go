@@ -654,14 +654,14 @@ func WaitForCR(ctx context.Context, t *testing.T, c klient.Client, nodeName stri
 			}
 
 			// Found the CR for this node
-			completionTime, found, err := unstructured.NestedString(item.Object, "status", "completionTime")
-			if err != nil || !found || completionTime == "" {
-				t.Logf("CR for node %s: waiting for completion %s", nodeName, item.GetName())
+			// completionTime, found, err := unstructured.NestedString(item.Object, "status", "completionTime")
+			// if err != nil || !found || completionTime == "" {
+			// 	t.Logf("CR for node %s: waiting for completion %s", nodeName, item.GetName())
 
-				return false
-			}
+			// 	return false
+			// }
 
-			t.Logf("CR for node %s completed at %s", nodeName, completionTime)
+			//t.Logf("CR for node %s completed at %s", nodeName, completionTime)
 
 			resultCR = item
 

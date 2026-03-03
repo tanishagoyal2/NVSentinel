@@ -26,12 +26,14 @@ import (
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
 
-func AddHealthEventStatusAttributes(span trace.Span, healthEventStatus *model.HealthEventStatus) {
+func AddHealthEventStatusAttributes(span trace.Span, healthEventStatus *model.HealthEventStatus, eventId string) {
 	if span == nil || healthEventStatus == nil {
 		return
 	}
 
 	attrs := []attribute.KeyValue{}
+
+	attrs = append(attrs, attribute.String("health_event.id", eventId))
 
 	// ===== Scalar Fields (nil-safe: newly inserted events often have nil for optional status fields) =====
 	nodeQuarantined := ""

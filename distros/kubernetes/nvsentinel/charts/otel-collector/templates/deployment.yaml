@@ -44,9 +44,6 @@ spec:
             - name: otlp-grpc
               containerPort: 4317
               protocol: TCP
-            - name: otlp-http
-              containerPort: 4318
-              protocol: TCP
           livenessProbe:
             httpGet:
               path: /

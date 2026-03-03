@@ -88,29 +88,11 @@ helm_resource(
 namespace_create('gpu-operator')
 namespace_create('nvsentinel')
 
-#Tempo and Grafana for distributed tracing (see docs/tracing-setup.md)
-helm_resource(
-    'tempo',
-    chart='grafana-charts/tempo',
-    namespace='nvsentinel',
-    flags=[
-        '--create-namespace',
-        '-f', '../docs/tempo-simple-values.yaml',
-        '--wait',
-        '--timeout', '3m',
-    ],
-    resource_deps=['grafana-charts'],
-)
-helm_resource(
-    'grafana',
-    chart='grafana-charts/grafana',
-    namespace='nvsentinel',
-    flags=[
-        '-f', '../docs/grafana-values.yaml',
-        '--wait',
-        '--timeout', '3m',
-    ],
-    resource_deps=['grafana-charts', 'tempo'],
+# Tempo and Grafana are deployed as subcharts of the main nvsentinel Helm chart
+# (controlled by global.tempo.enabled and global.grafana.enabled in values.yaml).
+# Port-forward Grafana for local access.
+k8s_resource(
+    'nvsentinel-grafana',
     port_forwards=['3000:3000'],
 )
 
@@ -390,28 +372,28 @@ k8s_resource(
 )
 
 k8s_resource(
-    'otel-collector',
-    resource_deps=['tempo'],
+    'nvsentinel-otel-collector',
+    resource_deps=['nvsentinel-tempo'],
 )
 
 k8s_resource(
     'platform-connectors',
-    resource_deps=[datastore_resource, 'otel-collector']
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'fault-quarantine',
-    resource_deps=[datastore_resource, 'otel-collector']
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'node-drainer',
-    resource_deps=[datastore_resource, 'otel-collector']
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'fault-remediation',
-    resource_deps=[datastore_resource, 'otel-collector']
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(

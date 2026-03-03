@@ -21,7 +21,7 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 - **Multi-module coordination**: See which modules are actively processing the same event like fault-quarantine and health-events-analyzer pick up event at the same time
 - **Context preservation**: All relevant event metadata is attached to spans, eliminating the need to login to the cluster and to search logs in each module
 - **Concurrent processing**: Understand how multiple events are processed simultaneously
-- **Circuit breaker activity**: Monitor when circuit breaker is triped
+- **Circuit breaker activity**: Monitor when circuit breaker is tripped
 
 ## How Traces Are Different From Logs and Metrics?
 
@@ -47,47 +47,51 @@ Traces are per-request: each health event gets one trace with spans across all m
 
 ## Architecture Diagram
 
-The following diagram shows how traces flow from NVSentinel modules to the Alloy gateway and onward to Grafana dashboard.
+The following diagram shows how traces flow from NVSentinel modules through the in-namespace OpenTelemetry Collector to the configured backend.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────-┐
-│                         NVSentinel (trace producers)                         │
-├────────────────────────────────────────────────────────────────────────────-─┤
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         NVSentinel Namespace                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
 │  platform-connector   fault-quarantine   node-drainer   fault-remediation    │
-│  health-events-analyzer                                                      │
-│         │                    │                │                │             │
-│         │  OTLP (GRPC :4317) │                │                │             │
-│         └────────────────────┴────────────────┴────────────────┴─────────────┤
-│                                               │                              │
-└────────────────────────────────────────-──────┼──────────────────────────────┘
-                                               │
-                                               ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Alloy Gateway (dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317)        │
-│  - Receives OTLP traces from all NVSentinel modules (no auth; in-cluster)    │
-│  - Batches and forwards to Panoptes                                          │
-│  - Authenticates to Panoptes via OAuth2 (panoptes secret in dgxc-alloy NS)   │
-└──────────────────────────────────────────────┬───────────────────────────────┘
-                                               │
-                                               │ OTLP HTTP + OAuth2 (auth done here)
-                                               ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Panoptes (otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com)          │
-│  - Centralized trace storage                                                 │
-└──────────────────────────────────────────────┬───────────────────────────────┘
-                                               │
-                                               ▼
-┌──────────────────────────────────────────────────────────────────────────────-┐
-│  Grafana Tempo → Grafana Dashboards (dashboards.telemetry.dgxc.ngc.nvidia.com)│
-│  - Trace explorer, service map, latency analysis                              │
-└──────────────────────────────────────────────────────────────────────────────-┘
+│  health-events-analyzer   janitor   janitor-provider   event-exporter        │
+│         │                    │                │                │              │
+│         │  OTLP (gRPC :4317) │                │                │              │
+│         └────────────────────┴────────────────┴────────────────┘              │
+│                                      │                                       │
+│                                      ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐    │
+│  │  OTel Collector (otel-collector subchart, otel-collector:4317)        │    │
+│  │  - Receives OTLP traces from all NVSentinel modules (in-namespace)   │    │
+│  │  - Batches and forwards to configured backend                        │    │
+│  │  - Image: otel/opentelemetry-collector-contrib                       │    │
+│  └──────────────────────────────────┬────────────────────────────────────┘    │
+│                                     │                                        │
+└─────────────────────────────────────┼────────────────────────────────────────┘
+                                      │
+                       ┌──────────────┼──────────────┐
+                       │              │              │
+                       ▼              ▼              ▼
+              ┌──────────────┐ ┌───────────┐ ┌─────────────────┐
+              │  Panoptes    │ │  Tempo    │ │  Any OTLP       │
+              │  (OTLP HTTP) │ │  (local)  │ │  Backend        │
+              └──────────────┘ └───────────┘ └─────────────────┘
+                       │
+                       ▼
+              ┌──────────────────────────────────────────────────────────────┐
+              │  Grafana Dashboards                                          │
+              │  - Trace explorer, service map, latency analysis             │
+              └──────────────────────────────────────────────────────────────┘
 ```
 
 **Trace flow summary:**
 
-1. **Ingestion**: Each NVSentinel module exports spans via OTLP over gRPC to `dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317`. No authentication is required from NVSentinel to the gateway (in-cluster, `OTEL_EXPORTER_OTLP_INSECURE=true`).
-2. **Gateway**: The Alloy gateway receives traces, batches them, and authenticates to Panoptes using OAuth2 (credentials from the `panoptes` secret in the `dgxc-alloy` namespace). 
-3. **Backend**: Panoptes stores traces; Grafana Tempo is used as the datasource for querying and visualizing traces in Grafana.
+1. **Ingestion**: Each NVSentinel module exports spans via OTLP over gRPC to the in-namespace OTel Collector (`otel-collector:4317`). No authentication is required from modules to the collector (in-namespace, `OTEL_EXPORTER_OTLP_INSECURE=true`).
+2. **Collector**: The OTel Collector (deployed as an NVSentinel subchart) receives traces, batches them, and forwards to the configured backend endpoint via OTLP HTTP. The collector handles batching, retry, and (when needed) authentication to the backend.
+3. **Backend**: The backend is configurable via `global.tracing.collector.exportEndpoint`. This can be Panoptes, a cluster-local Tempo instance, Grafana Cloud, or any OTLP-compatible backend. Grafana Tempo is used as the datasource for querying and visualizing traces in Grafana.
+
+**Why an in-namespace OTel Collector instead of dgxc-alloy?**
+The dgxc-alloy gateway is optional on clusters and may not be present. By deploying the OTel Collector as part of NVSentinel, tracing works on any cluster regardless of whether dgxc-alloy is installed. If dgxc-alloy is available, `global.tracing.endpoint` can be overridden to point modules directly at it, bypassing the NVSentinel collector.
 
 ## What Are We Planning to Track from Each Module?
 
@@ -206,8 +210,6 @@ MongoDB (stores event with trace_id as separate field)
 
 **All modules share the same trace ID (`abc123`)** - this is only possible with context propagation at each step.
 
-## Trace Context Propagation Options
-
 Trace context is stored as a separate top-level field in the MongoDB document, keeping observability data separate from business logic.
 
 **How it works technically**:
@@ -260,17 +262,14 @@ Trace context is stored as a separate top-level field in the MongoDB document, k
 ### Span Creation Strategy
 
 **Where is the Trace ID Created?**
+Platform-Connector creates the root trace when it receives a health event via gRPC:
 
-The trace ID creation depends on which trace context propagation option you choose:
-
-#### Platform-Connector Creates Root Trace
-
-**Platform-Connector** creates the root trace when it receives a health event via gRPC:
 - **Root Span**: Created when platform-connector receives a health event via gRPC
 - **Span name**: `platform_connector.receive_event`
 - **Trace ID generated here** in platform-connector
 - **No trace context propagation needed from health monitor**: Health monitor just sends the gRPC call with the health event
 - Platform-connector stores trace ID as separate MongoDB field
+
 - **Advantages**:
   - Simpler implementation (only platform-connector needs tracing)
   - Health monitors don't need OpenTelemetry instrumentation
@@ -289,7 +288,6 @@ Platform Connector:
   2. Create NEW trace (trace_id: abc123)
   3. Create root span: "platform_connector.receive_event"
   4. Store event in MongoDB with trace_id as separate top-level field
-  5. Start new trace (trace_id: abc123)
 ```
 
 2. **Module Spans**: Each module creates spans for its processing:
@@ -297,6 +295,9 @@ Platform Connector:
    - **Node-Drainer**: `node_drainer.process_event`
    - **Fault-Remediation**: `fault_remediation.process_event`
    - **Health-Events-Analyzer**: `health_events_analyzer.process_event`
+   - **Event Exporter**: `event_exporter.process_event`
+   - **Janitor**: `janitor.process_event`
+   - **Janitor Provider**: `janitor_provider.process_event`
 
 3. **Operation Spans**: Within each module, create child spans for specific operations:
    - Database queries
@@ -307,13 +308,13 @@ Platform Connector:
 
 ### Trace Export
 
-- **OTLP Exporter**: Export traces via OTLP (OpenTelemetry Protocol) to Alloy gateway, which forwards to Panoptes (Tempo backend)
-- **Batch Export**: Use batching to reduce overhead (handled by Alloy gateway)
-- **Retry Logic**: Implement retry logic for failed exports (handled by Alloy gateway)
+- **OTLP Exporter**: Each NVSentinel module exports traces via OTLP gRPC to the in-namespace OTel Collector
+- **Batch Export**: The OTel Collector batches spans before forwarding to the backend
+- **Retry Logic**: The OTel Collector handles retry logic for failed exports
 
-### Backend Integration: Alloy Gateway + Panoptes
+### Backend Integration: In-Namespace OTel Collector
 
-NVSentinel uses **Grafana Alloy Gateway** as the OTLP receiver, which forwards traces to **Panoptes** (NVIDIA's centralized observability platform). This provides centralized trace collection and visualization in Grafana.
+NVSentinel deploys its own **OpenTelemetry Collector** (`otel-collector` subchart) inside the NVSentinel namespace. This collector receives traces from all modules and forwards them to any configured backend. This approach does **not** depend on `dgxc-alloy` being installed on the cluster.
 
 #### Architecture
 
@@ -322,121 +323,93 @@ NVSentinel Modules (platform-connector, fault-quarantine, etc.)
     │
     │ [OTLP gRPC :4317]
     ▼
-Alloy Gateway (dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317)
+OTel Collector (otel-collector.nvsentinel.svc:4317)
     │
-    │ [OTLP HTTP]
+    │ [OTLP HTTP to configured backend]
     ▼
-Panoptes (otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com)
-    │
-    ▼
-Grafana Tempo Datasource
+Backend (Tempo / Panoptes / Grafana Cloud / any OTLP endpoint)
     │
     ▼
-Grafana Dashboards (dashboards.telemetry.dgxc.ngc.nvidia.com)
+Grafana Dashboards (trace explorer, service map, latency analysis)
 ```
 
 #### Configuration
 
-**NVSentinel Module Configuration**:
+**Helm Values**:
 
-Each NVSentinel module (platform-connector, fault-quarantine, node-drainer, fault-remediation, health-events-analyzer) should be configured with the following environment variables:
+Tracing is configured via `global.tracing` in `values.yaml`:
+
+```yaml
+global:
+  tracing:
+    enabled: true       # Deploys the otel-collector subchart and injects OTEL_* env vars
+    insecure: true      # Use insecure gRPC from modules to collector (in-namespace)
+    endpoint: ""        # Override to bypass the collector (e.g. point to Alloy directly)
+    collector:
+      image:
+        repository: otel/opentelemetry-collector-contrib
+        tag: "0.120.0"
+      exportEndpoint: "http://tempo.nvsentinel.svc.cluster.local:4318"  # Backend URL
+      debug: false      # Enable debug exporter for troubleshooting
+```
+
+When `global.tracing.enabled` is true:
+- The `otel-collector` subchart is deployed (Deployment + Service + ConfigMap)
+- Each module's `OTEL_EXPORTER_OTLP_ENDPOINT` defaults to `<release>-otel-collector:4317`
+- The collector forwards traces to `global.tracing.collector.exportEndpoint`
+
+When `global.tracing.endpoint` is explicitly set, modules send traces directly to that endpoint (bypassing the collector). This supports clusters where `dgxc-alloy` or another external collector is available.
+
+**NVSentinel Module Environment Variables** (auto-injected by Helm templates):
 
 ```yaml
 env:
-  # OTLP endpoint - Alloy gateway service (gRPC on 4317)
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317"
-  
-  # Use insecure connection (ClusterIP service, no TLS)
+    value: "nvsentinel-otel-collector:4317"  # auto-derived from Release.Name
   - name: OTEL_EXPORTER_OTLP_INSECURE
     value: "true"
-  
-  # Service name for trace identification
+  - name: OTEL_TRACES_ENABLED
+    value: "true"
   - name: OTEL_SERVICE_NAME
-    value: "platform-connector"  # or "fault-quarantine", "node-drainer", etc.
+    value: "platform-connector"  # per-module
 ```
 
-#### Alloy Gateway Configuration
+#### OTel Collector Pipeline
 
-The Alloy gateway needs to be configured to forward traces to Panoptes. This is typically managed by the observability team. The configuration should include:
+The collector is configured via a ConfigMap with this pipeline:
 
-1. **OTLP Receiver**: Configured to receive traces on port 4317 (gRPC); NVSentinel modules send traces via OTLP gRPC to this port
-2. **Traces Processor**: Batch processing for traces
-3. **Traces Exporter**: Forward traces to Panoptes traces endpoint:
-   - Endpoint: `https://otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com`
-   - Authentication: OAuth2 (using `panoptes` secret in `dgxc-alloy` namespace)
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
 
-**Example Alloy Config Addition** (managed by observability team):
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 512
 
-NVSentinel modules send traces via OTLP gRPC; the gateway must expose the gRPC receiver on port 4317.
+exporters:
+  otlphttp:
+    endpoint: "<global.tracing.collector.exportEndpoint>"
 
-```alloy
-otelcol.receiver.otlp "input" {
-  grpc {
-    endpoint = "0.0.0.0:4317"  # NVSentinel modules send traces here (OTLP gRPC)
-  }
-  http {
-    endpoint = "0.0.0.0:4318"
-  }
-  output {
-    logs = [otelcol.exporter.otlphttp.panoptes_logs.input]
-    metrics = [otelcol.exporter.otlphttp.panoptes_metrics.input]
-    traces = [otelcol.processor.batch.traces.input]
-  }
-}
-
-// ADD THIS
-otelcol.processor.batch "traces" {
-  timeout = "1s"
-  send_batch_size = 512
-  output {
-    traces = [otelcol.exporter.otlphttp.panoptes_traces.input]  
-  }
-}
-
-// ADD THIS
-otelcol.auth.oauth2 "panoptes_traces" {
-  client_id = convert.nonsensitive(remote.kubernetes.secret.panoptes.data["client_id"])
-  client_secret = remote.kubernetes.secret.panoptes.data["client_secret"]
-  token_url = convert.nonsensitive(remote.kubernetes.secret.panoptes.data["token_url"])
-  scopes = ["api://dgxc-lgtm-otel-gateway-prod/.default"]
-}
-
-// ADD THIS
-otelcol.exporter.otlphttp "panoptes_traces" {
-  client {
-    auth = otelcol.auth.oauth2.panoptes_traces.handler
-    endpoint = "https://otel-traces.us-east-1.aws.telemetry.dgxc.ngc.nvidia.com"
-  }
-}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
 ```
+
+The `otel/opentelemetry-collector-contrib` image is used because it includes `oauth2clientauthextension`, which can be added to the pipeline config when exporting to backends that require OAuth2 (e.g. Panoptes).
 
 #### Viewing Traces
 
-Once traces are flowing through Alloy to Panoptes, they can be viewed in Grafana:
+Traces can be viewed in Grafana once the backend is configured:
 
-- **Grafana URL**: `https://dashboards.telemetry.dgxc.ngc.nvidia.com`
-- **Tempo Datasource**: Already configured (UID: `ce6qyv88u86bkc`)
-- **Trace Explorer**: Navigate to Explore → Select Tempo datasource → Search by trace ID or service name
-
-## Integration with Existing Observability
-
-### Grafana Dashboards
-Traces can be visualized in Grafana using Tempo:
-- **Trace explorer**: Navigate individual traces
-- **Service map**: Visualize service dependencies and interactions
-- **Latency heatmaps**: Identify latency patterns
-- **Error rate**: Track error rates by service
-
-## Next Steps
-
-1. **Alloy Gateway Configuration**: Coordinate with observability team to add traces forwarding to Alloy gateway config (forward traces to Panoptes traces endpoint)
-2. **Instrument Core Modules**: Add tracing to platform-connector, fault-quarantine, node-drainer, fault-remediation, and health-events-analyzer
-3. **Configure OTLP Export**: Set environment variables in NVSentinel modules to send traces to Alloy gateway:
-   - `OTEL_EXPORTER_OTLP_ENDPOINT=http://dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4317`
-   - `OTEL_EXPORTER_OTLP_INSECURE=true`
-   - `OTEL_SERVICE_NAME=<module-name>`
-4. **Trace Context Propagation**: Implement trace context storage and retrieval in MongoDB change streams (Option B: separate field)
-5. **Grafana Dashboards**: Create dashboards for trace visualization and analysis in Grafana
-6. **Documentation**: Create runbooks for common trace-based debugging scenarios
-7. **Testing**: Validate trace completeness and accuracy in test environments
+- **Local dev (Tilt)**: Grafana at `localhost:3000` with Tempo datasource auto-configured
+- **Production (Panoptes)**: `https://dashboards.telemetry.dgxc.ngc.nvidia.com` → Explore → Tempo datasource
+- **Trace Explorer**: Search by trace ID, service name, or span attributes

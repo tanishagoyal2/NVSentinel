@@ -35,14 +35,29 @@ dependencies:
 - name: janitor
   repository: ""
   version: 0.1.0
+- name: janitor-provider
+  repository: ""
+  version: 0.1.0
 - name: metadata-collector
   repository: ""
   version: 0.1.0
 - name: kubernetes-object-monitor
   repository: ""
   version: 0.1.0
+- name: event-exporter
+  repository: ""
+  version: 0.1.0
 - name: preflight
   repository: ""
   version: 0.1.0
-digest: sha256:9f6ec426cf34f29407b4f8febe6cd89ddfce8f39a08c5f07e4a78c716afe5de1
-generated: "2026-01-29T15:19:46.818345818+05:30"
+- name: otel-collector
+  repository: ""
+  version: 0.1.0
+- name: tempo
+  repository: https://grafana.github.io/helm-charts
+  version: 1.24.4
+- name: grafana
+  repository: https://grafana.github.io/helm-charts
+  version: 10.5.15
+digest: sha256:f78a0a6fc5ac7eca3aa48febf26178879d75ebc079e2ccb6e16442f0e1243b76
+generated: "2026-03-02T19:36:43.072124+05:30"

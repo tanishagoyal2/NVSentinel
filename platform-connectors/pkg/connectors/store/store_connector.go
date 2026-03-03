@@ -207,11 +207,11 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 
 		slog.Debug("Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
 
-		// Generate trace ID for this event
-		traceID := span.SpanContext().TraceID().String()
-
 		healthEventWithStatusObj := model.HealthEventWithStatus{
-			TraceID:     traceID,
+			TraceID: span.SpanContext().TraceID().String(),
+			SpanIDs: map[string]string{
+				tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(span),
+			},
 			CreatedAt:   time.Now().UTC(),
 			HealthEvent: clonedHealthEvent,
 			HealthEventStatus: &protos.HealthEventStatus{

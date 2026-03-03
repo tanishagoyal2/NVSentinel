@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/annotation"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/common"
@@ -194,8 +195,10 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 		return "", fmt.Errorf("failed to get node for owner reference: %w", err)
 	}
 
-	templateData := templateDataFromEvent(healthEvent, healthEventID, recommendedActionName,
-		groupConfig.ImpactedEntityScopeValue, maintenanceResource)
+	// Pass the current span's ID so janitor can establish a parent-child relationship.
+	spanID := tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx))
+	templateData := templateDataFromEvent(healthEvent, healthEventID, healthEventData.TraceID, spanID,
+		recommendedActionName, groupConfig.ImpactedEntityScopeValue, maintenanceResource)
 
 	actualCRName, err := c.createMaintenanceCR(ctx, selectedTemplate, templateData, actionKey, node, healthEventData)
 	if err != nil {
@@ -211,12 +214,14 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 }
 
 // templateDataFromEvent builds TemplateData from health event and maintenance resource.
-func templateDataFromEvent(healthEvent *protos.HealthEvent, healthEventID, recommendedActionName,
+func templateDataFromEvent(healthEvent *protos.HealthEvent, healthEventID, traceID, spanID, recommendedActionName,
 	impactedEntityScopeValue string, maintenanceResource config.MaintenanceResource,
 ) TemplateData {
 	return TemplateData{
 		NodeName:                 healthEvent.NodeName,
 		HealthEventID:            healthEventID,
+		TraceID:                  traceID,
+		SpanID:                   spanID,
 		RecommendedAction:        healthEvent.RecommendedAction,
 		RecommendedActionName:    recommendedActionName,
 		ImpactedEntityScopeValue: impactedEntityScopeValue,

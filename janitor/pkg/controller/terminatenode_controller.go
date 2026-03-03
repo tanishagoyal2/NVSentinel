@@ -24,6 +24,7 @@ import (
 
 	"log/slog"
 
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cspv1alpha1 "github.com/nvidia/nvsentinel/api/gen/go/csp/v1alpha1"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	janitordgxcnvidiacomv1alpha1 "github.com/nvidia/nvsentinel/janitor/api/v1alpha1"
 	grpcclient "github.com/nvidia/nvsentinel/janitor/pkg/client"
 	"github.com/nvidia/nvsentinel/janitor/pkg/config"
@@ -73,6 +75,16 @@ func (r *TerminateNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.Get(ctx, req.NamespacedName, &terminateNode); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	annotations := terminateNode.GetAnnotations()
+	traceID := annotations["nvsentinel.nvidia.com/trace-id"]
+	spanID := annotations["nvsentinel.nvidia.com/span-id"]
+	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.terminatenode.reconcile")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("janitor.terminatenode.name", terminateNode.Name),
+		attribute.String("janitor.terminatenode.node", terminateNode.Spec.NodeName),
+	)
 
 	// Check if reconciliation is complete
 	completedReconciling := terminateNode.Status.CompletionTime != nil
@@ -148,11 +160,17 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 				LastTransitionTime: metav1.Now(),
 			})
 
-			// Record successful termination metrics
 			metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusSucceeded, terminateNode.Spec.NodeName)
 			metrics.GlobalMetrics.RecordActionMTTR(metrics.ActionTypeTerminate, time.Since(terminateNode.CreationTimestamp.Time))
 
-			result = ctrl.Result{} // Don't requeue on success
+			if span := tracing.SpanFromContext(ctx); span != nil {
+				span.SetAttributes(
+					attribute.String("janitor.terminatenode.status", "succeeded"),
+					attribute.Bool("janitor.terminatenode.node_terminated", true),
+				)
+			}
+
+			result = ctrl.Result{}
 		} else if isNodeNotReady(node) {
 			slog.Info("Node reached not ready state, deleting from cluster", "node", terminateNode.Spec.NodeName)
 
@@ -170,11 +188,18 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 				LastTransitionTime: metav1.Now(),
 			})
 
-			// Record successful termination metrics
 			metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusSucceeded, node.Name)
 			metrics.GlobalMetrics.RecordActionMTTR(metrics.ActionTypeTerminate, time.Since(terminateNode.CreationTimestamp.Time))
 
-			result = ctrl.Result{} // Don't requeue on success
+			if span := tracing.SpanFromContext(ctx); span != nil {
+				span.SetAttributes(
+					attribute.String("janitor.terminatenode.status", "succeeded"),
+					attribute.Bool("janitor.terminatenode.node_terminated", true),
+					attribute.Bool("janitor.terminatenode.node_deleted", true),
+				)
+			}
+
+			result = ctrl.Result{}
 		} else if time.Since(terminateNode.Status.StartTime.Time) > r.getTimeout() {
 			slog.Error("Node terminate timed out", "node", node.Name, "timeout", r.getTimeout())
 
@@ -190,7 +215,15 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 
 			metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusFailed, node.Name)
 
-			result = ctrl.Result{} // Don't requeue on timeout
+			if span := tracing.SpanFromContext(ctx); span != nil {
+				span.SetAttributes(
+					attribute.String("janitor.terminatenode.status", "failed"),
+					attribute.String("janitor.error.type", "timeout"),
+					attribute.String("janitor.error.message", "Node failed to transition to not ready state after timeout"),
+				)
+			}
+
+			result = ctrl.Result{}
 		} else {
 			// Still waiting for terminate to complete
 			result = ctrl.Result{RequeueAfter: 30 * time.Second}
@@ -260,7 +293,11 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 						Message:            "Terminate signal sent to CSP",
 						LastTransitionTime: metav1.Now(),
 					}
-					// Continue monitoring if signal was sent successfully
+
+					if span := tracing.SpanFromContext(ctx); span != nil {
+						span.SetAttributes(attribute.Bool("janitor.terminatenode.signal_sent", true))
+					}
+
 					result = ctrl.Result{RequeueAfter: 30 * time.Second}
 				} else {
 					signalSentCondition = metav1.Condition{
@@ -273,10 +310,18 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 
 					terminateNode.SetCompletionTime()
 
-					// Don't requeue on failure
 					result = ctrl.Result{}
 
 					metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusFailed, node.Name)
+
+					if span := tracing.SpanFromContext(ctx); span != nil {
+						span.SetAttributes(
+							attribute.Bool("janitor.terminatenode.signal_sent", false),
+							attribute.String("janitor.error.type", "terminate_signal_failed"),
+							attribute.String("janitor.error.message", terminateErr.Error()),
+						)
+						tracing.RecordError(span, terminateErr)
+					}
 				}
 
 				terminateNode.SetCondition(signalSentCondition)
