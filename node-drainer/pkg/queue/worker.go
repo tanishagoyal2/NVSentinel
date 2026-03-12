@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -55,7 +56,8 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 	if nodeEvent.DrainSessionSpan == nil {
 		if nodeEvent.TraceID != "" {
 			var spanCtx context.Context
-			spanCtx, nodeEvent.DrainSessionSpan = tracing.StartSpanFromTraceContext(ctx, nodeEvent.TraceID, nodeEvent.ParentSpanID, "node_drainer.drain_session")
+			spanCtx, nodeEvent.DrainSessionSpan = tracing.StartSpanWithLinkFromTraceContext(
+				ctx, nodeEvent.TraceID, nodeEvent.ParentSpanID, "node_drainer.drain_session")
 			tracing.SetSpanAttributes(nodeEvent.DrainSessionSpan,
 				attribute.String("node_drainer.node_name", nodeEvent.NodeName),
 				attribute.String("node_drainer.event_id", nodeEvent.EventID),
@@ -68,13 +70,20 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 
 	// Attach cumulative metrics so reconciler can add durations/scope without creating multiple spans; carry across requeues.
 	drainMetrics := &DrainSessionMetrics{
-		ImmediateEvictionDurationMs:     nodeEvent.ImmediateEvictionDurationMs,
-		AwaitingPodCompletionDurationMs: nodeEvent.AwaitingPodCompletionDurationMs,
-		DrainScope:                      nodeEvent.DrainScope,
-		PartialDrainEntityType:          nodeEvent.PartialDrainEntityType,
-		PartialDrainEntityValue:         nodeEvent.PartialDrainEntityValue,
+		ImmediateEvictionStartedAt:  nodeEvent.ImmediateEvictionStartedAt,
+		AllowCompletionStartedAt:    nodeEvent.AllowCompletionStartedAt,
+		DeleteAfterTimeoutStartedAt: nodeEvent.DeleteAfterTimeoutStartedAt,
+		ImmediateEvictionEndedAt:    nodeEvent.ImmediateEvictionEndedAt,
+		AllowCompletionEndedAt:      nodeEvent.AllowCompletionEndedAt,
+		DeleteAfterTimeoutEndedAt:   nodeEvent.DeleteAfterTimeoutEndedAt,
+		PodsForceDeletedCount:       nodeEvent.PodsForceDeletedCount,
+		ForceDeletedPods:            nodeEvent.ForceDeletedPods,
+		DrainScope:                  nodeEvent.DrainScope,
+		PartialDrainEntityType:      nodeEvent.PartialDrainEntityType,
+		PartialDrainEntityValue:     nodeEvent.PartialDrainEntityValue,
 	}
 	processCtx = ContextWithDrainSessionMetrics(processCtx, drainMetrics)
+	processCtx = ContextWithNodeEvent(processCtx, &nodeEvent)
 
 	var err error
 	if nodeEvent.Event != nil && nodeEvent.Database != nil && nodeEvent.HealthEventStore != nil {
@@ -84,8 +93,14 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 	}
 
 	// Carry cumulative metrics and scope back to nodeEvent for next cycle or for final span attributes
-	nodeEvent.ImmediateEvictionDurationMs = drainMetrics.ImmediateEvictionDurationMs
-	nodeEvent.AwaitingPodCompletionDurationMs = drainMetrics.AwaitingPodCompletionDurationMs
+	nodeEvent.ImmediateEvictionStartedAt = drainMetrics.ImmediateEvictionStartedAt
+	nodeEvent.AllowCompletionStartedAt = drainMetrics.AllowCompletionStartedAt
+	nodeEvent.DeleteAfterTimeoutStartedAt = drainMetrics.DeleteAfterTimeoutStartedAt
+	nodeEvent.ImmediateEvictionEndedAt = drainMetrics.ImmediateEvictionEndedAt
+	nodeEvent.AllowCompletionEndedAt = drainMetrics.AllowCompletionEndedAt
+	nodeEvent.DeleteAfterTimeoutEndedAt = drainMetrics.DeleteAfterTimeoutEndedAt
+	nodeEvent.PodsForceDeletedCount = drainMetrics.PodsForceDeletedCount
+	nodeEvent.ForceDeletedPods = drainMetrics.ForceDeletedPods
 	nodeEvent.DrainScope = drainMetrics.DrainScope
 	nodeEvent.PartialDrainEntityType = drainMetrics.PartialDrainEntityType
 	nodeEvent.PartialDrainEntityValue = drainMetrics.PartialDrainEntityValue
@@ -98,9 +113,31 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 		m.queue.AddRateLimited(nodeEvent)
 	} else {
 		if nodeEvent.DrainSessionSpan != nil {
+			now := time.Now()
+
+			// phaseDuration computes wall-clock time for a phase:
+			// - entered and exited: EndedAt - StartedAt
+			// - entered but never exited (last active phase): now - StartedAt
+			// - never entered: 0
+			phaseDuration := func(start, end time.Time) float64 {
+				if start.IsZero() {
+					return 0
+				}
+				if !end.IsZero() {
+					return end.Sub(start).Seconds()
+				}
+				return now.Sub(start).Seconds()
+			}
+
 			attrs := []attribute.KeyValue{
-				attribute.Int64("node_drainer.immediate_eviction_duration_ms", nodeEvent.ImmediateEvictionDurationMs),
-				attribute.Int64("node_drainer.awaiting_pod_completion_duration_ms", nodeEvent.AwaitingPodCompletionDurationMs),
+				attribute.Float64("drain.immediate_eviction_duration_s", phaseDuration(nodeEvent.ImmediateEvictionStartedAt, nodeEvent.ImmediateEvictionEndedAt)),
+				attribute.Float64("drain.allow_completion_duration_s", phaseDuration(nodeEvent.AllowCompletionStartedAt, nodeEvent.AllowCompletionEndedAt)),
+				attribute.Float64("drain.delete_after_timeout_duration_s", phaseDuration(nodeEvent.DeleteAfterTimeoutStartedAt, nodeEvent.DeleteAfterTimeoutEndedAt)),
+				attribute.Int("node_drainer.pods_force_deleted_count", nodeEvent.PodsForceDeletedCount),
+				attribute.Int("node_drainer.total_requeues", m.queue.NumRequeues(nodeEvent)),
+			}
+			if len(nodeEvent.ForceDeletedPods) > 0 {
+				attrs = append(attrs, attribute.String("node_drainer.force_deleted_pods", nodeEvent.ForceDeletedPods))
 			}
 			if nodeEvent.DrainScope != "" {
 				attrs = append(attrs, attribute.String("node_drainer.drain.scope", nodeEvent.DrainScope))

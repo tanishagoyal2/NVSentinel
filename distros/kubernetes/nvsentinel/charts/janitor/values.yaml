@@ -17,9 +17,9 @@ replicaCount: 1
 
 # Image configuration
 image:
-  repository: nvcr.io/nv-ngc-devops/janitor
-  pullPolicy: Always
-  tag: "testing"
+  repository: ghcr.io/nvidia/nvsentinel/janitor
+  pullPolicy: IfNotPresent
+  tag: ""
 
 nameOverride: ""
 fullnameOverride: "janitor"

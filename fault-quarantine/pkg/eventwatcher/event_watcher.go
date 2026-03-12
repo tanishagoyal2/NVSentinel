@@ -56,7 +56,7 @@ type EventWatcherInterface interface {
 	Start(ctx context.Context) error
 	SetProcessEventCallback(callback func(ctx context.Context, event *model.HealthEventWithStatus) *model.Status)
 	SetFetchDocIDsFn(fn func(nodeName string) []string)
-	CancelLatestQuarantiningEvents(ctx context.Context, nodeName string) error
+	CancelLatestQuarantiningEvents(ctx context.Context, nodeName string, reason string) error
 }
 
 func NewEventWatcher(
@@ -185,6 +185,13 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	// Pass document ID in context so ProcessEvent can set health_event.id on the span
 	// when we have received the event from the event watcher.
 	ctx = context.WithValue(ctx, DocumentIDContextKey, eventID)
+
+	// Start the trace span here (not inside ProcessEvent) so both the callback
+	// and the subsequent DB status update share the same trace context.
+	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
+	ctx, processSpan := tracing.StartSpanWithLinkFromTraceContext(ctx, healthEventWithStatus.TraceID,
+		parentSpanID, "fault_quarantine.process_event")
+	defer processSpan.End()
 
 	startTime := time.Now()
 
@@ -389,8 +396,24 @@ func (w *EventWatcher) updateNodeQuarantineStatus(
 	nodeQuarantinedStatus *model.Status,
 	spanIDs map[string]string,
 ) error {
+	// Create a span for the DB status update. This span's ID becomes the parent
+	// for downstream consumers (node-drainer) because the status write is the
+	// trigger point for their change stream.
+	_, dbSpan := tracing.StartSpan(ctx, "fault_quarantine.db.update_status")
+	newSpanIDs := map[string]string{
+		tracing.ServiceFaultQuarantine: tracing.SpanIDFromSpan(dbSpan),
+	}
+	// Merge with any existing span IDs
+	for k, v := range spanIDs {
+		if _, exists := newSpanIDs[k]; !exists {
+			newSpanIDs[k] = v
+		}
+	}
+
 	err := client.UpdateHealthEventNodeQuarantineStatusWithSpanID(ctx, w.databaseClient, eventID,
-		string(*nodeQuarantinedStatus), spanIDs)
+		string(*nodeQuarantinedStatus), newSpanIDs)
+	dbSpan.End()
+
 	if err != nil {
 		return fmt.Errorf("error updating node quarantine status: %w", err)
 	}
@@ -403,6 +426,7 @@ func (w *EventWatcher) updateNodeQuarantineStatus(
 func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	ctx context.Context,
 	nodeName string,
+	reason string,
 ) error {
 	// Find the latest Quarantined or UnQuarantined event to check current state of node
 	filter := query.New().Build(query.And(
@@ -423,6 +447,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 			NodeName           string       `bson:"nodename" json:"nodeName"`
 			GeneratedTimestamp *dbTimestamp `bson:"generatedtimestamp" json:"generatedTimestamp"`
 		} `bson:"healthevent" json:"healthEvent"`
+		SpanIDs           map[string]string `bson:"span_ids"`
 		HealthEventStatus struct {
 			NodeQuarantined           string       `bson:"nodequarantined" json:"nodeQuarantined"`
 			QuarantineFinishTimestamp *dbTimestamp `bson:"quarantinefinishtimestamp,omitempty" json:"quarantineFinishTimestamp"`
@@ -468,9 +493,10 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		return nil
 	}
 
-	slog.Info("Found trace ID for cancelling quarantining events", "traceID", latestEvent.TraceID)
-
-	ctx, span := tracing.StartSpanFromTraceID(ctx, latestEvent.TraceID, "cancel_latest_quarantining_events")
+	platformConnectorSpanId := tracing.ParentSpanID(latestEvent.SpanIDs, tracing.ServicePlatformConnector)
+	// Use a detached context (no active span) so the new span becomes a true root
+	// within the trace, not a child of whatever span is currently active in ctx.
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(context.Background(), latestEvent.TraceID, platformConnectorSpanId, "fault_quarantine.cancel_latest_quarantining_events")
 	defer span.End()
 
 	// Update all events from the current quarantine session (Quarantined + AlreadyQuarantined)
@@ -515,6 +541,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "fault_quarantine")
 	span.SetAttributes(
 		attribute.String("fault_quarantine.event.node_quarantined", string(model.Cancelled)),
+		attribute.String("fault_quarantine.event.reason", reason),
 	)
 	return nil
 }

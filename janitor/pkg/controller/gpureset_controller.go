@@ -114,7 +114,7 @@ func (r *GPUResetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	annotations := gpuReset.GetAnnotations()
 	traceID := annotations["nvsentinel.nvidia.com/trace-id"]
 	spanID := annotations["nvsentinel.nvidia.com/span-id"]
-	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.gpureset.reconcile")
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, spanID, "janitor.gpureset.reconcile")
 	defer func() {
 		if span != nil {
 			span.End()

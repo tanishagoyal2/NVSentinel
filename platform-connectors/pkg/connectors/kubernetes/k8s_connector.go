@@ -21,7 +21,6 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -122,8 +121,8 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 			}
 
 			// Continue the trace from the gRPC handler so one trace shows both store and K8s processing.
-			batchCtx := trace.ContextWithRemoteSpanContext(ctx, item.ParentSpanContext)
-			batchCtx, span := tracing.StartSpan(batchCtx, "platform_connector.k8s.fetch_and_process_health_metric")
+			batchCtx, span := tracing.StartSpanWithLinkFromSpanContext(
+				ctx, item.ParentSpanContext, "platform_connector.k8s.fetch_and_process_health_metric")
 			span.SetAttributes(
 				attribute.Int("platform_connector.k8s.batch_event_count", len(healthEvents.GetEvents())),
 			)

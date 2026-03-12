@@ -15,7 +15,7 @@
 global:
   dryRun: false
   image:
-    tag: "main-a801e4b"
+    tag: "main"
   initContainerImage:
     repository: docker.io/bitnamilegacy/os-shell
     tag: "12-debian-12-r30"
@@ -203,9 +203,9 @@ networkPolicy:
 
 platformConnector:
   image:
-    repository: nvcr.io/nv-ngc-devops/platform-connectors
-    pullPolicy: Always
-    tag: "testing"
+    repository: ghcr.io/nvidia/nvsentinel/platform-connectors
+    pullPolicy: IfNotPresent
+    tag: ""
 
   resources:
     limits:

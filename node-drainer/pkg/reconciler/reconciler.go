@@ -17,7 +17,7 @@
 // Span attribute conventions for tracing:
 //   - node_drainer.processing_status: Pipeline/stage of the event (e.g. "enqueued", "draining").
 //     Answers: "Where is this event in the node-drainer pipeline?"
-//   - node_drainer.user_pods_eviction_status: The eviction result we persist to the DB (model.Status:
+//   - drain.status: The eviction result we persist to the DB (model.Status:
 //     InProgress, Succeeded, Failed, AlreadyDrained, Cancelled). Set when writing to MongoDB.
 //     Answers: "What is the stored eviction outcome for this document?"
 //   - Operation outcome (requeue, cancel, etc.) is inferred from span name, operation status, and error attributes.
@@ -132,17 +132,7 @@ func (r *Reconciler) Shutdown() {
 }
 
 // PreprocessAndEnqueueEvent preprocesses an event from the change stream before enqueueing it.
-// This function:
-// 1. Extracts and unmarshals the health event
-// 2. Skips events already in terminal status
-// 3. Sets the initial status to InProgress (idempotent - only updates if not already set)
-// 4. Enqueues the event to the processing queue
-//
-// This matches the behavior of the main branch's mongodb/event_watcher.go:preprocessAndEnqueueEvent
 func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client.Event) error {
-	ctx, span := tracing.StartSpan(ctx, "node_drainer.reconciler.preprocess_and_enqueue_event")
-	defer span.End()
-
 	// Unmarshal the full document
 	var document map[string]any
 	if err := event.UnmarshalDocument(&document); err != nil {
@@ -158,18 +148,48 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined
 
+	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
+	sessionCtx, enqueueSpan := tracing.StartSpanWithLinkFromTraceContext(
+		ctx,
+		healthEventWithStatus.TraceID,
+		parentSpanID,
+		"node_drainer.enqueue_event",
+	)
+	tracing.SetSpanAttributes(enqueueSpan,
+		attribute.String("node_drainer.node_name", nodeName),
+		attribute.String("node_drainer.event_id", healthEventWithStatus.HealthEvent.Id),
+	)
+	tracing.AddHealthEventStatusAttributes(
+		enqueueSpan,
+		&healthEventWithStatus.HealthEventStatus,
+		healthEventWithStatus.HealthEvent.Id,
+	)
+	defer enqueueSpan.End()
+
 	slog.Debug("Preprocessing event", "node", nodeName, "nodeQuarantined", nodeQuarantined)
 
 	// Skip if already in terminal state
 	if healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus != nil &&
 		isTerminalStatus(model.Status(healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status)) {
+		result := "already_drained"
+		switch healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status {
+		case model.StatusSucceeded:
+			result = "succeeded"
+		case model.StatusFailed:
+			result = "failed"
+		case model.Cancelled:
+			result = "cancelled"
+		case model.AlreadyDrained:
+			result = "already_drained"
+		}
 		slog.Debug("Skipping event - already in terminal state",
 			"node", healthEventWithStatus.HealthEvent.NodeName,
 			"status", healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status)
 
-		span.SetAttributes(
+		enqueueSpan.SetAttributes(
 			attribute.String("node_drainer.reconciler.status", "skipped"),
 			attribute.String("node_drainer.reconciler.message", "already in terminal state"),
+			attribute.String("node_drainer.drain.result", result),
 		)
 
 		return nil
@@ -185,16 +205,16 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 		documentID, nodeName, (*model.Status)(&healthEventWithStatus.HealthEventStatus.NodeQuarantined)); shouldSkip {
 		slog.Debug("Event skipped due to cancellation", "node", nodeName)
 
-		span.SetAttributes(
+		enqueueSpan.SetAttributes(
 			attribute.String("node_drainer.reconciler.status", "skipped"),
 			attribute.String("node_drainer.reconciler.message", fmt.Sprintf("event skipped due to %s status", *healthEventWithStatus.HealthEventStatus.NodeQuarantined)),
+			attribute.String("node_drainer.drain.result", "cancelled"),
 		)
 
 		return nil
 	}
 
-	// Set initial status to InProgress and enqueue (trace root with event data created here when we have health event)
-	return r.setInitialStatusAndEnqueue(ctx, document, documentID, nodeName)
+	return r.setInitialStatusAndEnqueue(sessionCtx, document, documentID, nodeName)
 }
 
 // handleEventCancellation handles Cancelled and UnQuarantined events
@@ -253,8 +273,24 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 		},
 	}
 
-	result, err := r.databaseClient.UpdateDocument(ctx, filter, update)
+	dbCtx, dbSpan := tracing.StartSpan(ctx, "node_drainer.db.update_status")
+	defer dbSpan.End()
+	dbSpan.SetAttributes(
+		attribute.String("node_drainer.db.operation", "update"),
+		attribute.String("drain.status", string(model.StatusInProgress)),
+	)
+
+	startTime := time.Now()
+	result, err := r.databaseClient.UpdateDocument(dbCtx, filter, update)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		tracing.RecordError(dbSpan, err)
+		tracing.SetOperationStatus(dbSpan, tracing.OperationStatusError, "node_drainer")
+		dbSpan.SetAttributes(
+			attribute.String("node_drainer.error.type", "db_update_error"),
+			attribute.String("node_drainer.error.message", err.Error()),
+		)
 		tracing.RecordError(span, err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
 		span.SetAttributes(
@@ -264,11 +300,13 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 		return fmt.Errorf("failed to update initial status: %w", err)
 	}
 
+	dbSpan.SetAttributes(
+		attribute.Float64("node_drainer.db.duration_ms", float64(duration.Nanoseconds())/1e6),
+	)
+	tracing.SetOperationStatus(dbSpan, tracing.OperationStatusSuccess, "node_drainer")
+
 	r.logStatusUpdateResult(result, nodeName, documentID)
 
-	// Enqueue to the queue manager. Pass nil for drainSessionSpan so the worker creates the
-	// node_drainer.drain_session span from the event's TraceID. That span is only ended when the
-	// worker completes, so duration/scope attributes are set on it before End() and appear in traces.
 	if err := r.queueManager.EnqueueEventGeneric(ctx, nodeName, datastore.Event(document), r.databaseClient, r.healthEventStore, nil); err != nil {
 		tracing.RecordError(span, err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
@@ -280,7 +318,7 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 	}
 
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
-	span.SetAttributes(attribute.String("node_drainer.processing_status", "enqueued")) // pipeline stage
+	span.SetAttributes(attribute.String("node_drainer.processing_status", "enqueued"))
 	return nil
 }
 
@@ -302,6 +340,14 @@ func isTerminalStatus(status model.Status) bool {
 		status == model.StatusFailed ||
 		status == model.Cancelled ||
 		status == model.AlreadyDrained
+}
+
+func isRequeueSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "requeu") || strings.HasPrefix(message, "waiting for")
 }
 
 // unmarshalGenericEvent converts a generic map to a specific struct using JSON marshaling
@@ -355,11 +401,10 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 
 	if r.isEventCancelled(eventID, nodeName, (*model.Status)(&nodeQuarantinedStatus)) {
 		slog.Info("Event was cancelled, performing cleanup", "node", nodeName, "eventID", eventID)
-		_, span := tracing.StartSpan(ctx, "node_drainer.handle_cancelled_event")
-		span.SetAttributes(attribute.String("node_drainer.drain.action", "cancelled"))
 
 		err := r.handleCancelledEvent(ctx, nodeName, &healthEventWithStatus, event, database, eventID)
 		if err != nil {
+			span := tracing.SpanFromContext(ctx)
 			tracing.RecordError(span, err)
 			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
 			span.SetAttributes(
@@ -367,7 +412,6 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
 		}
-		span.End()
 		return err
 	}
 
@@ -399,16 +443,32 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	healthEvent model.HealthEventWithStatus, event datastore.Event, database queue.DataStore, eventID string) error {
 	nodeName := healthEvent.HealthEvent.NodeName
 
-	// Set drain scope once on session metrics so drain_session span gets it at end (avoids repeating on every execute_check_completion).
-	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
+	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil {
 		if action.PartialDrainEntity != nil {
-			drainMetrics.DrainScope = "partial"
-			drainMetrics.PartialDrainEntityType = action.PartialDrainEntity.EntityType
-			drainMetrics.PartialDrainEntityValue = action.PartialDrainEntity.EntityValue
+			m.DrainScope = "partial"
+			m.PartialDrainEntityType = action.PartialDrainEntity.EntityType
+			m.PartialDrainEntityValue = action.PartialDrainEntity.EntityValue
 		} else {
-			drainMetrics.DrainScope = "full"
+			m.DrainScope = "full"
+		}
+
+		// Stamp phase end times the first time the evaluator moves away from a phase.
+		now := time.Now()
+		if action.Action != evaluator.ActionEvictImmediate &&
+			!m.ImmediateEvictionStartedAt.IsZero() && m.ImmediateEvictionEndedAt.IsZero() {
+			m.ImmediateEvictionEndedAt = now
+		}
+		if action.Action != evaluator.ActionEvictWithTimeout &&
+			!m.DeleteAfterTimeoutStartedAt.IsZero() && m.DeleteAfterTimeoutEndedAt.IsZero() {
+			m.DeleteAfterTimeoutEndedAt = now
+		}
+		if action.Action != evaluator.ActionCheckCompletion &&
+			!m.AllowCompletionStartedAt.IsZero() && m.AllowCompletionEndedAt.IsZero() {
+			m.AllowCompletionEndedAt = now
 		}
 	}
+
+	actionSpan := tracing.SpanFromContext(ctx)
 
 	switch action.Action {
 	case evaluator.ActionSkip:
@@ -429,30 +489,26 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 	case evaluator.ActionEvictImmediate:
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		err := r.executeImmediateEviction(ctx, action, healthEvent, action.PartialDrainEntity)
-		if err != nil && !strings.Contains(err.Error(), "requeuing") {
-			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
-			tracing.RecordError(span, err)
-			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
-			span.SetAttributes(
+		if err != nil && !isRequeueSignal(err) {
+			tracing.RecordError(actionSpan, err)
+			tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")
+			actionSpan.SetAttributes(
 				attribute.String("node_drainer.error.type", "immediate_eviction_error"),
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
-			span.End()
 		}
 		return err
 
 	case evaluator.ActionEvictWithTimeout:
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 		err := r.executeTimeoutEviction(ctx, action, healthEvent, eventID, action.PartialDrainEntity)
-		if err != nil && !strings.Contains(err.Error(), "requeuing") {
-			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
-			tracing.RecordError(span, err)
-			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
-			span.SetAttributes(
+		if err != nil && !isRequeueSignal(err) {
+			tracing.RecordError(actionSpan, err)
+			tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")
+			actionSpan.SetAttributes(
 				attribute.String("node_drainer.error.type", "timeout_eviction_error"),
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
-			span.End()
 		}
 		return err
 
@@ -469,14 +525,12 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		if err == nil {
 			r.deleteCustomDrainCRIfEnabled(ctx, nodeName, eventID)
 		} else {
-			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
-			tracing.RecordError(span, err)
-			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
-			span.SetAttributes(
+			tracing.RecordError(actionSpan, err)
+			tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")
+			actionSpan.SetAttributes(
 				attribute.String("node_drainer.error.type", "mark_already_drained_error"),
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
-			span.End()
 		}
 
 		return err
@@ -485,27 +539,23 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		r.clearEventStatus(eventID, nodeName)
 		err := r.executeUpdateStatus(ctx, healthEvent, event, database, action.Status)
 		if err != nil {
-			_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
-			tracing.RecordError(span, err)
-			tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
-			span.SetAttributes(
+			tracing.RecordError(actionSpan, err)
+			tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")
+			actionSpan.SetAttributes(
 				attribute.String("node_drainer.error.type", "update_status_error"),
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
-			span.End()
 		}
 		return nil
 
 	default:
 		err := fmt.Errorf("unknown action: %s", action.Action.String())
-		_, span := tracing.StartSpan(ctx, "node_drainer.execute_action")
-		tracing.RecordError(span, err)
-		tracing.SetOperationStatus(span, tracing.OperationStatusError, "node_drainer")
-		span.SetAttributes(
+		tracing.RecordError(actionSpan, err)
+		tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")
+		actionSpan.SetAttributes(
 			attribute.String("node_drainer.error.type", "unknown_action"),
 			attribute.String("node_drainer.error.message", err.Error()),
 		)
-		span.End()
 		return err
 	}
 }
@@ -568,7 +618,10 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 
 func (r *Reconciler) executeImmediateEviction(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, partialDrainEntity *protos.Entity) error {
-	start := time.Now()
+	// Record the wall-clock start time of this phase on first entry.
+	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.ImmediateEvictionStartedAt.IsZero() {
+		m.ImmediateEvictionStartedAt = time.Now()
+	}
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	for _, namespace := range action.Namespaces {
@@ -586,18 +639,16 @@ func (r *Reconciler) executeImmediateEviction(ctx context.Context, action *evalu
 		}
 	}
 
-	// Accumulate duration on drain_session so one total is shown instead of multiple spans
-	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
-		drainMetrics.ImmediateEvictionDurationMs += time.Since(start).Milliseconds()
-	}
 	return fmt.Errorf("immediate eviction completed, requeuing for status verification")
 }
 
 func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, eventID string, partialDrainEntity *protos.Entity) error {
-	ctx, span := tracing.StartSpan(ctx, "execute_timeout_eviction")
-	defer span.End()
-
+	// Record the wall-clock start time of the delete-after-timeout phase on first entry.
+	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.DeleteAfterTimeoutStartedAt.IsZero() {
+		m.DeleteAfterTimeoutStartedAt = time.Now()
+	}
+	span := tracing.SpanFromContext(ctx)
 	nodeName := healthEvent.HealthEvent.NodeName
 	timeoutMinutes := int(action.Timeout.Minutes())
 
@@ -663,10 +714,11 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 
 func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, partialDrainEntity *protos.Entity) error {
-	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_check_completion")
-	defer span.End()
-
-	start := time.Now()
+	// Record the wall-clock start time of the allow-completion phase on first entry.
+	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.AllowCompletionStartedAt.IsZero() {
+		m.AllowCompletionStartedAt = time.Now()
+	}
+	span := tracing.SpanFromContext(ctx)
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	allPodsComplete := true
@@ -718,15 +770,9 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 		slog.Info("Pods still running on node, requeuing for later check",
 			"node", nodeName,
 			"remainingPods", remainingPods)
-		if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
-			drainMetrics.AwaitingPodCompletionDurationMs += time.Since(start).Milliseconds()
-		}
 		return fmt.Errorf("waiting for pods to complete: %d pods remaining", len(remainingPods))
 	}
 
-	if drainMetrics := queue.DrainSessionMetricsFromContext(ctx); drainMetrics != nil {
-		drainMetrics.AwaitingPodCompletionDurationMs += time.Since(start).Milliseconds()
-	}
 	slog.Info("All pods completed on node", "node", nodeName)
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("pod completion verified, requeuing for status update")

@@ -237,23 +237,15 @@ func startEventWatcher(ctx context.Context, components *initializer.Components, 
 				continue
 			}
 
-			parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
-			eventCtx, span := tracing.StartSpanFromTraceContext(ctx, healthEventWithStatus.TraceID, parentSpanID, "node_drainer.event_watcher.event")
-
-			tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
-
-			if err := components.Reconciler.PreprocessAndEnqueueEvent(eventCtx, event); err != nil {
+			if err := components.Reconciler.PreprocessAndEnqueueEvent(ctx, event); err != nil {
 				slog.Error("Failed to preprocess and enqueue event", "error", err)
-				span.End()
 				continue
 			}
 
 			resumeToken := event.GetResumeToken()
-			if err := components.EventWatcher.MarkProcessed(eventCtx, resumeToken); err != nil {
+			if err := components.EventWatcher.MarkProcessed(ctx, resumeToken); err != nil {
 				slog.Error("Error updating resume token", "error", err)
 			}
-
-			span.End()
 		}
 
 		slog.Info("Event watcher stopped")

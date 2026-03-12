@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-multierror"
-	"go.opentelemetry.io/otel/attribute"
 	v1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -42,6 +41,7 @@ import (
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
+	"github.com/nvidia/nvsentinel/node-drainer/pkg/queue"
 )
 
 const (
@@ -751,10 +751,14 @@ func (i *Informers) forceDeletePods(ctx context.Context, pods []*v1.Pod) error {
 
 	if len(forceDeletedPods) > 0 {
 		sort.Strings(forceDeletedPods)
-		span.SetAttributes(
-			attribute.String("node_drainer.force_deleted_pods", strings.Join(forceDeletedPods, ",")),
-			attribute.Int("node_drainer.force_deleted_pods_count", len(forceDeletedPods)),
-		)
+		if m := queue.DrainSessionMetricsFromContext(ctx); m != nil {
+			m.PodsForceDeletedCount += len(forceDeletedPods)
+			if len(m.ForceDeletedPods) > 0 {
+				m.ForceDeletedPods += "," + strings.Join(forceDeletedPods, ",")
+			} else {
+				m.ForceDeletedPods = strings.Join(forceDeletedPods, ",")
+			}
+		}
 	}
 
 	return result.ErrorOrNil()

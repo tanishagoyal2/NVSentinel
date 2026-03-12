@@ -15,9 +15,9 @@
 replicaCount: 1
 
 image:
-  repository: nvcr.io/nv-ngc-devops/fault-quarantine
-  pullPolicy: Always
-  tag: "testing"
+  repository: ghcr.io/nvidia/nvsentinel/fault-quarantine
+  pullPolicy: IfNotPresent
+  tag: ""
 
 resources: 
   limits:

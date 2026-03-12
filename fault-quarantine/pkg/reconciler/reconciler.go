@@ -439,15 +439,10 @@ func (r *Reconciler) ProcessEvent(
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) *model.Status {
-	parentSpanID := tracing.ParentSpanID(event.SpanIDs, tracing.ServicePlatformConnector)
-	ctx, span := tracing.StartSpanFromTraceContext(ctx, event.TraceID, parentSpanID, "fault_quarantine.process_event")
-	defer span.End()
-
-	// Store this span's ID so the event watcher can persist it for downstream services.
-	if event.SpanIDs == nil {
-		event.SpanIDs = make(map[string]string)
-	}
-	event.SpanIDs[tracing.ServiceFaultQuarantine] = tracing.SpanIDFromSpan(span)
+	// The trace span (fault_quarantine.process_event) is created by the event watcher
+	// so that both this callback and the subsequent DB status update share the same
+	// trace context. We retrieve it here for attribute enrichment.
+	span := tracing.SpanFromContext(ctx)
 
 	if id, ok := ctx.Value(eventwatcher.DocumentIDContextKey).(string); ok && id != "" {
 		event.HealthEvent.Id = id
@@ -458,7 +453,9 @@ func (r *Reconciler) ProcessEvent(
 	}
 
 	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {
-		span.SetAttributes(attribute.String("fault_quarantine.processing_status", "halted"))
+		if span != nil {
+			span.SetAttributes(attribute.String("fault_quarantine.processing_status", "halted"))
+		}
 		tracing.SetOperationStatus(span, tracing.OperationStatusThrottled, "fault_quarantine")
 		return nil
 	}
@@ -1627,7 +1624,7 @@ func (r *Reconciler) handleManualUncordon(nodeName string) error {
 	if r.eventWatcher != nil {
 		slog.Debug("Calling CancelLatestQuarantiningEvents for manual uncordon", "node", nodeName)
 
-		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName); err != nil {
+		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName, "Manual uncordoning detected"); err != nil {
 			slog.Error("Failed to cancel latest quarantining events for manually uncordoned node",
 				"node", nodeName, "error", err)
 			metrics.ProcessingErrors.WithLabelValues("mongodb_cancel_quarantine_error").Inc()
@@ -1699,7 +1696,7 @@ func (r *Reconciler) handleManualUntaint(nodeName string) error {
 	if r.eventWatcher != nil {
 		slog.Debug("Calling CancelLatestQuarantiningEvents for manual untaint", "node", nodeName)
 
-		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName); err != nil {
+		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName, "Manual untainting detected"); err != nil {
 			slog.Error("Failed to cancel latest quarantining events for manually untainted node",
 				"node", nodeName, "error", err)
 			metrics.ProcessingErrors.WithLabelValues("mongodb_cancel_quarantine_error").Inc()

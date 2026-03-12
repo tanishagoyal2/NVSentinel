@@ -90,7 +90,7 @@ func (r *RebootNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, errors.New("traceID is empty")
 	}
 	spanID := annotations["nvsentinel.nvidia.com/span-id"]
-	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.rebootnode.reconcile")
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, spanID, "janitor.rebootnode.reconcile")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("janitor.rebootnode.name", rebootNode.Name),

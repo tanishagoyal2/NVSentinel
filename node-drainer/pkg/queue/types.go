@@ -16,6 +16,7 @@ package queue
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
@@ -39,9 +40,19 @@ type NodeEvent struct {
 	// DrainSessionSpan is the parent span for all process_event cycles for this item. Set on first process, ended when processing completes (no requeue).
 	DrainSessionSpan trace.Span
 
-	// Cumulative durations across all process_event cycles for this drain session. Set on drain_session span when it ends.
-	ImmediateEvictionDurationMs     int64
-	AwaitingPodCompletionDurationMs int64
+	// Phase start timestamps — set on first entry into each phase, zero if not yet started.
+	ImmediateEvictionStartedAt  time.Time
+	AllowCompletionStartedAt    time.Time
+	DeleteAfterTimeoutStartedAt time.Time
+	// Phase end timestamps — set when the phase transitions away, used to compute accurate wall-clock duration.
+	ImmediateEvictionEndedAt  time.Time
+	AllowCompletionEndedAt    time.Time
+	DeleteAfterTimeoutEndedAt time.Time
+
+	// Pods force-deleted during this session (comma-separated namespace/name).
+	PodsForceDeletedCount int
+	ForceDeletedPods      string
+
 	// Drain scope (set once when action is known); recorded on drain_session span when it ends.
 	DrainScope              string
 	PartialDrainEntityType  string

@@ -147,8 +147,10 @@ func StartSpanFromTraceID(ctx context.Context, traceID string, name string, opts
 }
 
 // StartSpanFromTraceContext starts a new span from an existing trace ID and
-// optional parent span ID. This is the primary mechanism for continuing traces
-// across service boundaries that communicate via database or CR annotations.
+// optional parent span ID using a parent-child relationship.
+//
+// Prefer this for synchronous boundaries where the parent span lifetime encloses
+// the child span lifetime.
 //
 // When both traceID and parentSpanID are provided, the new span becomes a
 // child of the remote parent, forming a proper parent-child relationship in
@@ -195,6 +197,54 @@ func StartSpanFromTraceContext(ctx context.Context, traceID, parentSpanID, name 
 	})
 	ctx = trace.ContextWithSpanContext(ctx, remoteCtx)
 	return StartSpan(ctx, name, opts...)
+}
+
+// StartSpanWithLinkFromTraceContext starts a span in the provided trace and
+// adds a span link to the upstream span context (when available), without
+// creating a parent-child relationship. This is preferred for async handoffs
+// across modules or queues.
+func StartSpanWithLinkFromTraceContext(
+	ctx context.Context,
+	traceID, parentSpanID, name string,
+	opts ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
+	if traceID == "" {
+		return StartSpan(ctx, name, opts...)
+	}
+
+	if parentSpanID != "" {
+		tid, traceErr := trace.TraceIDFromHex(traceID)
+		sid, spanErr := trace.SpanIDFromHex(parentSpanID)
+		if traceErr == nil && spanErr == nil {
+			opts = append(opts, trace.WithLinks(trace.Link{
+				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    tid,
+					SpanID:     sid,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				}),
+			}))
+		}
+	}
+
+	return StartSpanFromTraceID(ctx, traceID, name, opts...)
+}
+
+// StartSpanWithLinkFromSpanContext starts a span in the same trace as the
+// upstream span context and adds a span link to it, without parent-child
+// nesting. This is useful for async fan-out within a service.
+func StartSpanWithLinkFromSpanContext(
+	ctx context.Context,
+	upstream trace.SpanContext,
+	name string,
+	opts ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
+	if !upstream.IsValid() {
+		return StartSpan(ctx, name, opts...)
+	}
+
+	opts = append(opts, trace.WithLinks(trace.Link{SpanContext: upstream}))
+	return StartSpanFromTraceID(ctx, upstream.TraceID().String(), name, opts...)
 }
 
 // SpanIDFromSpan returns the hex-encoded span ID of the given span,

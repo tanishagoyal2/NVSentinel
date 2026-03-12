@@ -79,7 +79,7 @@ func (r *TerminateNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	annotations := terminateNode.GetAnnotations()
 	traceID := annotations["nvsentinel.nvidia.com/trace-id"]
 	spanID := annotations["nvsentinel.nvidia.com/span-id"]
-	ctx, span := tracing.StartSpanFromTraceContext(ctx, traceID, spanID, "janitor.terminatenode.reconcile")
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, spanID, "janitor.terminatenode.reconcile")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("janitor.terminatenode.name", terminateNode.Name),

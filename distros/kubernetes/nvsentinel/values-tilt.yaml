@@ -130,7 +130,7 @@ preflight:
     enabled: true
     insecure: true
     collector:
-      exportEndpoint: "http://tempo.nvsentinel.svc.cluster.local:4318"
+      exportEndpoint: "http://nvsentinel-tempo.nvsentinel.svc.cluster.local:4318"
 
 mongodb-store:
   useBitnami: true

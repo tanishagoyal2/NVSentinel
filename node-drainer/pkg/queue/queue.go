@@ -48,7 +48,6 @@ func (m *eventQueueManager) SetDataStoreEventProcessor(processor DataStoreEventP
 }
 
 // EnqueueEventGeneric enqueues an event using the new database-agnostic interface.
-// If drainSessionSpan is non-nil, it is used as the trace root (event data is on that span); worker will not create a new one.
 func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName string, event datastore.Event,
 	database DataStore, healthEventStore datastore.HealthEventStore, drainSessionSpan trace.Span) error {
 	if ctx.Err() != nil {
@@ -140,11 +139,20 @@ func ExtractSpanIDsFromEvent(event datastore.Event) map[string]string {
 
 // DrainSessionMetrics accumulates durations and drain scope across process_event cycles so the drain_session span can show a single total.
 type DrainSessionMetrics struct {
-	ImmediateEvictionDurationMs     int64
-	AwaitingPodCompletionDurationMs int64
-	DrainScope                      string
-	PartialDrainEntityType          string
-	PartialDrainEntityValue         string
+	// Phase start timestamps — set on first entry, used to compute wall-clock duration when session ends.
+	ImmediateEvictionStartedAt  time.Time
+	AllowCompletionStartedAt    time.Time
+	DeleteAfterTimeoutStartedAt time.Time
+	// Phase end timestamps — set when the phase transitions away.
+	ImmediateEvictionEndedAt  time.Time
+	AllowCompletionEndedAt    time.Time
+	DeleteAfterTimeoutEndedAt time.Time
+
+	PodsForceDeletedCount   int
+	ForceDeletedPods        string
+	DrainScope              string
+	PartialDrainEntityType  string
+	PartialDrainEntityValue string
 }
 
 type drainSessionMetricsContextKey struct{}
@@ -160,6 +168,24 @@ func ContextWithDrainSessionMetrics(ctx context.Context, m *DrainSessionMetrics)
 func DrainSessionMetricsFromContext(ctx context.Context) *DrainSessionMetrics {
 	if m, _ := ctx.Value(drainSessionMetricsKey).(*DrainSessionMetrics); m != nil {
 		return m
+	}
+	return nil
+}
+
+type nodeEventContextKey struct{}
+
+var nodeEventKey = nodeEventContextKey{}
+
+// ContextWithNodeEvent attaches the current NodeEvent pointer to ctx so the reconciler
+// can access phase spans stored on the event without passing them explicitly.
+func ContextWithNodeEvent(ctx context.Context, e *NodeEvent) context.Context {
+	return context.WithValue(ctx, nodeEventKey, e)
+}
+
+// NodeEventFromContext returns the NodeEvent from ctx, or nil if not set.
+func NodeEventFromContext(ctx context.Context) *NodeEvent {
+	if e, _ := ctx.Value(nodeEventKey).(*NodeEvent); e != nil {
+		return e
 	}
 	return nil
 }

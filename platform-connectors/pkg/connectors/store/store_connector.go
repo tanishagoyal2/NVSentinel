@@ -32,7 +32,6 @@ import (
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
 	_ "github.com/nvidia/nvsentinel/store-client/pkg/datastore/providers"
 	"github.com/nvidia/nvsentinel/store-client/pkg/factory"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type DatabaseStoreConnector struct {
@@ -110,8 +109,8 @@ func (r *DatabaseStoreConnector) FetchAndProcessHealthMetric(ctx context.Context
 			}
 
 			// Continue the trace from the gRPC handler so one trace shows both store and K8s processing.
-			batchCtx := trace.ContextWithRemoteSpanContext(ctx, item.ParentSpanContext)
-			batchCtx, span := tracing.StartSpan(batchCtx, "platform_connector.store.fetch_and_process_health_metric")
+			batchCtx, span := tracing.StartSpanWithLinkFromSpanContext(
+				ctx, item.ParentSpanContext, "platform_connector.store.fetch_and_process_health_metric")
 			eventCount := len(healthEvents.GetEvents())
 			span.SetAttributes(
 				attribute.Int("platform_connector.store.batch_event_count", eventCount),
@@ -195,14 +194,15 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 	ctx, span := tracing.StartSpan(ctx, "platform_connector.receive_event")
 	defer span.End()
 
-	// Prepare all documents for batch insertion
+	// Create the db.insert span first so downstream consumers become its children,
+	// not children of the broader receive_event span. This prevents negative self-time
+	// because the db.insert span is the trigger point for the change stream.
+	_, dbSpan := tracing.StartSpan(ctx, "platform_connector.db.insert")
+	defer dbSpan.End()
+
 	healthEventWithStatusList := make([]interface{}, 0, len(healthEvents.GetEvents()))
 
 	for i, healthEvent := range healthEvents.GetEvents() {
-		// CRITICAL FIX: Clone the HealthEvent to avoid pointer reuse issues with gRPC buffers
-		// Without this clone, the healthEvent pointer may point to reused gRPC buffer memory
-		// that gets overwritten by subsequent requests, causing data corruption in MongoDB.
-		// This manifests as events having wrong isfatal/ishealthy/message values.
 		clonedHealthEvent := proto.Clone(healthEvent).(*protos.HealthEvent)
 
 		slog.Debug("Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
@@ -210,7 +210,7 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 		healthEventWithStatusObj := model.HealthEventWithStatus{
 			TraceID: span.SpanContext().TraceID().String(),
 			SpanIDs: map[string]string{
-				tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(span),
+				tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
 			},
 			CreatedAt:   time.Now().UTC(),
 			HealthEvent: clonedHealthEvent,
@@ -220,7 +220,6 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 		}
 		healthEventWithStatusList = append(healthEventWithStatusList, healthEventWithStatusObj)
 
-		// Add health event attributes to span (for first event in batch)
 		if i == 0 {
 			tracing.AddHealthEventAttributes(span, healthEventWithStatusObj.HealthEvent)
 			span.SetAttributes(
@@ -230,10 +229,6 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 	}
 
 	slog.Debug("Inserting health events batch", "documentCount", len(healthEventWithStatusList))
-
-	// Create child span for database operation
-	ctx, dbSpan := tracing.StartSpan(ctx, "platform_connector.db.insert")
-	defer dbSpan.End()
 
 	dbSpan.SetAttributes(
 		attribute.String("platform_connector.db.operation", "insert"),

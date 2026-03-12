@@ -62,7 +62,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 	feature.Assess("Check if MultipleRemediations node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
-		gpuNodeName := "kwok-node-10"
+		gpuNodeName := "kwok-node-8"
 
 		event := helpers.NewHealthEvent(gpuNodeName).
 			WithFatal(true).

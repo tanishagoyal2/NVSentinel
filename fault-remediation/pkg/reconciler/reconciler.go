@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -69,6 +71,12 @@ type FaultRemediationReconciler struct {
 	Config            ReconcilerConfig
 	annotationManager annotation.NodeAnnotationManagerInterface
 	dryRun            bool
+	eventSessionMu    sync.Mutex
+	eventSessions     map[string]*eventTraceSession
+}
+
+type eventTraceSession struct {
+	span oteltrace.Span
 }
 
 // NewFaultRemediationReconciler creates a new FaultRemediationReconciler with the provided dependencies.
@@ -86,6 +94,7 @@ func NewFaultRemediationReconciler(
 		Config:            config,
 		annotationManager: config.RemediationClient.GetAnnotationManager(),
 		dryRun:            dryRun,
+		eventSessions:     make(map[string]*eventTraceSession),
 	}
 }
 
@@ -95,7 +104,7 @@ func NewFaultRemediationReconciler(
 func (r *FaultRemediationReconciler) Reconcile(
 	ctx context.Context,
 	event *datastore.EventWithToken,
-) (ctrl.Result, error) {
+) (result ctrl.Result, reconcileErr error) {
 	start := time.Now()
 
 	slog.Info("Reconciling Event")
@@ -117,9 +126,19 @@ func (r *FaultRemediationReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
+	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
-	ctx, span := tracing.StartSpanFromTraceContext(ctx, healthEventWithStatus.HealthEventWithStatus.TraceID,
-		parentSpanID, "fault_remediation.process_event")
+	sessionCtx, session := r.startOrReuseEventSession(ctx,
+		healthEventWithStatus.HealthEventWithStatus.TraceID,
+		parentSpanID,
+		healthEventWithStatus.ID,
+		nodeName,
+	)
+	defer func() {
+		r.completeEventSession(healthEventWithStatus.ID, session, result, reconcileErr)
+	}()
+
+	ctx, span := tracing.StartSpan(sessionCtx, "fault_remediation.reconcile")
 	defer func() {
 		if span != nil {
 			span.End()
@@ -128,8 +147,12 @@ func (r *FaultRemediationReconciler) Reconcile(
 
 	// Add health event attributes to span (nil-safe: span and optional status fields)
 	tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
-
-	nodeName := healthEventWithStatus.HealthEvent.NodeName
+	if span != nil {
+		span.SetAttributes(
+			attribute.String("fault_remediation.event.id", healthEventWithStatus.ID),
+			attribute.String("fault_remediation.node.name", nodeName),
+		)
+	}
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined
 
 	if nodeQuarantined == string(model.UnQuarantined) || nodeQuarantined == string(model.Cancelled) {
@@ -143,7 +166,54 @@ func (r *FaultRemediationReconciler) Reconcile(
 		return r.handleCancellationEvent(ctx, nodeName, model.Status(nodeQuarantined), r.Watcher, event.ResumeToken)
 	}
 
-	return r.handleRemediationEvent(ctx, &healthEventWithStatus, *event, r.Watcher, r.healthEventStore)
+	result, reconcileErr = r.handleRemediationEvent(ctx, &healthEventWithStatus, *event, r.Watcher, r.healthEventStore)
+	return result, reconcileErr
+}
+
+func (r *FaultRemediationReconciler) startOrReuseEventSession(
+	ctx context.Context,
+	traceID, parentSpanID, eventID, nodeName string,
+) (context.Context, *eventTraceSession) {
+	r.eventSessionMu.Lock()
+	defer r.eventSessionMu.Unlock()
+
+	if session, ok := r.eventSessions[eventID]; ok && session != nil && session.span != nil {
+		return oteltrace.ContextWithSpan(ctx, session.span), session
+	}
+
+	sessionCtx, sessionSpan := tracing.StartSpanWithLinkFromTraceContext(
+		ctx, traceID, parentSpanID, "fault_remediation.event_received")
+	session := &eventTraceSession{span: sessionSpan}
+	sessionSpan.SetAttributes(
+		attribute.String("fault_remediation.event.id", eventID),
+		attribute.String("fault_remediation.node.name", nodeName),
+	)
+
+	r.eventSessions[eventID] = session
+	return sessionCtx, session
+}
+
+func (r *FaultRemediationReconciler) completeEventSession(
+	eventID string,
+	session *eventTraceSession,
+	result ctrl.Result,
+	reconcileErr error,
+) {
+	// Keep the lifecycle span open while controller-runtime is still retrying/requeueing.
+	if reconcileErr != nil || result.Requeue || result.RequeueAfter > 0 {
+		return
+	}
+
+	r.eventSessionMu.Lock()
+	defer r.eventSessionMu.Unlock()
+
+	current, ok := r.eventSessions[eventID]
+	if !ok || current != session || current == nil || current.span == nil {
+		return
+	}
+
+	current.span.End()
+	delete(r.eventSessions, eventID)
 }
 
 func (r *FaultRemediationReconciler) shouldSkipEvent(ctx context.Context,
@@ -315,14 +385,26 @@ func (r *FaultRemediationReconciler) handleCancellationEvent(
 	watcherInstance datastore.ChangeStreamWatcher,
 	resumeToken []byte,
 ) (ctrl.Result, error) {
+	ctx, span := tracing.StartSpan(ctx, "fault_remediation.cancellation_event")
+	defer span.End()
+
 	slog.Info("Cancellation event received, clearing all remediation state",
 		"node", nodeName,
 		"status", status)
+	span.SetAttributes(
+		attribute.String("fault_remediation.node.name", nodeName),
+		attribute.String("fault_remediation.cancellation.status", string(status)),
+	)
 
 	if err := r.annotationManager.ClearRemediationState(ctx, nodeName); err != nil {
 		slog.Error("Failed to clear remediation state for node",
 			"node", nodeName,
 			"error", err)
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("fault_remediation.error.type", "clear_remediation_state_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 
 		return ctrl.Result{}, fmt.Errorf("failed to clear remediation state for node: %w", err)
 	}
@@ -330,6 +412,11 @@ func (r *FaultRemediationReconciler) handleCancellationEvent(
 	if err := watcherInstance.MarkProcessed(context.Background(), resumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
 		slog.Error("Error updating resume token", "error", err)
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("fault_remediation.error.type", "mark_processed_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 
 		return ctrl.Result{}, fmt.Errorf("failed to mark event as processed: %w", err)
 	}
@@ -415,10 +502,17 @@ func (r *FaultRemediationReconciler) trySkipEvent(
 	if !r.shouldSkipEvent(ctx, healthEventWithStatus.HealthEventWithStatus, groupConfig) {
 		return ctrl.Result{}, nil, false
 	}
+	ctx, skipSpan := tracing.StartSpan(ctx, "fault_remediation.skip_event")
+	defer skipSpan.End()
 
 	if err := watcherInstance.MarkProcessed(ctx, eventWithToken.ResumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
 		slog.Error("Error updating resume token", "error", err)
+		tracing.RecordError(skipSpan, err)
+		skipSpan.SetAttributes(
+			attribute.String("fault_remediation.error.type", "mark_processed_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 
 		return ctrl.Result{}, fmt.Errorf("error updating resume token: %w", err), true
 	}
@@ -504,6 +598,12 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 	if err = r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken, nodeRemediatedStatus); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("update_status_error", nodeName).Inc()
 		slog.Error("Error updating remediation status for node", "error", err)
+		tracing.RecordError(span, err)
+		span.SetAttributes(
+			attribute.String("fault_remediation.status", "failed"),
+			attribute.String("fault_remediation.error.type", "update_status_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 
 		return ctrl.Result{}, errors.Join(performRemediationErr, err)
 	}
@@ -512,14 +612,12 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 		return ctrl.Result{}, performRemediationErr
 	}
 
-	// Span: remediation finished (CR created and status updated)
-	_, finishSpan := tracing.StartSpan(ctx, "fault_remediation.remediation_finished")
-	finishSpan.SetAttributes(
-		attribute.String("remediation.cr.name", crName),
-		attribute.String("remediation.status", "succeeded"),
-		attribute.String("node.name", nodeName),
-	)
-	finishSpan.End()
+	// Point-in-time marker for CR status persistence (avoid micro-span noise).
+	span.AddEvent("fault_remediation.remediation_finished", oteltrace.WithAttributes(
+		attribute.String("fault_remediation.cr.name", crName),
+		attribute.String("fault_remediation.status", "succeeded"),
+		attribute.String("fault_remediation.node.name", nodeName),
+	))
 
 	return ctrl.Result{}, nil
 }
@@ -547,8 +645,16 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 	eventWithToken datastore.EventWithToken,
 	nodeRemediatedStatus bool,
 ) error {
+	ctx, statusSpan := tracing.StartSpan(ctx, "fault_remediation.remediation_status_updated")
+	defer statusSpan.End()
+
 	documentID, err := utils.ExtractDocumentID(eventWithToken.Event)
 	if err != nil {
+		tracing.RecordError(statusSpan, err)
+		statusSpan.SetAttributes(
+			attribute.String("fault_remediation.error.type", "extract_document_id_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 		return err
 	}
 
@@ -568,8 +674,18 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 
 	err = healthEventStore.UpdateHealthEventStatus(ctx, documentID, status)
 	if err != nil {
+		tracing.RecordError(statusSpan, err)
+		statusSpan.SetAttributes(
+			attribute.String("fault_remediation.error.type", "update_health_event_status_error"),
+			attribute.String("fault_remediation.error.message", err.Error()),
+		)
 		return fmt.Errorf("error updating document with ID: %v, error: %w", documentID, err)
 	}
+
+	statusSpan.SetAttributes(
+		attribute.String("fault_remediation.event.id", documentID),
+		attribute.Bool("fault_remediation.remediation.status_updated", nodeRemediatedStatus),
+	)
 
 	slog.Info("Health event has been updated with status",
 		"id", documentID,

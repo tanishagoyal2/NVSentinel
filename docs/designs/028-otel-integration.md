@@ -12,6 +12,8 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 
 - **Span attributes** — Key-value metadata attached to a span (e.g. `node.name`, `remediation.cr.name`, `event.processing_status`). They describe what happened during that span without needing to search logs. Attributes are used for filtering and grouping in tracing UIs (e.g. Grafana Tempo) and for understanding why a span succeeded or failed.
 
+- **Span links** — A span link connects spans that are causally related but not in a strict parent-child relationship. Links are the OpenTelemetry-standard way to model asynchronous fan-out/fan-in and queue/change-stream handoffs where work may run in parallel or outlive the trigger span.
+
 ## How Can Traces Be Helpful?
 - **Module-level performance**: How long does fault-quarantine take vs node-drainer vs fault-remediation?
 - **Database query latency**: Time spent in MongoDB aggregation pipelines (health-events-analyzer)
@@ -26,7 +28,7 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 ## How Traces Are Different From Logs and Metrics?
 
 Logs are discrete, unordered (or time-ordered) messages from each service. To follow one health event across platform-connector, fault-quarantine, node-drainer, fault-remediation, and health-events-analyzer, you must search by event ID or node name, align timestamps, and mentally reconstruct the flow.
-Traces are structured around a single request or workflow: one trace ID ties together all spans from all modules for that event, with an explicit parent-child and timeline.
+Traces are structured around a single request or workflow: one trace ID ties together all spans from all modules for that event, with explicit relationships (parent-child for synchronous calls and links for asynchronous handoffs).
 
 - **End-to-end view of one event** — One trace shows the full path of one health event (ingestion → quarantine → drain → remediation). With logs you must correlate multiple services by hand.
 - **Timing and bottlenecks** — Spans have start/end times and nesting, so you see exactly where time was spent (e.g. DB query execution in health-events-analyzer vs draining operation in node-drainer). Logs give timestamps but not a single timeline or hierarchy.
@@ -182,6 +184,25 @@ Without trace context propagation, each service would create its own trace with 
 
 With context propagation, the trace ID is carried with the event (e.g. in metadata) from one module to the next. Every module that handles the same event continues the same trace and adds its own spans. The result is a single trace that shows the entire journey of the event—from ingestion through quarantine, drain, and remediation—so you can see the full timeline, spot bottlenecks, and debug failures in one place.
 
+### Span Links for Asynchronous Boundaries
+
+OpenTelemetry defines span links as the preferred way to model related work that does not have a strict parent-child nesting, especially for fan-out and asynchronous pipelines. See:
+
+- [Creating links between traces (OpenTelemetry)](https://opentelemetry.io/docs/languages/dotnet/traces/links-creation/)
+
+In NVSentinel, we use links for:
+
+- **Async fan-out inside platform-connectors**: one ingestion operation fans out into store and Kubernetes processing paths that run independently.
+- **Cross-module asynchronous handoffs**: downstream modules consume events from MongoDB change streams and should be causally related to the upstream module's trigger span, without forcing synchronous nesting.
+
+Why we use links in this system:
+
+- **Correct async semantics**: avoids modeling independent async work as if it were a blocking child call.
+- **More accurate module timing**: module root spans represent their real processing duration.
+- **Prevents misleading trace math artifacts**: avoids negative/self-time distortions that can happen when async child spans outlive parent spans.
+
+Important: some tracing UIs emphasize parent-child edges in graph view. Links are still recorded and queryable, but may appear in span details rather than as graph arrows.
+
 ### Cross-Service Trace Continuity
 
 NVSentinel uses distributed tracing to maintain trace context across all modules.
@@ -304,6 +325,18 @@ Platform Connector:
    - Kubernetes API calls
    - Rule evaluations
    - CR creation
+
+### Relationship Model: Parent-Child vs Links
+
+Use **parent-child** relationships for synchronous, in-module call chains where the child work is executed within the parent's lifetime.
+
+Use **span links** for:
+
+- asynchronous fan-out/fan-in paths
+- queue/change-stream based handoffs between modules
+- detached/background operations that may outlive the triggering span
+
+This hybrid model gives accurate per-module timings while preserving causal relationships across the full health event lifecycle.
 
 
 ### Trace Export
