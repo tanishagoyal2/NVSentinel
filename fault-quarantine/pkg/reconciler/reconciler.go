@@ -480,7 +480,6 @@ func (r *Reconciler) ProcessEvent(
 			metrics.TotalEventsSuccessfullyProcessed.Inc()
 		}
 	}
-	span.SetAttributes(attribute.String("event.consumer", "fault-quarantine"))
 
 	return isNodeQuarantined
 }

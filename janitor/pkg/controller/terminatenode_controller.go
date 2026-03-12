@@ -167,6 +167,8 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 				span.SetAttributes(
 					attribute.String("janitor.terminatenode.status", "succeeded"),
 					attribute.Bool("janitor.terminatenode.node_terminated", true),
+					attribute.Float64("janitor.terminatenode.duration_seconds",
+						time.Since(terminateNode.CreationTimestamp.Time).Seconds()),
 				)
 			}
 
@@ -196,6 +198,8 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 					attribute.String("janitor.terminatenode.status", "succeeded"),
 					attribute.Bool("janitor.terminatenode.node_terminated", true),
 					attribute.Bool("janitor.terminatenode.node_deleted", true),
+					attribute.Float64("janitor.terminatenode.duration_seconds",
+						time.Since(terminateNode.CreationTimestamp.Time).Seconds()),
 				)
 			}
 
@@ -220,6 +224,8 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 					attribute.String("janitor.terminatenode.status", "failed"),
 					attribute.String("janitor.error.type", "timeout"),
 					attribute.String("janitor.error.message", "Node failed to transition to not ready state after timeout"),
+					attribute.Float64("janitor.terminatenode.duration_seconds",
+						time.Since(terminateNode.CreationTimestamp.Time).Seconds()),
 				)
 			}
 

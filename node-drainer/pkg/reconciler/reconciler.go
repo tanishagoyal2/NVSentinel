@@ -17,7 +17,7 @@
 // Span attribute conventions for tracing:
 //   - node_drainer.processing_status: Pipeline/stage of the event (e.g. "enqueued", "draining").
 //     Answers: "Where is this event in the node-drainer pipeline?"
-//   - drain.status: The eviction result we persist to the DB (model.Status:
+//   - node_drainer.eviction_status: The eviction result we persist to the DB (model.Status:
 //     InProgress, Succeeded, Failed, AlreadyDrained, Cancelled). Set when writing to MongoDB.
 //     Answers: "What is the stored eviction outcome for this document?"
 //   - Operation outcome (requeue, cancel, etc.) is inferred from span name, operation status, and error attributes.
@@ -277,7 +277,7 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 	defer dbSpan.End()
 	dbSpan.SetAttributes(
 		attribute.String("node_drainer.db.operation", "update"),
-		attribute.String("drain.status", string(model.StatusInProgress)),
+		attribute.String("node_drainer.eviction_status", string(model.StatusInProgress)),
 	)
 
 	startTime := time.Now()
@@ -618,11 +618,26 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 
 func (r *Reconciler) executeImmediateEviction(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, partialDrainEntity *protos.Entity) error {
-	// Record the wall-clock start time of this phase on first entry.
-	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.ImmediateEvictionStartedAt.IsZero() {
-		m.ImmediateEvictionStartedAt = time.Now()
-	}
 	nodeName := healthEvent.HealthEvent.NodeName
+
+	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil {
+		if m.ImmediateEvictionStartedAt.IsZero() {
+			m.ImmediateEvictionStartedAt = time.Now()
+			// Record which pods are targeted on first entry only.
+			var podNames []string
+			for _, ns := range action.Namespaces {
+				pods, err := r.informers.FindEvictablePodsInNamespaceAndNode(ns, nodeName, partialDrainEntity)
+				if err == nil {
+					for _, p := range pods {
+						podNames = append(podNames, fmt.Sprintf("%s/%s", ns, p.Name))
+					}
+				}
+			}
+			if len(podNames) > 0 {
+				m.ImmediateEvictionPods = strings.Join(podNames, ",")
+			}
+		}
+	}
 
 	for _, namespace := range action.Namespaces {
 		if err := r.informers.EvictAllPodsInImmediateMode(ctx, namespace, nodeName, action.Timeout,
@@ -647,6 +662,19 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 	// Record the wall-clock start time of the delete-after-timeout phase on first entry.
 	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.DeleteAfterTimeoutStartedAt.IsZero() {
 		m.DeleteAfterTimeoutStartedAt = time.Now()
+		// Record which pods are targeted on first entry only.
+		var podNames []string
+		for _, ns := range action.Namespaces {
+			pods, err := r.informers.FindEvictablePodsInNamespaceAndNode(ns, healthEvent.HealthEvent.NodeName, partialDrainEntity)
+			if err == nil {
+				for _, p := range pods {
+					podNames = append(podNames, fmt.Sprintf("%s/%s", ns, p.Name))
+				}
+			}
+		}
+		if len(podNames) > 0 {
+			m.DeleteAfterTimeoutPods = strings.Join(podNames, ",")
+		}
 	}
 	span := tracing.SpanFromContext(ctx)
 	nodeName := healthEvent.HealthEvent.NodeName
@@ -655,16 +683,6 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 	span.SetAttributes(
 		attribute.Int("node_drainer.timeout_minutes", timeoutMinutes),
 	)
-
-	if partialDrainEntity != nil {
-		span.SetAttributes(
-			attribute.String("node_drainer.drain.scope", "partial"),
-			attribute.String("node_drainer.partial_drain.entity_type", partialDrainEntity.EntityType),
-			attribute.String("node_drainer.partial_drain.entity_value", partialDrainEntity.EntityValue),
-		)
-	} else {
-		span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
-	}
 
 	// Check if this event has been cancelled before proceeding with timeout eviction
 	// This prevents force-deleting pods when a manual uncordon has happened
@@ -717,6 +735,19 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 	// Record the wall-clock start time of the allow-completion phase on first entry.
 	if m := queue.DrainSessionMetricsFromContext(ctx); m != nil && m.AllowCompletionStartedAt.IsZero() {
 		m.AllowCompletionStartedAt = time.Now()
+		// Record which pods are targeted on first entry only.
+		var podNames []string
+		for _, ns := range action.Namespaces {
+			pods, err := r.informers.FindEvictablePodsInNamespaceAndNode(ns, healthEvent.HealthEvent.NodeName, partialDrainEntity)
+			if err == nil {
+				for _, p := range pods {
+					podNames = append(podNames, fmt.Sprintf("%s/%s", ns, p.Name))
+				}
+			}
+		}
+		if len(podNames) > 0 {
+			m.AllowCompletionPods = strings.Join(podNames, ",")
+		}
 	}
 	span := tracing.SpanFromContext(ctx)
 	nodeName := healthEvent.HealthEvent.NodeName
@@ -747,9 +778,6 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 	}
 
 	if !allPodsComplete {
-		span.SetAttributes(
-			attribute.String("node_drainer.waiting_for_pods", strings.Join(remainingPods, ", ")),
-		)
 		sort.Strings(remainingPods)
 
 		message := fmt.Sprintf("Waiting for following pods to finish: %v", remainingPods)
@@ -1205,7 +1233,7 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.DrainActionResult,
 	healthEvent model.HealthEventWithStatus, event datastore.Event, database queue.DataStore,
 	partialDrainEntity *protos.Entity) error {
-	ctx, span := tracing.StartSpan(ctx, "execute_custom_drain")
+	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_custom_drain")
 	defer span.End()
 
 	nodeName := healthEvent.HealthEvent.NodeName
@@ -1245,16 +1273,6 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 		PodsToDrain: podsToDrain,
 	}
 
-	if partialDrainEntity != nil {
-		span.SetAttributes(
-			attribute.String("node_drainer.drain.scope", "partial"),
-			attribute.String("node_drainer.partial_drain.entity_type", partialDrainEntity.EntityType),
-			attribute.String("node_drainer.partial_drain.entity_value", partialDrainEntity.EntityValue),
-		)
-	} else {
-		span.SetAttributes(attribute.String("node_drainer.drain.scope", "full"))
-	}
-
 	crName, err := r.customDrainClient.CreateDrainCR(ctx, templateData)
 	if err != nil {
 		tracing.RecordError(span, err)
@@ -1272,6 +1290,7 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 
 	span.SetAttributes(
 		attribute.String("node_drainer.custom_cr.name", crName),
+		attribute.Bool("node_drainer.custom_cr.created", true),
 	)
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("waiting for custom drain CR to complete: %s", crName)
@@ -1301,6 +1320,11 @@ func (r *Reconciler) deleteCustomDrainCRIfEnabled(ctx context.Context, nodeName 
 		slog.Info("Deleted custom drain CR",
 			"node", nodeName,
 			"crName", crName)
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("node_drainer.custom_cr.name", crName),
+			attribute.Bool("node_drainer.custom_cr.deleted", true),
+		)
 	}
 }
 

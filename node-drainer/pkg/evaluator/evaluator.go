@@ -21,6 +21,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/common"
@@ -382,6 +385,12 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 			"crName", crName,
 			"error", err)
 
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("node_drainer.custom_cr.name", crName),
+			attribute.String("node_drainer.custom_cr.status", "error"),
+		)
+
 		return &DrainActionResult{
 			Action:    ActionWait,
 			WaitDelay: customDrainPollInterval,
@@ -408,10 +417,36 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 		}, nil
 	}
 
+	if !crExists {
+		if nodeDrainComplete {
+			slog.Info("Another drain CR completed for this node, marking as already drained",
+				"node", nodeName)
+
+			return &DrainActionResult{
+				Action: ActionMarkAlreadyDrained,
+				Status: model.AlreadyDrained,
+			}, nil
+		}
+
+		slog.Info("Another drain CR is in progress for this node, waiting",
+			"node", nodeName)
+
+		return &DrainActionResult{
+			Action:    ActionWait,
+			WaitDelay: customDrainPollInterval,
+		}, nil
+	}
+
+	span := tracing.SpanFromContext(ctx)
 	if !isComplete {
 		slog.Debug("Drain CR in progress",
 			"node", nodeName,
 			"crName", crName)
+
+		span.SetAttributes(
+			attribute.String("node_drainer.custom_cr.name", crName),
+			attribute.String("node_drainer.custom_cr.status", "in_progress"),
+		)
 
 		return &DrainActionResult{
 			Action:    ActionWait,
@@ -422,6 +457,11 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 	slog.Info("Drain CR completed",
 		"node", nodeName,
 		"crName", crName)
+
+	span.SetAttributes(
+		attribute.String("node_drainer.custom_cr.name", crName),
+		attribute.String("node_drainer.custom_cr.status", "completed"),
+	)
 
 	return &DrainActionResult{
 		Action: ActionMarkAlreadyDrained,

@@ -253,6 +253,13 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 		slog.Info("Node reached ready state post-reboot", "node", node.Name)
 		metrics.GlobalMetrics.RecordActionMTTR(metrics.ActionTypeReboot, time.Since(rebootNode.CreationTimestamp.Time))
 
+		if span := tracing.SpanFromContext(ctx); span != nil {
+			timeToReady := time.Since(rebootNode.CreationTimestamp.Time).Seconds()
+			span.SetAttributes(
+				attribute.Float64("janitor.rebootnode.time_to_ready_seconds", timeToReady),
+			)
+		}
+
 		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionTrue, "Succeeded",
 			"Node reached ready state post-reboot", metrics.StatusSucceeded)
 	}
@@ -288,6 +295,10 @@ func (r *RebootNodeReconciler) completeNodeReadyCheck(
 			attribute.String("janitor.rebootnode.reason", reason),
 			attribute.Bool("janitor.rebootnode.node_ready", conditionStatus == metav1.ConditionTrue),
 		)
+		if rebootNode.Status.StartTime != nil {
+			span.SetAttributes(attribute.Float64("janitor.rebootnode.duration_seconds",
+				time.Since(rebootNode.Status.StartTime.Time).Seconds()))
+		}
 	}
 
 	return ctrl.Result{}

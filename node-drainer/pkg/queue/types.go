@@ -53,6 +53,11 @@ type NodeEvent struct {
 	PodsForceDeletedCount int
 	ForceDeletedPods      string
 
+	// Pod lists recorded once on first entry into each phase. Comma-separated namespace/name.
+	ImmediateEvictionPods  string
+	AllowCompletionPods    string
+	DeleteAfterTimeoutPods string
+
 	// Drain scope (set once when action is known); recorded on drain_session span when it ends.
 	DrainScope              string
 	PartialDrainEntityType  string

@@ -44,6 +44,7 @@ import (
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/crstatus"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/events"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/metrics"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -555,6 +556,13 @@ func (c *FaultRemediationClient) checkLogCollectorComplete(
 		if job.Status.StartTime != nil {
 			duration := job.Status.CompletionTime.Sub(job.Status.StartTime.Time).Seconds()
 			metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "success").Observe(duration)
+
+			span := tracing.SpanFromContext(ctx)
+			span.SetAttributes(
+				attribute.String("fault_remediation.log_collector.job_name", job.Name),
+				attribute.String("fault_remediation.log_collector.result", "success"),
+				attribute.Float64("fault_remediation.log_collector.duration_s", duration),
+			)
 		}
 	}
 
@@ -617,6 +625,13 @@ func (c *FaultRemediationClient) recordLogCollectorFailureMetrics(
 	metrics.LogCollectorJobs.WithLabelValues(nodeName, "failure").Inc()
 	metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "failure").Observe(duration)
 
+	span := tracing.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("fault_remediation.log_collector.job_name", job.Name),
+		attribute.String("fault_remediation.log_collector.outcome", "failure"),
+		attribute.Float64("fault_remediation.log_collector.duration_s", duration),
+	)
+
 	return nil
 }
 
@@ -657,6 +672,13 @@ func (c *FaultRemediationClient) checkLogCollectorTimedOut(
 
 		metrics.LogCollectorJobs.WithLabelValues(nodeName, "timeout").Inc()
 		metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "timeout").Observe(timeout.Seconds())
+
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("fault_remediation.log_collector.job_name", job.Name),
+			attribute.String("fault_remediation.log_collector.result", "timeout"),
+			attribute.Float64("fault_remediation.log_collector.duration_s", timeout.Seconds()),
+		)
 	}
 
 	return true, nil

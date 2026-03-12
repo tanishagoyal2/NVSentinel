@@ -150,6 +150,10 @@ type DrainSessionMetrics struct {
 
 	PodsForceDeletedCount   int
 	ForceDeletedPods        string
+	// Pod lists recorded once on first entry into each phase. Comma-separated namespace/name.
+	ImmediateEvictionPods   string
+	AllowCompletionPods     string
+	DeleteAfterTimeoutPods  string
 	DrainScope              string
 	PartialDrainEntityType  string
 	PartialDrainEntityValue string

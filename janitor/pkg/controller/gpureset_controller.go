@@ -198,6 +198,15 @@ func setGPUResetSpanAttributes(span trace.Span, gr *v1alpha1.GPUReset) {
 	if gr.Status.CompletionTime != nil {
 		attrs = append(attrs, attribute.String("janitor.gpureset.completion_time", gr.Status.CompletionTime.Format(time.RFC3339)))
 	}
+	// Q2: Record which GPUs are targeted for the reset.
+	if gr.Spec.Selector != nil {
+		if len(gr.Spec.Selector.UUIDs) > 0 {
+			attrs = append(attrs, attribute.String("janitor.gpureset.gpu_uuids", strings.Join(gr.Spec.Selector.UUIDs, ",")))
+		}
+		if len(gr.Spec.Selector.PCIBusIDs) > 0 {
+			attrs = append(attrs, attribute.String("janitor.gpureset.pci_bus_ids", strings.Join(gr.Spec.Selector.PCIBusIDs, ",")))
+		}
+	}
 	span.SetAttributes(attrs...)
 }
 
@@ -756,10 +765,15 @@ func (r *GPUResetReconciler) reconcileCompletion(ctx context.Context, gr *v1alph
 
 	log.Info("GPU reset successful", "node", nodeName)
 	if span := tracing.SpanFromContext(ctx); span != nil {
-		span.SetAttributes(
+		attrs := []attribute.KeyValue{
 			attribute.String("event.processing_status", "succeeded"),
 			attribute.String("janitor.gpureset.completion_time", metav1.Now().Format(time.RFC3339)),
-		)
+		}
+		if gr.Status.StartTime != nil {
+			attrs = append(attrs, attribute.Float64("janitor.gpureset.duration_seconds",
+				time.Since(gr.Status.StartTime.Time).Seconds()))
+		}
+		span.SetAttributes(attrs...)
 	}
 
 	updatedGR := gr.DeepCopy()
@@ -1116,12 +1130,17 @@ func (r *GPUResetReconciler) reconcileTerminalFailure(
 
 	log.Error(errors.New(message), "terminal failure", "node", nodeName, "reason", reason)
 	if span := tracing.SpanFromContext(ctx); span != nil {
-		span.SetAttributes(
+		attrs := []attribute.KeyValue{
 			attribute.String("event.processing_status", "failed"),
 			attribute.String("janitor.gpureset.failure_reason", string(reason)),
 			attribute.String("janitor.error.type", string(reason)),
 			attribute.String("janitor.error.message", message),
-		)
+		}
+		if gr.Status.StartTime != nil {
+			attrs = append(attrs, attribute.Float64("janitor.gpureset.duration_seconds",
+				time.Since(gr.Status.StartTime.Time).Seconds()))
+		}
+		span.SetAttributes(attrs...)
 		span.RecordError(errors.New(message))
 		span.SetStatus(codes.Error, message)
 	}

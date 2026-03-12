@@ -291,8 +291,13 @@ func (r *FaultRemediationReconciler) runLogCollector(
 		return ctrl.Result{}, nil
 	}
 
-	ctx, span := tracing.StartSpan(ctx, "fault_remediation.log_collector_started")
+	ctx, span := tracing.StartSpan(ctx, "fault_remediation.log_collector")
 	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("fault_remediation.log_collector.node", healthEvent.NodeName),
+		attribute.String("fault_remediation.log_collector.event_id", eventUID),
+	)
 
 	slog.Info("Log collector feature enabled; running log collector for node",
 		"node", healthEvent.NodeName)

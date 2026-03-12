@@ -37,7 +37,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
 
-	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
@@ -706,9 +705,6 @@ func (i *Informers) getNodeDrainTimeout(timeout int,
 }
 
 func (i *Informers) forceDeletePods(ctx context.Context, pods []*v1.Pod) error {
-	ctx, span := tracing.StartSpan(ctx, "node_drainer.force_delete_pods")
-	defer span.End()
-
 	gracePeriod := int64(0)
 
 	var wg sync.WaitGroup
