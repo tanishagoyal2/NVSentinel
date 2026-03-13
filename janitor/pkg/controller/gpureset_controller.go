@@ -766,7 +766,7 @@ func (r *GPUResetReconciler) reconcileCompletion(ctx context.Context, gr *v1alph
 	log.Info("GPU reset successful", "node", nodeName)
 	if span := tracing.SpanFromContext(ctx); span != nil {
 		attrs := []attribute.KeyValue{
-			attribute.String("event.processing_status", "succeeded"),
+			attribute.String("janitor.gpureset.processing_status", "succeeded"),
 			attribute.String("janitor.gpureset.completion_time", metav1.Now().Format(time.RFC3339)),
 		}
 		if gr.Status.StartTime != nil {
@@ -1131,7 +1131,7 @@ func (r *GPUResetReconciler) reconcileTerminalFailure(
 	log.Error(errors.New(message), "terminal failure", "node", nodeName, "reason", reason)
 	if span := tracing.SpanFromContext(ctx); span != nil {
 		attrs := []attribute.KeyValue{
-			attribute.String("event.processing_status", "failed"),
+			attribute.String("janitor.gpureset.processing_status", "failed"),
 			attribute.String("janitor.gpureset.failure_reason", string(reason)),
 			attribute.String("janitor.error.type", string(reason)),
 			attribute.String("janitor.error.message", message),

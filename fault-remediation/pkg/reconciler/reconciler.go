@@ -342,6 +342,8 @@ func (r *FaultRemediationReconciler) performRemediation(ctx context.Context,
 	remediationLabelValue := statemanager.RemediationSucceededLabelValue
 
 	ctx, crSpan := tracing.StartSpan(ctx, "fault_remediation.remediation_cr_created")
+	// Pass remediation_cr_created span ID so the CR gets nvsentinel.nvidia.com/span-id for janitor trace linking.
+	healthEventData.SpanIDForCR = tracing.SpanIDFromSpan(crSpan)
 	crName, createMaintenanceResourceError := r.Config.RemediationClient.CreateMaintenanceResource(ctx,
 		healthEventData, groupConfig)
 	if createMaintenanceResourceError != nil {
@@ -685,6 +687,15 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 			attribute.String("fault_remediation.error.message", err.Error()),
 		)
 		return fmt.Errorf("error updating document with ID: %v, error: %w", documentID, err)
+	}
+
+	// Record the remediation_status_updated span ID in the document (last FR child when status is written).
+	// Enables downstream modules or trace UIs to link to this span.
+	if spanID := tracing.SpanIDFromSpan(statusSpan); spanID != "" {
+		if updateErr := healthEventStore.UpdateSpanID(ctx, documentID, tracing.ServiceFaultRemediation, spanID); updateErr != nil {
+			slog.Warn("Failed to write fault_remediation span ID to document", "id", documentID, "error", updateErr)
+			// Non-fatal: status was updated; span_id is for trace linking only
+		}
 	}
 
 	statusSpan.SetAttributes(

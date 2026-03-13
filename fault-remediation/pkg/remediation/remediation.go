@@ -196,8 +196,12 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 		return "", fmt.Errorf("failed to get node for owner reference: %w", err)
 	}
 
-	// Pass the current span's ID so janitor can establish a parent-child relationship.
-	spanID := tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx))
+	// Use the remediation_cr_created span ID passed from the reconciler so janitor can link to the span that created the CR.
+	// If not set (e.g. legacy caller), fall back to current span in context.
+	spanID := healthEventData.SpanIDForCR
+	if spanID == "" {
+		spanID = tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx))
+	}
 	templateData := templateDataFromEvent(healthEvent, healthEventID, healthEventData.TraceID, spanID,
 		recommendedActionName, groupConfig.ImpactedEntityScopeValue, maintenanceResource)
 

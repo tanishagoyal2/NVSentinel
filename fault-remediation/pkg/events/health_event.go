@@ -28,4 +28,7 @@ type HealthEventDoc struct {
 type HealthEventData struct {
 	ID                          string `bson:"_id,omitempty"`
 	model.HealthEventWithStatus `bson:",inline"`
+	// SpanIDForCR is the fault_remediation.remediation_cr_created span ID to annotate on the maintenance CR
+	// so janitor can link its span to the span that created the CR. Set by the reconciler after starting that span.
+	SpanIDForCR string `bson:"-" json:"-"`
 }

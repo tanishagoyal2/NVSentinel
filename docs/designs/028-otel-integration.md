@@ -10,7 +10,7 @@ To debug health events in NVSentinel, operators must manually correlate logs acr
 
 - **Span** — A span is a single unit of work within a trace (e.g. "process event", "create remediation CR", "run log collector"). Each span has a name, start and end time, and can have parent and child spans. Spans are nested: one trace contains many spans, and spans can contain child spans. Together they form a timeline and call graph for the event.
 
-- **Span attributes** — Key-value metadata attached to a span (e.g. `node.name`, `remediation.cr.name`, `event.processing_status`). They describe what happened during that span without needing to search logs. Attributes are used for filtering and grouping in tracing UIs (e.g. Grafana Tempo) and for understanding why a span succeeded or failed.
+- **Span attributes** — Key-value metadata attached to a span (e.g. `node_drainer.node_name`, `fault_remediation.cr.name`, `janitor.gpureset.processing_status`). They describe what happened during that span without needing to search logs. Attributes are used for filtering and grouping in tracing UIs (e.g. Grafana Tempo) and for understanding why a span succeeded or failed.
 
 - **Span links** — A span link connects spans that are causally related but not in a strict parent-child relationship. Links are the OpenTelemetry-standard way to model asynchronous fan-out/fan-in and queue/change-stream handoffs where work may run in parallel or outlive the trigger span.
 
@@ -32,10 +32,10 @@ Traces are structured around a single request or workflow: one trace ID ties tog
 
 - **End-to-end view of one event** — One trace shows the full path of one health event (ingestion → quarantine → drain → remediation). With logs you must correlate multiple services by hand.
 - **Timing and bottlenecks** — Spans have start/end times and nesting, so you see exactly where time was spent (e.g. DB query execution in health-events-analyzer vs draining operation in node-drainer). Logs give timestamps but not a single timeline or hierarchy.
-- **Structured context without log parsing** — Span attributes (e.g. `node.name`, `drain.status`, `event.processing_status`) are queryable and filterable in the trace UI. No need to grep or parse log lines.
+- **Structured context without log parsing** — Span attributes (e.g. `node_drainer.node_name`, `node_drainer.drain.scope`, `janitor.gpureset.processing_status`) are queryable and filterable in the trace UI. No need to grep or parse log lines.
 - **Cross-module flow** — Traces show which modules touched the same event and in what order. Logs are per-service; correlating across modules is manual.
 - **Failure diagnosis** — A failed span is visible in the trace with status and attributes; you see the failing step and its parent path. With logs you must infer causality from messages and timestamps.
-- **Performance and SLOs** — Trace-based latency percentiles and service maps are built-in. With logs you’d need custom metrics or log-based metrics to get the same view.
+- **Performance and SLOs** — Trace-based latency percentiles and service maps are built-in. With logs you'd need custom metrics or log-based metrics to get the same view.
 
 Logs are useful for detailed, free-form messages (e.g. stack traces, debug dumps). Traces complement them by giving a structured, request-scoped view of *where*, *what* and *how long* work happened across the breakfix pipeline.
 Traces are not to replace logs — we are adding it as an additional feature alongside existing logging to improve debugging and analyze system performance.
@@ -49,8 +49,7 @@ Traces are per-request: each health event gets one trace with spans across all m
 
 ## Architecture Diagram
 
-The following diagram shows how traces flow from NVSentinel modules through the in-namespace OpenTelemetry Collector to the configured backend.
-
+The following diagram shows how traces flow from NVSentinel modules to a OpenTelemetry Collector. 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                         NVSentinel Namespace                                 │
@@ -58,123 +57,177 @@ The following diagram shows how traces flow from NVSentinel modules through the 
 │  platform-connector   fault-quarantine   node-drainer   fault-remediation    │
 │  health-events-analyzer   janitor   janitor-provider   event-exporter        │
 │         │                    │                │                │              │
-│         │  OTLP (gRPC :4317) │                │                │              │
+│         │  OTLP (gRPC)       │                │                │              │
 │         └────────────────────┴────────────────┴────────────────┘              │
 │                                      │                                       │
-│                                      ▼                                       │
-│  ┌───────────────────────────────────────────────────────────────────────┐    │
-│  │  OTel Collector (otel-collector subchart, otel-collector:4317)        │    │
-│  │  - Receives OTLP traces from all NVSentinel modules (in-namespace)   │    │
-│  │  - Batches and forwards to configured backend                        │    │
-│  │  - Image: otel/opentelemetry-collector-contrib                       │    │
-│  └──────────────────────────────────┬────────────────────────────────────┘    │
-│                                     │                                        │
-└─────────────────────────────────────┼────────────────────────────────────────┘
-                                      │
-                       ┌──────────────┼──────────────┐
-                       │              │              │
-                       ▼              ▼              ▼
-              ┌──────────────┐ ┌───────────┐ ┌─────────────────┐
-              │  Panoptes    │ │  Tempo    │ │  Any OTLP       │
-              │  (OTLP HTTP) │ │  (local)  │ │  Backend        │
-              └──────────────┘ └───────────┘ └─────────────────┘
-                       │
-                       ▼
-              ┌──────────────────────────────────────────────────────────────┐
-              │  Grafana Dashboards                                          │
-              │  - Trace explorer, service map, latency analysis             │
-              └──────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────┼───────────────────────────────────────┘
+                                       │
+                                       │  global.tracing.endpoint
+                                       │  (internal or external collector)
+                                       ▼
+              ┌───────────────────────────────────────────────────────────────┐
+              │  OTel Collector (dgxc-alloy, Grafana alloy, OTEL collector etc.) │
+              │  - Receives OTLP from NVSentinel modules                      │
+              │  - Batches and forwards to backend (Tempo, Panoptes, etc.)     │
+              └──────────────────────────────────┬────────────────────────────┘
+                                                 │
+                                  ┌──────────────┼──────────────┐
+                                  ▼              ▼              ▼
+                         ┌──────────────┐ ┌───────────┐ ┌─────────────────----┐
+                         │  Jaeger      │ │  Tempo    │ │  Any Backend service│
+                         └──────────────┘ └───────────┘ └─────────────────----┘
+                                  │
+                                  ▼
+                         ┌──────────────────────────────────────────────────────┐
+                         │  Grafana Dashboards                                   │
+                         │  - Trace explorer, service map, latency analysis      │
+                         └──────────────────────────────────────────────────────┘
 ```
 
 **Trace flow summary:**
 
-1. **Ingestion**: Each NVSentinel module exports spans via OTLP over gRPC to the in-namespace OTel Collector (`otel-collector:4317`). No authentication is required from modules to the collector (in-namespace, `OTEL_EXPORTER_OTLP_INSECURE=true`).
-2. **Collector**: The OTel Collector (deployed as an NVSentinel subchart) receives traces, batches them, and forwards to the configured backend endpoint via OTLP HTTP. The collector handles batching, retry, and (when needed) authentication to the backend.
-3. **Backend**: The backend is configurable via `global.tracing.collector.exportEndpoint`. This can be Panoptes, a cluster-local Tempo instance, Grafana Cloud, or any OTLP-compatible backend. Grafana Tempo is used as the datasource for querying and visualizing traces in Grafana.
+1. **Ingestion**: The OTel Collector (e.g. dgxc-alloy, Grafana Alloy, or the OpenTelemetry Collector) run separately. To connect NVSentinel to it, set `global.tracing.endpoint` to the collector's OTLP gRPC address. Helm injects this value into each module as `OTEL_EXPORTER_OTLP_ENDPOINT`, so every module exports spans via OTLP over gRPC to that collector. All NVSentinel traces therefore flow to the same collector for batching and forwarding.
+2. **Collector**: The OTEL collector receives traces from NVSentinel modules, batches them, and forwards them to the chosen backend.
+3. **Backend**: The backend (Tempo, Panoptes, Grafana Cloud, Jaeger, etc.) is where traces are exported and stored. The backend—or a UI connected to it (e.g. Grafana with a Tempo datasource, Jaeger UI)—is used to query and visualize traces.
 
-**Why an in-namespace OTel Collector instead of dgxc-alloy?**
-The dgxc-alloy gateway is optional on clusters and may not be present. By deploying the OTel Collector as part of NVSentinel, tracing works on any cluster regardless of whether dgxc-alloy is installed. If dgxc-alloy is available, `global.tracing.endpoint` can be overridden to point modules directly at it, bypassing the NVSentinel collector.
+**Integration with internal or external OTel Collector:**  
+Updating `global.tracing.endpoint` is sufficient to integrate NVSentinel with any OTLP-capable collector. Point it at an in-cluster collector (e.g. `dgxc-alloy.observability.svc.cluster.local:4317`) or an external one (e.g. `otel-collector.nvsentinel.svc.local:4317`). No in-namespace collector is required.
 
-## What Are We Planning to Track from Each Module?
+## Span Naming and Attribute Conventions
 
-### Fault-Quarantine Actions to Track
+All span names and span attributes are prefixed with the module name. This ensures every attribute is unambiguous in Grafana TraceQL queries (e.g. `{node_drainer.drain.scope="partial"}`) and prevents key collisions across modules.
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Cordon + Taint Operation** | Determine if a health event resulted in quarantining a node (cordon, taint, or both). Critical for understanding what actions were taken. | `quarantine.action.cordon` (bool)<br>`quarantine.action.taint` (bool)<br>`event.processing_status = "Quarantined"` |
-| **Unquarantine Operation** | Determine if a health event resulted in unquarantining a node | `quarantine.action.uncordon` (bool)<br>`taints.removed` (bool)<br>`event.processing_status = "UnQuarantined"` |
-| **Event Processing Status** | Track event lifecycle from reception to completion. Helps identify bottlenecks, queue delays, and processing states. | `event.processing_status = "waiting_to_be_processed" → "processing"` |
-| **Processing Errors** | Track all errors that occur during event processing. Essential for debugging, identifying failure patterns, and understanding error rates. | `event.processing_status = "error"`<br>`error.message` = error details |
-| **Node Labels and Annotations** | Track when and what labels/annotations were applied on the node. Helps verify what metadata was set for the event and debug scheduling or visibility issues. | `quarantine.labels_applied` (bool)<br>`quarantine.annotations_applied` (bool)<br>`quarantine.cordon_reason` (list, optional) |
-| **Ruleset Matched** | Track which ruleset(s) matched for the event. Explains why quarantine was triggered (which CEL rule matched); helps debug rule configuration, audit quarantine decisions, and filter traces by ruleset. | `quarantine.ruleset.matched` (string or list)<br>`quarantine.ruleset.names` (list, optional) |
+### Span Types
 
-### Node Drainer Actions to Track
+Each module creates two categories of spans:
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Drain Status** | Track final drain status (succeeded, failed, cancelled, already_drained). | `drain.status` = "succeeded", "failed", "cancelled", "already_drained", "in_progress" |
-| **Timeout Eviction** | Track when pods are force-deleted after timeout. Important for understanding timeout-based drain operations and stuck pods. | `drain.forceDeletedPods` = ["pod-0", "pod-1"]<br>`drain.timeout_eviction_count` (int) |
-| **Partial vs Full Drain** | Track whether a partial drain (specific GPU) or full drain (entire node) was executed. Critical for understanding drain scope. | `drain.scope` = "partial" or "full"<br>`drain.partial_drain.entity_type` (string)<br>`drain.partial_drain.entity_value` (string) |
-| **Processing Errors** | Track all errors that occur during drain processing. Essential for debugging and identifying failure patterns. | `drain.status` = "error" or "failed"<br>`error.type` = specific error type<br>`error.message` (string)<br>Span status: `codes.Error` |
-| **Custom Drain CR Status** | Track custom drain CR creation and completion status. Critical for custom drain workflows. | `drain.custom_cr.name` (string)<br>`drain.custom_cr.status` (string)<br>`drain.custom_cr.created` (bool) |
+1. **Module root spans** — linked to the upstream service span via `StartSpanWithLinkFromTraceContext`. These are sibling root spans within the same trace, not children of the upstream span. This correctly models the async change-stream / queue boundaries between modules. Examples: `fault_quarantine.process_event`, `node_drainer.drain_session`, `fault_remediation.event_received`, `janitor.gpureset.reconcile`.
 
-### Fault-Remediation Actions to Track
+2. **Operation child spans** — created with `StartSpan(ctx, name)` as synchronous children of the module root span or another child span. Examples: `fault_quarantine.evaluate_rulesets`, `node_drainer.db.update_status`, `fault_remediation.log_collector`.
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Remediation Action Type** | Determine which remediation action was executed (create CR, skip, cancellation, etc.). Critical for understanding what actions were taken. | `remediation.action.type` = "create_cr", "skip", "cancellation" |
-| **Event Skip Reasons** | Track why events are skipped (NONE action, already remediated, unsupported action). Important for understanding skipped remediations. | `remediation.action.skip` (bool)<br>`remediation.skip_reason` = "none_action", "already_remediated", "unsupported_action" |
-| **Existing CR Detection** | Track when remediation is skipped because a maintenance CR already exists. Important for understanding duplicate prevention. | `remediation.action.skip_existing_cr` (bool)<br>`remediation.existing_cr.name` (string)<br>`remediation.existing_cr.status` (string) |
-| **Remediation Status** | Track final remediation status (succeeded, failed). Essential for understanding outcomes. | `remediation.status` = "succeeded", "failed" |
-| **Processing Errors** | Track all errors that occur during remediation processing. Essential for debugging and identifying failure patterns. | `remediation.status` = "error" or "failed"<br>`error.type` = specific error type<br>`error.message` (string)<br>Span status: `codes.Error` |
+## What Will be Tracked from Each Module
 
-### Health-Events-Analyzer Actions to Track
+### Fault-Quarantine
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Ruleset Execution** | Track aggregation pipeline execution time and results. Essential for identifying slow queries and optimization opportunities. | `analyzer.mongo.pipeline.stages` (int)<br>`analyzer.mongo.pipeline.duration_ms` (float)<br>`analyzer.mongo.pipeline.documents_matched` (int) |
-| **Event Publication** | Track when analyzer publishes new fatal events. Important for understanding event correlation and escalation. | `analyzer.event.published` (bool)<br>`analyzer.event.published_event_id` (string)<br>`analyzer.event.recommended_action` (string) |
-| **XID Burst Detection** | Track XID burst detection operations including history clearing and burst detection. Critical for understanding XID error handling. | `analyzer.xid.burst_detected` (bool)<br>`analyzer.xid.burst_count` (int)<br>`analyzer.xid.history_cleared` (bool)<br>`analyzer.xid.node` (string) |
-| **Processing Errors** | Track all errors during rule evaluation and event processing. Essential for debugging analyzer failures. | `analyzer.error.type` = "rule_evaluation_error", "pipeline_error", "publish_error"<br>`analyzer.error.message` (string)<br>Span status: `codes.Error` |
+**Root span:** `fault_quarantine.process_event`
 
-### Platform-Connector Actions to Track
+| What is tracked | Span / Attribute | Use case |
+|-----------------|-----------------|-------------------|
+| Cordon + taint applied | `fault_quarantine.apply_quarantine` child span; `fault_quarantine.action.cordon` (bool), `fault_quarantine.action.taint` (bool), `fault_quarantine.event.processing_status = "Quarantined"` | Did this health event lead to cordoning and tainting of the node? |
+| Unquarantine | `fault_quarantine.perform_uncordon` child span; `fault_quarantine.event.processing_status = "UnQuarantined"` | Did this health event lead to uncordoning/untainting of the node? |
+| Ruleset evaluation | `fault_quarantine.evaluate_rulesets` child span | Which rulesets were evaluated for this event? How long did evaluation take? |
+| DB status write trigger span (used as link target by node-drainer) | `fault_quarantine.db.update_status`; `span_ids.fault_quarantine` written to MongoDB | When did fault-quarantine persist status so node-drainer could pick up this event? |
+| Cancellation of quarantining events on manual uncordon/untaint | `fault_quarantine.cancel_latest_quarantining_events` root span (linked to `fault_quarantine.db.update_status` of the cancelled event) | Were quarantining events cancelled for this event due to manual uncordon/untaint? |
+| Errors | `fault_quarantine.error.type`, `fault_quarantine.error.message` | What went wrong in fault-quarantine and why? |
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **gRPC Event Reception** | Track when health events are received from monitors. Critical for understanding event ingestion. | `platform_connector.grpc.event_received` (bool)<br>`platform_connector.grpc.events_count` (int)<br>`platform_connector.grpc.duration_ms` (float) |
-| **Event Persistence** | Track MongoDB write operations. Essential for understanding database performance. | `platform_connector.db.operation` = "insert", "update"<br>`platform_connector.db.duration_ms` (float)<br>`platform_connector.db.error` (string, if failed) |
-| **Node Condition Updates** | Track Kubernetes node condition updates. | `platform_connector.k8s.node_condition.updated` (bool) |
-| **Processing Errors** | Track errors during event ingestion and processing. Essential for debugging ingestion failures. | `platform_connector.error.type` = "grpc_error", "db_error", "k8s_error"<br>`platform_connector.error.message` (string)<br>Span status: `codes.Error` |
+### Node Drainer
 
-### Event Exporter Actions to Track
+**Root spans:** `node_drainer.enqueue_event` (change-stream entry) + `node_drainer.drain_session` (worker queue, long-lived for entire drain)
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Transform to CloudEvents** | Track transform success/failure and duration. Event-exporter converts health events to CloudEvents before publish; failures here block delivery to the sink. | `event_exporter.transform.success` (bool)<br>`event_exporter.transform.duration_ms` (float)<br>`event_exporter.transform.error` (string, if failed) |
-| **Publish to Sink** | Track publish outcome, retry count, and latency. Essential to see if events reached the external sink (e.g. HTTP) and whether retries were needed. | `event_exporter.publish.status` = "success", "failure"<br>`event_exporter.publish.retry_count` (int)<br>`event_exporter.publish.duration_ms` (float)<br>`event_exporter.publish.error_type` (string, if failed; e.g. "max_retries_exceeded") |
-| **Processing Errors** | Track unmarshal, transform, and publish errors. Essential for debugging why events were not exported. | `event_exporter.error.type` = "unmarshal_error", "transform_error", "publish_error"<br>`event_exporter.error.message` (string)<br>Span status: `codes.Error` |
-| **Backfill** | Track when event-exporter runs a backfill (replay of historical events). Helps correlate export latency or load with backfill runs. | `event_exporter.backfill.in_progress` (bool)<br>`event_exporter.backfill.events_processed` (int)<br>`event_exporter.backfill.duration_ms` (float) |
+| What is tracked | Span / Attribute | Use case |
+|-----------------|-----------------|-------------------|
+| Initial status set to InProgress in MongoDB | `node_drainer.set_initial_status_and_enqueue` → `node_drainer.db.update_status` child span; `node_drainer.eviction_status = "InProgress"` | Did drain start for this event? When was status set to InProgress? |
+| Final eviction status written to MongoDB | `node_drainer.update_user_pods_eviction_status` child span; `drain.status` = "Succeeded", "Failed", "Cancelled", "AlreadyDrained" | Did drain succeed, fail, get cancelled, or was the node already drained? |
+| Drain scope (partial vs full) | `node_drainer.drain.scope` = "partial" or "full"; `node_drainer.partial_drain.entity_type`, `node_drainer.partial_drain.entity_value` — set on `drain_session` at session end | Was this a partial or full drain? What was the partial-drain target (entity type/value)? |
+| Pods targeted at phase entry | `node_drainer.immediate_eviction_pods`, `node_drainer.allow_completion_pods`, `node_drainer.delete_after_timeout_pods` — set on `drain_session` at session end | Which pods were in each phase (immediate eviction, allow completion, delete after timeout)? |
+| Phase durations (wall-clock) | `node_drainer.immediate_eviction_duration_s`, `node_drainer.allow_completion_duration_s`, `node_drainer.delete_after_timeout_duration_s` — set on `drain_session` at session end | How long did each drain phase take? |
+| Force-deleted pods | `node_drainer.force_deleted_pods` (comma-separated), `node_drainer.pods_force_deleted_count` — set on `drain_session` | Which pods were force-deleted and how many? |
+| Custom drain CR (Slinky) | `node_drainer.execute_custom_drain` child span; `node_drainer.custom_cr.name`, `node_drainer.custom_cr.created` (bool), `node_drainer.custom_cr.status` = "in_progress"/"completed"/"error", `node_drainer.custom_cr.deleted` (bool on cleanup) | Was a custom drain CR (e.g. Slinky) used? What was its status? |
+| Errors | `node_drainer.error.type`, `node_drainer.error.message` | What went wrong in node-drainer and why? |
 
-### Janitor (GPUReset Controller) Actions to Track
-The janitor reconciles GPUReset custom resources: it tears down GPU/managed services on the node, creates a reset Job, waits for job completion, then restores services. Tracking these actions helps debug why a reset succeeded, failed, or stalled.
+### Fault-Remediation
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **Reconcile Phase / Condition** | Track which phase the GPUReset is in (Pending, InProgress, Succeeded, Failed) and the current condition (Ready, ServicesTornDown, ResetJobCreated, ResetJobCompleted, ServicesRestored). Essential to see where a reset is stuck or why it failed. | `janitor.gpureset.name` (string)<br>`janitor.gpureset.phase` = "Pending", "InProgress", "Succeeded", "Failed", "Terminating", "Unknown"<br>`janitor.gpureset.condition` (string)<br>`janitor.gpureset.reason` (string) |
-| **Node Lock** | Track when the controller acquires or releases the node lock (distributed lock). Explains ResourceContention and requeue behavior. | `janitor.node_lock.acquired` (bool)<br>`janitor.node_lock.node` (string) |
-| **Service Teardown / Restore** | Track teardown and restore of GPU/managed services. | `janitor.services.teardown.success` (bool)<br>`janitor.services.teardown.duration_ms` (float)<br>`janitor.services.restore.success` (bool)<br>`janitor.services.restore.duration_ms` (float) |
-| **Reset Job** | Track reset Job creation and completion. The Job runs the actual GPU reset on the node. | `janitor.reset_job.created` (bool)<br>`janitor.reset_job.name` (string)<br>`janitor.reset_job.completed` (bool)<br>`janitor.reset_job.failed` (bool) |
-| **Completion / Failure Reason** | Track final outcome and failure reason (e.g. NodeNotFound, ResetJobFailed, ServiceTeardownTimeoutExceeded). Critical for understanding why a reset did not succeed. | `janitor.gpureset.completion_time` (string, optional)<br>`janitor.gpureset.failure_reason` (string; e.g. "ResetJobFailed", "ServiceRestoreFailed")<br>`event.processing_status` = "succeeded", "failed" |
-| **Processing Errors** | Track errors during reconcile (e.g. job creation failure, drift detection). Essential for debugging janitor failures. | `janitor.error.type` = "job_creation_failed", "teardown_timeout", "restore_failed", "node_not_found"<br>`janitor.error.message` (string)<br>Span status: `codes.Error` |
+**Root span:** `fault_remediation.event_received` (session span, open for the duration of the event's remediation lifecycle)
 
-### Janitor-Provider (CSP gRPC) Actions to Track
+| What is tracked | Span / Attribute | Use case |
+|-----------------|-----------------|-------------------|
+| Per-reconcile work | `fault_remediation.reconcile` child span | What did each reconcile cycle do for this event? |
+| Log collector job | `fault_remediation.log_collector` child span; `fault_remediation.log_collector.node`, `fault_remediation.log_collector.event_id`, `fault_remediation.log_collector.job_name`, `fault_remediation.log_collector.outcome` = "success"/"failure"/"timeout", `fault_remediation.log_collector.duration_s` | Did the log collector run for this event? Did it succeed, fail, or timeout? How long did it take? |
+| Maintenance CR creation | `fault_remediation.remediation_cr_created` child span; `fault_remediation.cr.name` | Was a remediation CR (e.g. GPUReset, RebootNode) created for this event? Which one? |
+| Skip reasons | `fault_remediation.skip_event` child span; `fault_remediation.skip.reason` | Why was this event skipped (e.g. not ready, already remediating)? |
+| Cancellation | `fault_remediation.cancellation_event` child span | Was remediation cancelled for this event? |
+| Final remediation outcome | `fault_remediation.remediation_finished` span event on the reconcile span | Did remediation finish successfully or fail for this event? |
+| Status update | `fault_remediation.remediation_status_updated` child span | When was remediation status last updated? |
+| Errors | `fault_remediation.error.type`, `fault_remediation.error.message` | What went wrong in fault-remediation and why? |
 
-| What to Track? | Why? | Span Attributes |
-|----------------|------|----------------|
-| **SendRebootSignal** | Track when a reboot signal is sent to the CSP for a node. Essential to confirm the reboot was requested and to measure CSP API latency. | `janitor_provider.reboot.sent` (bool)<br>`janitor_provider.reboot.request_ref` (string)<br>`janitor_provider.reboot.node` (string)<br>`janitor_provider.reboot.duration_ms` (float) |
-| **IsNodeReady** | Track node readiness checks after reboot. Helps debug "reset job ran but node never came back" scenarios. | `janitor_provider.node_ready.ready` (bool) |
-| **SendTerminateSignal** | Track when a terminate signal is sent to the CSP. Used for node termination flows. | `janitor_provider.terminate.sent` (bool)<br>`janitor_provider.terminate.request_ref` (string) |
-| **Processing Errors** | Track gRPC or CSP API errors (e.g. provider ID missing, CSP throttling). Essential for debugging provider failures. | `janitor_provider.error.type` = "grpc_error", "csp_api_error"<br>`janitor_provider.error.message` (string)<br>Span status: `codes.Error` |
+### Health-Events-Analyzer
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| Ruleset execution (MongoDB pipeline) | `analyzer.mongo.pipeline.stages` (int), `analyzer.mongo.pipeline.duration_ms` (float), `analyzer.mongo.pipeline.documents_matched` (int) | How many pipeline stages ran? How long did the pipeline take? How many documents matched? |
+| Event publication | `analyzer.event.published` (bool), `analyzer.event.published_event_id` (string), `analyzer.event.recommended_action` (string) | Was an event published? What was the recommended action? |
+| XID burst detection | `analyzer.xid.burst_detected` (bool), `analyzer.xid.burst_count` (int), `analyzer.xid.history_cleared` (bool), `analyzer.xid.node` (string) | Was an XID burst detected? On which node? Was history cleared? |
+| Errors | `analyzer.error.type`, `analyzer.error.message` | What went wrong in the analyzer and why? |
+
+### Platform-Connector
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| gRPC event reception | `platform_connector.grpc.event_received` (bool), `platform_connector.grpc.events_count` (int), `platform_connector.grpc.duration_ms` (float) | Was a health event received via gRPC? How many? How long did the call take? |
+| MongoDB insert (also writes `span_ids.platform_connector`) | `platform_connector.db.operation = "insert"`, `platform_connector.db.duration_ms` (float) | Was the event written to MongoDB? How long did the insert take? |
+| Node condition updates | `platform_connector.k8s.node_condition.updated` (bool) | Were node conditions updated in Kubernetes for this event? |
+| Errors | `platform_connector.error.type`, `platform_connector.error.message` | What went wrong in platform-connector and why? |
+
+### Event Exporter
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| CloudEvents transform | `event_exporter.transform.success` (bool), `event_exporter.transform.duration_ms` (float), `event_exporter.transform.error` (string) | Did the CloudEvents transform succeed? How long did it take? Any error? |
+| Publish to sink | `event_exporter.publish.status`, `event_exporter.publish.retry_count` (int), `event_exporter.publish.duration_ms` (float), `event_exporter.publish.error_type` | Did publish to the sink succeed? How many retries? How long did it take? |
+| Backfill | `event_exporter.backfill.in_progress` (bool), `event_exporter.backfill.events_processed` (int), `event_exporter.backfill.duration_ms` (float) | Was backfill running? How many events were processed? How long did it take? |
+| Errors | `event_exporter.error.type`, `event_exporter.error.message` | What went wrong in event-exporter and why? |
+
+### Janitor (GPUReset Controller)
+
+**Root span:** `janitor.gpureset.reconcile` (one per controller-runtime reconcile cycle, linked to `fault_remediation.reconcile` via CR annotation)
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| Reconcile phase and condition | `janitor.gpureset.name`, `janitor.gpureset.phase`, `janitor.gpureset.node`, `janitor.gpureset.condition`, `janitor.gpureset.reason` | What phase and condition is this GPUReset in? Which node? |
+| GPU targets (UUIDs and PCI bus IDs) | `janitor.gpureset.gpu_uuids` (comma-separated), `janitor.gpureset.pci_bus_ids` (comma-separated) | Which GPU(s) are being reset (UUIDs and PCI bus IDs)? |
+| Node lock | `janitor.node_lock.acquired` (bool), `janitor.node_lock.node` | Was the node lock acquired? Which node? |
+| Service teardown / restore | `janitor.services.teardown.success` (bool), `janitor.services.restore.success` (bool) | Did service teardown and restore succeed? |
+| Reset job | `janitor.reset_job.created` (bool), `janitor.reset_job.name`, `janitor.reset_job.completed` (bool), `janitor.reset_job.failed` (bool) | Was a reset job created? Did it complete or fail? |
+| Final outcome + duration | `janitor.gpureset.processing_status` = "succeeded"/"failed", `janitor.gpureset.completion_time`, `janitor.gpureset.failure_reason`, `janitor.gpureset.duration_seconds` | Did GPU reset succeed or fail? How long did it take? What was the failure reason? |
+| Errors | `janitor.error.type`, `janitor.error.message` | What went wrong in janitor (GPUReset) and why? |
+
+### Janitor (RebootNode Controller)
+
+**Root span:** `janitor.rebootnode.reconcile` (one per reconcile cycle, linked to `fault_remediation.reconcile` via CR annotation)
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| CR identity | `janitor.rebootnode.name`, `janitor.rebootnode.node` | Which RebootNode CR and node is this? |
+| Reboot signal sent | `janitor.rebootnode.signal_sent` (bool), `janitor.rebootnode.request_ref` (CSP request ID) | Was a reboot signal sent to the CSP? What is the request ID? |
+| Node ready outcome | `janitor.rebootnode.node_ready` (bool), `janitor.rebootnode.reason` = "Succeeded"/"Timeout"/"Failed" | Did the node become ready after reboot? Succeeded, timeout, or failed? |
+| Time to node ready | `janitor.rebootnode.time_to_ready_seconds` (from CR creation to node ready — only set on success) | How long from CR creation to node ready? |
+| Total duration | `janitor.rebootnode.duration_seconds` (from StartTime to completion) | How long did the full reboot flow take? |
+| Final status | `janitor.rebootnode.status` = "succeeded"/"failed" | Did reboot succeed or fail? |
+| Errors | `janitor.error.type`, `janitor.error.message` | What went wrong in janitor (RebootNode) and why? |
+
+### Janitor (TerminateNode Controller)
+
+**Root span:** `janitor.terminatenode.reconcile` (one per reconcile cycle, linked to `fault_remediation.reconcile` via CR annotation)
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| CR identity | `janitor.terminatenode.name`, `janitor.terminatenode.node` | Which TerminateNode CR and node is this? |
+| Terminate signal sent | `janitor.terminatenode.signal_sent` (bool) | Was a terminate signal sent to the CSP? |
+| Node terminated | `janitor.terminatenode.node_terminated` (bool), `janitor.terminatenode.node_deleted` (bool) | Was the node terminated and deleted from the cluster? |
+| Total duration | `janitor.terminatenode.duration_seconds` (from CR creation to completion) | How long did termination take? |
+| Final status | `janitor.terminatenode.status` = "succeeded"/"failed" | Did node termination succeed or fail? |
+| Errors | `janitor.error.type`, `janitor.error.message` | What went wrong in janitor (TerminateNode) and why? |
+
+### Janitor-Provider (CSP gRPC)
+
+**Spans:** `janitor_provider.SendRebootSignal`, `janitor_provider.IsNodeReady`, `janitor_provider.SendTerminateSignal` — created as gRPC server handler spans; trace context is automatically propagated from janitor via `otelgrpc` W3C traceparent headers, so these appear as children of the janitor reconcile span in Grafana.
+
+| What is tracked | Span Attributes | Use case |
+|-----------------|----------------|-------------------|
+| Reboot signal | `janitor_provider.reboot.sent` (bool), `janitor_provider.reboot.node`, `janitor_provider.reboot.request_ref`, `janitor_provider.reboot.duration_ms` | Was a reboot request sent to the CSP? Which node? How long did the call take? |
+| Node ready check | `janitor_provider.node_ready.ready` (bool), `janitor_provider.reboot.node`, `janitor_provider.reboot.request_ref` | Did the CSP report the node as ready? For which reboot request? |
+| Terminate signal | `janitor_provider.terminate.sent` (bool), `janitor_provider.terminate.node`, `janitor_provider.terminate.request_ref` | Was a terminate request sent to the CSP? Which node? |
+| Errors | `janitor_provider.error.type` = "grpc_error"/"csp_api_error", `janitor_provider.error.message` | Did the failure come from gRPC or the CSP API? What was the error? |
 
 ## Trace Context Propagation
 
@@ -201,13 +254,10 @@ Why we use links in this system:
 - **More accurate module timing**: module root spans represent their real processing duration.
 - **Prevents misleading trace math artifacts**: avoids negative/self-time distortions that can happen when async child spans outlive parent spans.
 
-Important: some tracing UIs emphasize parent-child edges in graph view. Links are still recorded and queryable, but may appear in span details rather than as graph arrows.
+### Cross-Service Trace Continuity via `trace_id` in MongoDB
 
-### Cross-Service Trace Continuity
+Platform-connector creates the root trace when it receives a health event via gRPC and stores `trace_id` as a top-level field in the MongoDB document.
 
-NVSentinel uses distributed tracing to maintain trace context across all modules.
-
-**Trace ID as Separate MongoDB Field (Recommended)**
 ```
 Health Monitor (sends event, NO trace context)
     │
@@ -215,68 +265,114 @@ Health Monitor (sends event, NO trace context)
     ▼
 Platform Connector (creates ROOT trace, trace_id: abc123)
     │
-    │ [2. MongoDB Storage - trace_id stored as separate top-level field]
+    │ [2. MongoDB Storage - trace_id + span_ids stored as top-level fields]
     ▼
-MongoDB (stores event with trace_id as separate field)
+MongoDB (stores event with trace_id and span_ids)
     │
-    │ [3. MongoDB Change Streams - trace context extracted from top-level trace_id field]
-    ├──► Fault Quarantine (continues trace abc123)
-    ├──► Node Drainer (continues trace abc123)
-    ├──► Fault Remediation (continues trace abc123)
+    │ [3. MongoDB Change Streams - trace context extracted from top-level fields]
+    ├──► Fault Quarantine (links to platform_connector span, writes fault_quarantine span ID)
+    ├──► Node Drainer (links to fault_quarantine span, writes node_drainer span ID)
+    ├──► Fault Remediation (links to node_drainer span)
     ├──► Health Events Analyzer (continues trace abc123)
-    ├──► Event Exporter (continues trace abc123)
-    ├──► Janitor (continues trace abc123)
-    └──► Janitor provider (continues trace abc123)
+    └──► Event Exporter (continues trace abc123)
 ```
 
-**All modules share the same trace ID (`abc123`)** - this is only possible with context propagation at each step.
+**All modules share the same trace ID (`abc123`)** — this is only possible with context propagation at each step.
 
-Trace context is stored as a separate top-level field in the MongoDB document, keeping observability data separate from business logic.
+MongoDB document structure:
 
-**How it works technically**:
-- Health monitor detects event and sends gRPC call (no trace context needed)
-- Platform-connector receives the event via gRPC
-- Platform-connector **creates a new trace** (trace_id: abc123) when receiving the event
-- Platform-connector creates root span: `platform_connector.receive_event`
-- Platform-connector stores event in MongoDB with `trace_id` as a **separate top-level field**:
-  ```go
-  healthEventWithStatus := model.HealthEventWithStatus{
-      TraceID:           traceID,  // <-- NEW field
-      CreatedAt:         time.Now().UTC(),
-      HealthEvent:       clonedHealthEvent,
-      HealthEventStatus: HealthEventStatus{},
-  }
-  ```
-- MongoDB document structure:
-  ```json
-  {
-    "_id": "...",
-    "trace_id": "abc123",  // <-- top-level field
-    "createdAt": "...",
-    "healthevent": { ... },
-    "healtheventstatus": { ... }
-  }
-  ```
-- Downstream modules extract trace context from the top-level `trace_id` field when processing change streams
-- Modules unmarshal into `HealthEventWithStatus` struct which includes `TraceID` field
+```json
+{
+  "_id": "...",
+  "trace_id": "abc123",
+  "span_ids": {
+    "platform_connector": "<span-id-of-platform_connector.db.insert>",
+    "fault_quarantine":   "<span-id-of-fault_quarantine.db.update_status>",
+    "node_drainer":       "<span-id-of-node_drainer active span>"
+  },
+  "createdAt": "...",
+  "healthevent": { ... },
+  "healtheventstatus": { ... }
+}
+```
 
-**Required Code Changes**:
-1. Add `TraceID` field to `HealthEventWithStatus` struct:
-   ```go
-   type HealthEventWithStatus struct {
-       TraceID           string            `bson:"trace_id" json:"trace_id"`
-       CreatedAt         time.Time         `bson:"createdAt"`
-       HealthEvent       *protos.HealthEvent `bson:"healthevent,omitempty"`
-       HealthEventStatus HealthEventStatus   `bson:"healtheventstatus"`
-   }
-   ```
-2. Platform-connector generates trace ID and sets it when creating `HealthEventWithStatus`
-3. All fault handling modules can access `healthEventWithStatus.TraceID` after unmarshaling
+The `HealthEventWithStatus` struct carries both fields:
+
+```go
+type HealthEventWithStatus struct {
+    TraceID           string            `bson:"trace_id" json:"trace_id"`
+    SpanIDs           map[string]string `bson:"span_ids,omitempty" json:"span_ids,omitempty"`
+    CreatedAt         time.Time         `bson:"createdAt"`
+    HealthEvent       *protos.HealthEvent `bson:"healthevent,omitempty"`
+    HealthEventStatus HealthEventStatus   `bson:"healtheventstatus"`
+}
+```
+
+### Trace Context via `span_ids` Map in MongoDB
+
+Each module that writes to the MongoDB health event document also writes its own span ID into the `span_ids` map. This allows the next module in the pipeline to pick up the exact span to link against, creating an auditable causal chain without requiring synchronous gRPC calls between modules.
 
 
-- **Separates observability from business logic** - trace_id is not mixed with health event data
-- **Consistent with current unmarshaling approach** - modules already unmarshal into `HealthEventWithStatus` struct
-- **No health monitor changes needed** - health monitors don't need to be OpenTelemetry-aware, any new custom/nvsentinel health monitor doesn't need to have changes for traces 
+**How each module reads the upstream span ID:**
+
+```go
+// fault-quarantine reads platform_connector's span ID
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
+ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, parentSpanID, "fault_quarantine.process_event")
+
+// node-drainer reads fault_quarantine's span ID
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
+ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, parentSpanID, "node_drainer.enqueue_event")
+
+// fault-remediation reads node_drainer's span ID
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
+sessionCtx, session := r.startOrReuseEventSession(ctx, traceID, parentSpanID, ...)
+```
+
+Service name constants are defined in `commons/pkg/tracing/tracing.go`:
+
+```go
+const (
+    ServicePlatformConnector    = "platform_connector"
+    ServiceFaultQuarantine      = "fault_quarantine"
+    ServiceNodeDrainer          = "node_drainer"
+    ServiceFaultRemediation     = "fault_remediation"
+    ServiceHealthEventsAnalyzer = "health_events_analyzer"
+    ServiceEventExporter        = "event_exporter"
+)
+```
+
+### Trace Context in Janitor CR Annotations
+
+Janitor cannot read MongoDB — it processes Kubernetes custom resources (`GPUReset`, `RebootNode`, `TerminateNode`). To carry trace context to janitor, fault-remediation writes the trace ID and its own span ID into the CR's annotations at creation time.
+
+**Annotations written by fault-remediation** (via CR templates):
+
+```yaml
+metadata:
+  annotations:
+    nvsentinel.nvidia.com/trace-id: "{{ .TraceID }}"
+    nvsentinel.nvidia.com/span-id:  "{{ .SpanID }}"
+```
+
+The `SpanID` written is the ID of the `fault_remediation.reconcile` span — the span that directly triggered the CR creation. This is the most precise causal reference: "janitor is processing what this fault-remediation reconcile requested."
+
+CR templates with these annotations:
+- `fault-remediation/pkg/reconciler/templates/rebootnode-template.yaml`
+- `fault-remediation/pkg/reconciler/templates/gpureset-template.yaml`
+
+> **Note**: `TerminateNode` CR templates do not currently embed trace/span annotations. Janitor's TerminateNode controller reads the annotations but will not have a valid span ID to link against.
+
+**How janitor reads the annotations:**
+
+```go
+annotations := cr.GetAnnotations()
+traceID := annotations["nvsentinel.nvidia.com/trace-id"]
+spanID  := annotations["nvsentinel.nvidia.com/span-id"]
+ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, spanID, "janitor.rebootnode.reconcile")
+```
+
+**janitor-provider trace context** is automatically propagated from janitor via `otelgrpc` W3C traceparent headers injected on every gRPC call (janitor uses `grpc.WithStatsHandler(otelgrpc.NewClientHandler())`, janitor-provider uses `grpc.StatsHandler(otelgrpc.NewServerHandler())`). The `janitor_provider.SendRebootSignal` and `janitor_provider.IsNodeReady` spans therefore appear as children of `janitor.rebootnode.reconcile` in Grafana automatically.
 
 ## Implementation Details
 
@@ -289,15 +385,8 @@ Platform-Connector creates the root trace when it receives a health event via gR
 - **Span name**: `platform_connector.receive_event`
 - **Trace ID generated here** in platform-connector
 - **No trace context propagation needed from health monitor**: Health monitor just sends the gRPC call with the health event
-- Platform-connector stores trace ID as separate MongoDB field
+- Platform-connector stores both `trace_id` and initial `span_ids` map in MongoDB
 
-- **Advantages**:
-  - Simpler implementation (only platform-connector needs tracing)
-  - Health monitors don't need OpenTelemetry instrumentation
-  - Cleaner separation of observability from business logic
-  - Consistent with current unmarshaling pattern
-
-**(Platform-Connector creates trace, stored as separate field)**:
 ```
 Health Monitor:
   1. Detect event
@@ -308,141 +397,68 @@ Platform Connector:
   1. Receive gRPC call
   2. Create NEW trace (trace_id: abc123)
   3. Create root span: "platform_connector.receive_event"
-  4. Store event in MongoDB with trace_id as separate top-level field
+  4. Store event in MongoDB with trace_id and span_ids as top-level fields
 ```
-
-2. **Module Spans**: Each module creates spans for its processing:
-   - **Fault-Quarantine**: `fault_quarantine.process_event`
-   - **Node-Drainer**: `node_drainer.process_event`
-   - **Fault-Remediation**: `fault_remediation.process_event`
-   - **Health-Events-Analyzer**: `health_events_analyzer.process_event`
-   - **Event Exporter**: `event_exporter.process_event`
-   - **Janitor**: `janitor.process_event`
-   - **Janitor Provider**: `janitor_provider.process_event`
-
-3. **Operation Spans**: Within each module, create child spans for specific operations:
-   - Database queries
-   - Kubernetes API calls
-   - Rule evaluations
-   - CR creation
-
-### Relationship Model: Parent-Child vs Links
-
-Use **parent-child** relationships for synchronous, in-module call chains where the child work is executed within the parent's lifetime.
-
-Use **span links** for:
-
-- asynchronous fan-out/fan-in paths
-- queue/change-stream based handoffs between modules
-- detached/background operations that may outlive the triggering span
-
-This hybrid model gives accurate per-module timings while preserving causal relationships across the full health event lifecycle.
-
 
 ### Trace Export
 
-- **OTLP Exporter**: Each NVSentinel module exports traces via OTLP gRPC to the in-namespace OTel Collector
-- **Batch Export**: The OTel Collector batches spans before forwarding to the backend
-- **Retry Logic**: The OTel Collector handles retry logic for failed exports
+- **OTLP Exporter**: Each NVSentinel module exports spans via OTLP gRPC to the endpoint set in `global.tracing.endpoint`. That endpoint is in-cluster OTel Collector which will be dgxc-alloy in our case. 
+- **Batching and retry**: The OTel Collector is responsible for batching, retry, and forwarding to the final backend (Tempo, Jaeger, etc.).
 
-### Backend Integration: In-Namespace OTel Collector
+### Backend Integration
 
-NVSentinel deploys its own **OpenTelemetry Collector** (`otel-collector` subchart) inside the NVSentinel namespace. This collector receives traces from all modules and forwards them to any configured backend. This approach does **not** depend on `dgxc-alloy` being installed on the cluster.
+NVSentinel does not deploy an OpenTelemetry Collector. Tracing is integrated by configuring a single endpoint: `global.tracing.endpoint` which will be OTEL collector endpoint. All NVSentinel modules sends traces to the configured endpoint. The collector then batches and forwards traces to the chosen backend (Tempo, Jaeger, Panoptes, etc.).
 
 #### Architecture
 
 ```
 NVSentinel Modules (platform-connector, fault-quarantine, etc.)
     │
-    │ [OTLP gRPC :4317]
+    │ [OTLP gRPC to global.tracing.endpoint]
     ▼
-OTel Collector (otel-collector.nvsentinel.svc:4317)
+ OTel Collector
     │
-    │ [OTLP HTTP to configured backend]
+    │ [collector forwards to backend service]
     ▼
 Backend (Tempo / Panoptes / Grafana Cloud / any OTLP endpoint)
     │
     ▼
-Grafana Dashboards (trace explorer, service map, latency analysis)
+Dashboard
 ```
 
 #### Configuration
 
 **Helm Values**:
 
-Tracing is configured via `global.tracing` in `values.yaml`:
+Tracing is configured via `global.tracing` in `values.yaml`. Only the endpoint is required when tracing is enabled; there is no NVSentinel-managed collector.
 
 ```yaml
 global:
   tracing:
-    enabled: true       # Deploys the otel-collector subchart and injects OTEL_* env vars
-    insecure: true      # Use insecure gRPC from modules to collector (in-namespace)
-    endpoint: ""        # Override to bypass the collector (e.g. point to Alloy directly)
-    collector:
-      image:
-        repository: otel/opentelemetry-collector-contrib
-        tag: "0.120.0"
-      exportEndpoint: "http://tempo.nvsentinel.svc.cluster.local:4318"  # Backend URL
-      debug: false      # Enable debug exporter for troubleshooting
+    enabled: true       # Enables tracing and injects OTEL_* env vars into modules
+    endpoint: ""        # Required when enabled: OTLP gRPC address of otel collector
+                       # Examples: "dgxc-alloy.observability.svc.cluster.local:4317"
+                       #           "otel-collector.my-namespace.svc.cluster.local:4317"
+    insecure: true      # Set to false if the collector endpoint uses TLS
 ```
 
-When `global.tracing.enabled` is true:
-- The `otel-collector` subchart is deployed (Deployment + Service + ConfigMap)
-- Each module's `OTEL_EXPORTER_OTLP_ENDPOINT` defaults to `<release>-otel-collector:4317`
-- The collector forwards traces to `global.tracing.collector.exportEndpoint`
-
-When `global.tracing.endpoint` is explicitly set, modules send traces directly to that endpoint (bypassing the collector). This supports clusters where `dgxc-alloy` or another external collector is available.
-
-**NVSentinel Module Environment Variables** (auto-injected by Helm templates):
+**NVSentinel Module Environment Variables** (injected by Helm templates):
 
 ```yaml
 env:
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "nvsentinel-otel-collector:4317"  # auto-derived from Release.Name
+    value: "<global.tracing.endpoint>"   
   - name: OTEL_EXPORTER_OTLP_INSECURE
-    value: "true"
+    value: "<global.tracing.insecure>"
   - name: OTEL_TRACES_ENABLED
     value: "true"
   - name: OTEL_SERVICE_NAME
-    value: "platform-connector"  # per-module
+    value: "platform-connector"
 ```
 
-#### OTel Collector Pipeline
-
-The collector is configured via a ConfigMap with this pipeline:
-
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: "0.0.0.0:4317"
-      http:
-        endpoint: "0.0.0.0:4318"
-
-processors:
-  batch:
-    timeout: 1s
-    send_batch_size: 512
-
-exporters:
-  otlphttp:
-    endpoint: "<global.tracing.collector.exportEndpoint>"
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [otlphttp]
-```
-
-The `otel/opentelemetry-collector-contrib` image is used because it includes `oauth2clientauthextension`, which can be added to the pipeline config when exporting to backends that require OAuth2 (e.g. Panoptes).
-
-#### Viewing Traces
-
-Traces can be viewed in Grafana once the backend is configured:
-
-- **Local dev (Tilt)**: Grafana at `localhost:3000` with Tempo datasource auto-configured
-- **Production (Panoptes)**: `https://dashboards.telemetry.dgxc.ngc.nvidia.com` → Explore → Tempo datasource
-- **Trace Explorer**: Search by trace ID, service name, or span attributes
+## References
+Traces[https://opentelemetry.io/docs/concepts/signals/traces/#consumer]
+OpenTelemetry[https://opentelemetry.io/docs/]
+OpenTelemetry Collector[https://github.com/open-telemetry/opentelemetry-collector]
+Alloy Collector[https://grafana.com/oss/alloy-opentelemetry-collector/]
+Tracing Guide[https://vfunction.com/blog/opentelemetry-tracing-guide/]
