@@ -36,7 +36,7 @@ type EventWatcher struct {
 		ctx context.Context,
 		event *model.HealthEventWithStatus,
 	) *model.Status
-	fetchDocIDsFn                         func(nodeName string) []string
+	fetchDocIDsFn                         func(ctx context.Context, nodeName string) []string
 	unprocessedEventsMetricUpdateInterval time.Duration
 	lastProcessedObjectID                 LastProcessedObjectIDStore
 }
@@ -55,7 +55,7 @@ var DocumentIDContextKey = documentIDContextKeyType{}
 type EventWatcherInterface interface {
 	Start(ctx context.Context) error
 	SetProcessEventCallback(callback func(ctx context.Context, event *model.HealthEventWithStatus) *model.Status)
-	SetFetchDocIDsFn(fn func(nodeName string) []string)
+	SetFetchDocIDsFn(fn func(ctx context.Context, nodeName string) []string)
 	CancelLatestQuarantiningEvents(ctx context.Context, nodeName string, reason string) error
 }
 
@@ -78,7 +78,7 @@ func (w *EventWatcher) SetProcessEventCallback(callback func(ctx context.Context
 	w.processEventCallback = callback
 }
 
-func (w *EventWatcher) SetFetchDocIDsFn(fn func(nodeName string) []string) {
+func (w *EventWatcher) SetFetchDocIDsFn(fn func(ctx context.Context, nodeName string) []string) {
 	w.fetchDocIDsFn = fn
 }
 
@@ -198,7 +198,7 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	var sourceDocIDs []string
 
 	if healthEventWithStatus.HealthEvent.GetIsHealthy() && w.fetchDocIDsFn != nil {
-		sourceDocIDs = w.fetchDocIDsFn(healthEventWithStatus.HealthEvent.GetNodeName())
+		sourceDocIDs = w.fetchDocIDsFn(ctx, healthEventWithStatus.HealthEvent.GetNodeName())
 	}
 
 	status := w.processEventCallback(ctx, &healthEventWithStatus)

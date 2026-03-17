@@ -600,8 +600,8 @@ func (r *Reconciler) hasExistingQuarantine(nodeName string) (map[string]string, 
 	return annotations, exists && annotationVal != ""
 }
 
-func (r *Reconciler) sourceDocIDsFromAnnotation(nodeName string) []string {
-	healthEventsMap, _, err := r.getHealthEventsFromAnnotation(&protos.HealthEvent{NodeName: nodeName})
+func (r *Reconciler) sourceDocIDsFromAnnotation(ctx context.Context, nodeName string) []string {
+	healthEventsMap, _, err := r.getHealthEventsFromAnnotation(ctx, &protos.HealthEvent{NodeName: nodeName})
 
 	if err != nil || healthEventsMap == nil {
 		return nil

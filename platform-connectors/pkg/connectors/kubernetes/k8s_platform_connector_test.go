@@ -247,7 +247,7 @@ func TestK8sNodeConditions(t *testing.T) {
 	for testCase, healthEvent := range healthEventsList {
 		healthEvents := protos.HealthEvents{Version: 1, Events: make([]*protos.HealthEvent, 0)}
 		healthEvents.Events = append(healthEvents.Events, healthEvent.healthEvent)
-		_, _, err := k8sConnector.processHealthEvents(ctx, &healthEvents)
+		err := k8sConnector.processHealthEvents(ctx, &healthEvents)
 		if err != nil {
 			t.Errorf("Failed to process healthEvent for testCase %d with err %s", testCase, err)
 		}
@@ -347,7 +347,7 @@ func TestK8sNodeEvents(t *testing.T) {
 	for _, event := range healthEventsList {
 		healthEvents.Events = append(healthEvents.Events, event.healthEvent)
 	}
-	_, _, err = k8sConnector.processHealthEvents(ctx, &healthEvents)
+	err = k8sConnector.processHealthEvents(ctx, &healthEvents)
 	if err != nil {
 		t.Errorf("Failed to process healthEvents with err %s", err)
 	}
@@ -1576,7 +1576,7 @@ func TestProcessHealthEvents_StoreOnlyStrategy(t *testing.T) {
 				Version: 1,
 				Events:  tc.healthEvents,
 			}
-			_, _, err = connector.processHealthEvents(localCtx, healthEvents)
+			err = connector.processHealthEvents(localCtx, healthEvents)
 			require.NoError(t, err, "processHealthEvents should not return error")
 
 			node, err := localClientSet.CoreV1().Nodes().Get(localCtx, nodeName, metav1.GetOptions{})
@@ -1798,7 +1798,7 @@ func TestTruncateConditionMessage_EntityIdentifierPreservation(t *testing.T) {
 				"Recommended Action=RESTART_VM", i, pciAddresses[i], i, i))
 	}
 
-	result := connector.truncateNodeConditionMessage(msgs)
+	_, result := connector.truncateNodeConditionMessage(msgs)
 
 	t.Logf("Result length: %d / 1024", len(result))
 	assert.LessOrEqual(t, len(result), 1024)
@@ -1908,7 +1908,7 @@ func TestDeduplicationBehavior(t *testing.T) {
 		}}
 
 		messages := []string{msgOld, msgUnrelated, msgNew}
-		result := connector.truncateNodeConditionMessage(messages)
+		_, result := connector.truncateNodeConditionMessage(messages)
 
 		assert.Contains(t, result, "pid=1582259", "Old message should be preserved below limit")
 		assert.Contains(t, result, "pid=9999999", "New message should be preserved below limit")
@@ -1922,7 +1922,7 @@ func TestDeduplicationBehavior(t *testing.T) {
 		}}
 
 		messages := []string{msgOld, msgUnrelated, msgNew}
-		result := connector.truncateNodeConditionMessage(messages)
+		_, result := connector.truncateNodeConditionMessage(messages)
 		parts := strings.Split(result, ";")
 		count := 0
 
@@ -1947,7 +1947,7 @@ func TestDeduplicationBehavior(t *testing.T) {
 		}}
 
 		messages := []string{msgOld, msgNew}
-		result := connector.truncateNodeConditionMessage(messages)
+		_, result := connector.truncateNodeConditionMessage(messages)
 
 		var entries []string
 		for _, p := range strings.Split(result, ";") {

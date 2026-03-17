@@ -33,12 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -70,8 +67,6 @@ func (r *K8sConnector) updateNodeConditions(ctx context.Context, healthEvents []
 		return false, nil
 	}
 
-	nodeName := healthEvents[0].NodeName
-
 	err := retry.OnError(retry.DefaultRetry, func(err error) bool {
 		return apierrors.IsConflict(err) || isTemporaryError(err)
 	}, func() error {
@@ -81,7 +76,7 @@ func (r *K8sConnector) updateNodeConditions(ctx context.Context, healthEvents []
 		}
 
 		for conditionType, events := range conditionEventsMap {
-			r.processNodeCondition(node, conditionType, events)
+			r.processNodeCondition(ctx, node, conditionType, events)
 		}
 
 		_, err = r.clientset.CoreV1().Nodes().UpdateStatus(ctx, node, metav1.UpdateOptions{})
@@ -145,11 +140,13 @@ func buildConditionEventsMap(events []*protos.HealthEvent) map[corev1.NodeCondit
 	return conditionMap
 }
 
-func (r *K8sConnector) processNodeCondition(node *corev1.Node, conditionType corev1.NodeConditionType,
+func (r *K8sConnector) processNodeCondition(ctx context.Context, node *corev1.Node, conditionType corev1.NodeConditionType,
 	events []*protos.HealthEvent) {
 	if len(events) == 0 {
 		return
 	}
+
+	span := tracing.SpanFromContext(ctx)
 
 	latestEvent := events[len(events)-1]
 	latestTime := metav1.NewTime(safeTimestamp(latestEvent.GeneratedTimestamp))
@@ -523,11 +520,18 @@ func (r *K8sConnector) createK8sEvent(healthEvent *protos.HealthEvent) *corev1.E
 	}
 }
 
-func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) (nodeConditionsUpdated bool, nodeEventsWritten int, err error) {
+func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *protos.HealthEvents) error {
 	ctx, span := tracing.StartSpan(ctx, "platform_connector.k8s.process_health_events")
 	defer span.End()
 
+	var nodeConditionsUpdated int
+	var nodeEventsWritten int
+
 	processableEvents := filterProcessableEvents(healthEvents)
+
+	span.SetAttributes(
+		attribute.Int("platform_connector.k8s.processable_events_count", len(processableEvents)),
+	)
 
 	eventsByNode := groupEventsByNode(processableEvents)
 
@@ -540,6 +544,8 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 			} else {
 				slog.Error("Failed to process node condition updates", "node", nodeName, "error", err)
 			}
+		} else {
+			nodeConditionsUpdated++
 		}
 	}
 
@@ -555,17 +561,27 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 					firstErr = fmt.Errorf("failed to write node event for %s: %w", healthEvent.NodeName, err)
 				} else {
 					slog.Error("Failed to write node event", "node", healthEvent.NodeName, "error", err)
-					tracing.RecordError(span, err)
-					span.SetAttributes(
-						attribute.String("platform_connector.k8s.error.type", "node_event_create_failed"),
-						attribute.String("platform_connector.k8s.error.message", err.Error()),
-					)
-					return nodeConditionsUpdated, nodeEventsWritten, fmt.Errorf("failed to write node event for %s: %w", healthEvent.NodeName, err)
 				}
-				span.SetAttributes(attribute.Bool("platform_connector.k8s.node_event_created", true))
+			} else {
 				nodeEventsWritten++
 			}
 		}
+	}
+
+	span.SetAttributes(
+		attribute.Int("platform_connector.k8s.node_condition.updated", nodeConditionsUpdated),
+		attribute.Int("platform_connector.k8s.node_events_written", nodeEventsWritten),
+	)
+
+	if firstErr != nil {
+		tracing.RecordError(span, firstErr)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "platform_connector")
+		span.SetAttributes(
+			attribute.String("platform_connector.error.type", "process_health_events_error"),
+			attribute.String("platform_connector.error.message", firstErr.Error()),
+		)
+	} else {
+		tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "platform_connector")
 	}
 
 	return firstErr
@@ -599,7 +615,7 @@ func (r *K8sConnector) processNodeConditionUpdates(ctx context.Context,
 	nodeConditionUpdateDuration.Observe(float64(time.Since(start).Milliseconds()))
 	nodeConditionUpdateCounter.WithLabelValues(StatusSuccess).Inc()
 
-	return nodeConditionsUpdated, nodeEventsWritten, nil
+	return nil
 }
 
 // isTemporaryError checks if the error is a temporary network error that should be retried

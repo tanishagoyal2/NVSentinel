@@ -54,6 +54,7 @@ import (
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
 	"github.com/nvidia/nvsentinel/store-client/pkg/utils"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type eventStatusMap map[string]model.Status
@@ -172,7 +173,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 	if healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus != nil &&
 		isTerminalStatus(model.Status(healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status)) {
 		result := "already_drained"
-		switch healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status {
+		switch model.Status(healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status) {
 		case model.StatusSucceeded:
 			result = "succeeded"
 		case model.StatusFailed:
@@ -207,7 +208,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 
 		enqueueSpan.SetAttributes(
 			attribute.String("node_drainer.reconciler.status", "skipped"),
-			attribute.String("node_drainer.reconciler.message", fmt.Sprintf("event skipped due to %s status", *healthEventWithStatus.HealthEventStatus.NodeQuarantined)),
+			attribute.String("node_drainer.reconciler.message", fmt.Sprintf("event skipped due to %s status", healthEventWithStatus.HealthEventStatus.NodeQuarantined)),
 			attribute.String("node_drainer.drain.result", "cancelled"),
 		)
 
@@ -523,7 +524,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 
 		err := r.executeMarkAlreadyDrained(ctx, healthEvent, event, database, action.Status)
 		if err == nil {
-			r.deleteCustomDrainCRIfEnabled(ctx, nodeName, eventID)
+			r.deleteCustomDrainCRIfEnabled(ctx, nodeName, event)
 		} else {
 			tracing.RecordError(actionSpan, err)
 			tracing.SetOperationStatus(actionSpan, tracing.OperationStatusError, "node_drainer")

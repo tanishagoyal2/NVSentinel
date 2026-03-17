@@ -130,7 +130,7 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 				span.SetAttributes(attribute.String("platform_connector.k8s.node_name", healthEvents.GetEvents()[0].NodeName))
 			}
 
-			nodeConditionsUpdated, nodeEventsWritten, err := r.processHealthEvents(batchCtx, healthEvents)
+			err := r.processHealthEvents(batchCtx, healthEvents)
 			if err != nil {
 				slog.Error("Not able to process healthEvent", "error", err)
 				tracing.RecordError(span, err)
@@ -140,10 +140,6 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 				)
 				r.ringBuffer.HealthMetricEleProcessingFailed(item)
 			} else {
-				span.SetAttributes(
-					attribute.Bool("platform_connector.k8s.node_conditions_updated", nodeConditionsUpdated),
-					attribute.Int("platform_connector.k8s.node_events_written", nodeEventsWritten),
-				)
 				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 			}
 			span.End()
