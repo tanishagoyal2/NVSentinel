@@ -116,13 +116,10 @@ func AddHealthEventAttributes(span trace.Span, event *pb.HealthEvent) {
 		attrs = append(attrs, attribute.String(attrKey, code))
 	}
 
-	// entitiesImpacted array: health_event.entities_impacted.0.entity_type, ...
-	for i, entity := range event.EntitiesImpacted {
+	// entitiesImpacted array: health_event.entities_impacted.entity_type, ...
+	for _, entity := range event.EntitiesImpacted {
 		if entity != nil {
-			attrs = append(attrs,
-				attribute.String(fmt.Sprintf("health_event.entities_impacted.%d.entity_type", i), entity.EntityType),
-				attribute.String(fmt.Sprintf("health_event.entities_impacted.%d.entity_value", i), entity.EntityValue),
-			)
+			attrs = append(attrs, attribute.String(fmt.Sprintf("health_event.entities_impacted.%s", entity.EntityType), entity.EntityValue))
 		}
 	}
 
