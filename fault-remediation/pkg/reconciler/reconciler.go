@@ -127,9 +127,10 @@ func (r *FaultRemediationReconciler) Reconcile(
 	}
 
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
+	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
 	sessionCtx, session := r.startOrReuseEventSession(ctx,
-		healthEventWithStatus.HealthEventWithStatus.TraceID,
+		traceID,
 		parentSpanID,
 		healthEventWithStatus.ID,
 		nodeName,
@@ -146,7 +147,7 @@ func (r *FaultRemediationReconciler) Reconcile(
 	}()
 
 	// Add health event attributes to span (nil-safe: span and optional status fields)
-	tracing.AddHealthEventStatusAttributes(span, &healthEventWithStatus.HealthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
+	tracing.AddHealthEventStatusAttributes(span, healthEventWithStatus.HealthEventWithStatus.HealthEventStatus, healthEventWithStatus.HealthEvent.Id)
 	if span != nil {
 		span.SetAttributes(
 			attribute.String("fault_remediation.event.id", healthEventWithStatus.ID),
@@ -543,7 +544,7 @@ func (r *FaultRemediationReconciler) handleExistingCRSkip(
 	if span != nil {
 		span.SetAttributes(
 			attribute.String("fault_remediation.action.type", "skip"),
-			attribute.String("fault_remediation.action.type", "existing_cr"),
+			attribute.String("fault_remediation.action.reason", "existing_cr"),
 			attribute.String("fault_remediation.existing_cr.name", existingCR),
 			attribute.String("fault_remediation.status", "skipped"),
 		)

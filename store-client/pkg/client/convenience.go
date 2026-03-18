@@ -61,7 +61,7 @@ func UpdateHealthEventNodeQuarantineStatusWithSpanID(ctx context.Context, client
 	}
 
 	if status == "Quarantined" || status == "AlreadyQuarantined" {
-		fields["healtheventstatus.quarantinefinishtimestamp"] = time.Now()
+		fields["healtheventstatus.quarantinefinishtimestamp"] = timestamppb.Now()
 	}
 
 	for svc, sid := range spanIDs {

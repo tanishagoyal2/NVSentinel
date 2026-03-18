@@ -130,6 +130,7 @@ global:
   tracing:
     enabled: true
     insecure: true
+    cluster: "my-cluster"
     # Override to send directly to a specific endpoint (e.g. Alloy) instead of the in-namespace collector.
     # When empty, modules auto-target the otel-collector subchart service.
     endpoint: ""
@@ -186,7 +187,7 @@ global:
   kubernetesObjectMonitor:
     enabled: false
   eventExporter:
-    enabled: false
+    enabled: true
   preflight:
     enabled: false
   k8sdatastoreCrds:

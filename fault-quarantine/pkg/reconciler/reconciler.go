@@ -449,7 +449,7 @@ func (r *Reconciler) ProcessEvent(
 	}
 
 	if event.HealthEvent != nil {
-		tracing.AddHealthEventStatusAttributes(span, &event.HealthEventStatus, event.HealthEvent.Id)
+		tracing.AddHealthEventStatusAttributes(span, event.HealthEventStatus, event.HealthEvent.Id)
 	}
 
 	if shouldHalt := r.checkCircuitBreakerAndHalt(ctx); shouldHalt {

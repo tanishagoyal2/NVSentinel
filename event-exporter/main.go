@@ -30,6 +30,7 @@ import (
 
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/event-exporter/pkg/initializer"
 	_ "github.com/nvidia/nvsentinel/store-client/pkg/datastore/providers"
 )
@@ -43,6 +44,17 @@ var (
 func main() {
 	logger.SetDefaultStructuredLogger("event-exporter", version)
 	slog.Info("Health Events Exporter starting", "version", version, "commit", commit, "date", date)
+
+	if err := tracing.InitTracing("event-exporter"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracing.ShutdownTracing(shutdownCtx); err != nil {
+			slog.Warn("Failed to shutdown tracing", "error", err)
+		}
+	}()
 
 	if err := run(); err != nil {
 		slog.Error("Fatal error", "error", err)

@@ -202,7 +202,8 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 	if spanID == "" {
 		spanID = tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx))
 	}
-	templateData := templateDataFromEvent(healthEvent, healthEventID, healthEventData.TraceID, spanID,
+	traceID := tracing.TraceIDFromMetadata(healthEvent.GetMetadata())
+	templateData := templateDataFromEvent(healthEvent, healthEventID, traceID, spanID,
 		recommendedActionName, groupConfig.ImpactedEntityScopeValue, maintenanceResource)
 
 	actualCRName, err := c.createMaintenanceCR(ctx, selectedTemplate, templateData, actionKey, node, healthEventData)

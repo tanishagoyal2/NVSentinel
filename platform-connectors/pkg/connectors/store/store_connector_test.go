@@ -21,10 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
@@ -154,6 +156,82 @@ func TestInsertHealthEvents(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "insertMany failed")
 		mockClient.AssertExpectations(t)
+	})
+}
+
+func TestInsertHealthEvents_TraceIDInMetadata(t *testing.T) {
+	ringBuffer := ringbuffer.NewRingBuffer("testTraceID", context.Background())
+	nodeName := "testNode"
+
+	t.Run("trace_id is written into health event metadata", func(t *testing.T) {
+		mockClient := &mockDatabaseClient{}
+
+		var capturedDocs []interface{}
+		mockClient.On("InsertMany", mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				capturedDocs = args.Get(1).([]interface{})
+			}).
+			Return(&client.InsertManyResult{InsertedIDs: []interface{}{"id1"}}, nil)
+
+		connector := &DatabaseStoreConnector{
+			databaseClient: mockClient,
+			ringBuffer:     ringBuffer,
+			nodeName:       nodeName,
+		}
+
+		healthEvents := &protos.HealthEvents{
+			Events: []*protos.HealthEvent{
+				{ComponentClass: "GPU", NodeName: "node-1", CheckName: "XidError"},
+			},
+		}
+
+		err := connector.insertHealthEvents(context.Background(), healthEvents)
+		require.NoError(t, err)
+		require.Len(t, capturedDocs, 1)
+
+		doc := capturedDocs[0].(model.HealthEventWithStatus)
+		assert.NotEmpty(t, doc.HealthEvent.Metadata["trace_id"],
+			"trace_id should be set in healthevent.metadata")
+	})
+
+	t.Run("trace_id is written even when event already has metadata", func(t *testing.T) {
+		mockClient := &mockDatabaseClient{}
+
+		var capturedDocs []interface{}
+		mockClient.On("InsertMany", mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				capturedDocs = args.Get(1).([]interface{})
+			}).
+			Return(&client.InsertManyResult{InsertedIDs: []interface{}{"id1"}}, nil)
+
+		connector := &DatabaseStoreConnector{
+			databaseClient: mockClient,
+			ringBuffer:     ringBuffer,
+			nodeName:       nodeName,
+		}
+
+		healthEvents := &protos.HealthEvents{
+			Events: []*protos.HealthEvent{
+				{
+					ComponentClass: "GPU",
+					NodeName:       "node-1",
+					CheckName:      "XidError",
+					Metadata:       map[string]string{"cluster": "my-cluster", "csp": "oci"},
+				},
+			},
+		}
+
+		err := connector.insertHealthEvents(context.Background(), healthEvents)
+		require.NoError(t, err)
+		require.Len(t, capturedDocs, 1)
+
+		doc := capturedDocs[0].(model.HealthEventWithStatus)
+		assert.NotEmpty(t, doc.HealthEvent.Metadata["trace_id"],
+			"trace_id should be set in healthevent.metadata")
+		assert.Equal(t, "my-cluster", doc.HealthEvent.Metadata["cluster"],
+			"existing metadata should be preserved")
+		assert.Equal(t, "oci", doc.HealthEvent.Metadata["csp"],
+			"existing metadata should be preserved")
 	})
 }
 

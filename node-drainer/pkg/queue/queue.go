@@ -99,14 +99,32 @@ func (m *eventQueueManager) Shutdown() {
 	slog.Info("Workqueue shutdown complete")
 }
 
-// ExtractTraceIDFromEvent returns the trace_id from the event document (or fullDocument) for trace continuity.
+// ExtractTraceIDFromEvent returns the trace_id from the health event's metadata
+// (healthevent.metadata.trace_id) in the event document (or fullDocument).
 func ExtractTraceIDFromEvent(event datastore.Event) string {
 	doc := event
 	if fullDoc, ok := event["fullDocument"].(map[string]interface{}); ok {
 		doc = fullDoc
 	}
-	if tid, ok := doc["trace_id"].(string); ok {
-		return tid
+	healthevent, ok := doc["healthevent"]
+	if !ok || healthevent == nil {
+		return ""
+	}
+	heMap, ok := healthevent.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	metadata, ok := heMap["metadata"]
+	if !ok || metadata == nil {
+		return ""
+	}
+	switch m := metadata.(type) {
+	case map[string]interface{}:
+		if tid, ok := m["trace_id"].(string); ok {
+			return tid
+		}
+	case map[string]string:
+		return m["trace_id"]
 	}
 	return ""
 }
@@ -148,8 +166,8 @@ type DrainSessionMetrics struct {
 	AllowCompletionEndedAt    time.Time
 	DeleteAfterTimeoutEndedAt time.Time
 
-	PodsForceDeletedCount   int
-	ForceDeletedPods        string
+	PodsForceDeletedCount int
+	ForceDeletedPods      string
 	// Pod lists recorded once on first entry into each phase. Comma-separated namespace/name.
 	ImmediateEvictionPods   string
 	AllowCompletionPods     string

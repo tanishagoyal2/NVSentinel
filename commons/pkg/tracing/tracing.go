@@ -278,6 +278,20 @@ const (
 	ServiceEventExporter        = "event_exporter"
 )
 
+// MetadataKeyTraceID is the key used to store the trace ID in the health event's
+// Metadata map. Platform-connector writes it at ingestion time so that all
+// downstream consumers (and the event-exporter CloudEvent output) carry the trace ID.
+const MetadataKeyTraceID = "trace_id"
+
+// TraceIDFromMetadata extracts the trace ID from a health event's Metadata map.
+// Returns empty string if metadata is nil or the key is missing.
+func TraceIDFromMetadata(metadata map[string]string) string {
+	if metadata == nil {
+		return ""
+	}
+	return metadata[MetadataKeyTraceID]
+}
+
 // ParentSpanID looks up the parent service's span ID from the span_ids map.
 // Returns empty string if the map is nil or the key is missing (graceful fallback
 // to trace-only mode without parent-child link).

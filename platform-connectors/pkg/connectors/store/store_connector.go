@@ -201,14 +201,20 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 	defer dbSpan.End()
 
 	healthEventWithStatusList := make([]interface{}, 0, len(healthEvents.GetEvents()))
+	traceID := span.SpanContext().TraceID().String()
 
 	for i, healthEvent := range healthEvents.GetEvents() {
 		clonedHealthEvent := proto.Clone(healthEvent).(*protos.HealthEvent)
 
+		if clonedHealthEvent.Metadata == nil {
+			clonedHealthEvent.Metadata = make(map[string]string)
+		}
+
+		clonedHealthEvent.Metadata[tracing.MetadataKeyTraceID] = traceID
+
 		slog.Debug("Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
 
 		healthEventWithStatusObj := model.HealthEventWithStatus{
-			TraceID: span.SpanContext().TraceID().String(),
 			SpanIDs: map[string]string{
 				tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
 			},

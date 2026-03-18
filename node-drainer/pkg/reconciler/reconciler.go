@@ -149,10 +149,11 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 	nodeName := healthEventWithStatus.HealthEvent.NodeName
 	nodeQuarantined := healthEventWithStatus.HealthEventStatus.NodeQuarantined
 
+	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
 	sessionCtx, enqueueSpan := tracing.StartSpanWithLinkFromTraceContext(
 		ctx,
-		healthEventWithStatus.TraceID,
+		traceID,
 		parentSpanID,
 		"node_drainer.enqueue_event",
 	)
@@ -162,7 +163,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 	)
 	tracing.AddHealthEventStatusAttributes(
 		enqueueSpan,
-		&healthEventWithStatus.HealthEventStatus,
+		healthEventWithStatus.HealthEventStatus,
 		healthEventWithStatus.HealthEvent.Id,
 	)
 	defer enqueueSpan.End()

@@ -188,8 +188,9 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 
 	// Start the trace span here (not inside ProcessEvent) so both the callback
 	// and the subsequent DB status update share the same trace context.
+	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
-	ctx, processSpan := tracing.StartSpanWithLinkFromTraceContext(ctx, healthEventWithStatus.TraceID,
+	ctx, processSpan := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
 		parentSpanID, "fault_quarantine.process_event")
 	defer processSpan.End()
 
@@ -442,10 +443,10 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	var latestEvent struct {
 		ID          string    `bson:"_id" json:"_id"`
 		CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
-		TraceID     string    `bson:"trace_id"`
 		HealthEvent struct {
-			NodeName           string       `bson:"nodename" json:"nodeName"`
-			GeneratedTimestamp *dbTimestamp `bson:"generatedtimestamp" json:"generatedTimestamp"`
+			NodeName           string            `bson:"nodename" json:"nodeName"`
+			GeneratedTimestamp *dbTimestamp       `bson:"generatedtimestamp" json:"generatedTimestamp"`
+			Metadata           map[string]string `bson:"metadata" json:"metadata"`
 		} `bson:"healthevent" json:"healthEvent"`
 		SpanIDs           map[string]string `bson:"span_ids"`
 		HealthEventStatus struct {
@@ -493,10 +494,11 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		return nil
 	}
 
+	latestTraceID := tracing.TraceIDFromMetadata(latestEvent.HealthEvent.Metadata)
 	platformConnectorSpanId := tracing.ParentSpanID(latestEvent.SpanIDs, tracing.ServicePlatformConnector)
 	// Use a detached context (no active span) so the new span becomes a true root
 	// within the trace, not a child of whatever span is currently active in ctx.
-	ctx, span := tracing.StartSpanWithLinkFromTraceContext(context.Background(), latestEvent.TraceID, platformConnectorSpanId, "fault_quarantine.cancel_latest_quarantining_events")
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(context.Background(), latestTraceID, platformConnectorSpanId, "fault_quarantine.cancel_latest_quarantining_events")
 	defer span.End()
 
 	// Update all events from the current quarantine session (Quarantined + AlreadyQuarantined)

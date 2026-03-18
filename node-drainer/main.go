@@ -231,12 +231,6 @@ func startEventWatcher(ctx context.Context, components *initializer.Components, 
 
 		// Consume events from the change stream
 		for event := range components.EventWatcher.Events() {
-			healthEventWithStatus := model.HealthEventWithStatus{}
-			if err := event.UnmarshalDocument(&healthEventWithStatus); err != nil {
-				slog.Error("Failed to extract health event with status", "error", err)
-				continue
-			}
-
 			if err := components.Reconciler.PreprocessAndEnqueueEvent(ctx, event); err != nil {
 				slog.Error("Failed to preprocess and enqueue event", "error", err)
 				continue

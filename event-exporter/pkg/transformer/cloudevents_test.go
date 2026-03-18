@@ -153,6 +153,37 @@ func TestToCloudEvent(t *testing.T) {
 			},
 		},
 		{
+			name: "event with trace_id in metadata flows through to CloudEvent",
+			event: &pb.HealthEvent{
+				Version:            1,
+				Agent:              "syslog-health-monitor",
+				ComponentClass:     "GPU",
+				CheckName:          "SysLogsXIDError",
+				NodeName:           "gpu-node-1",
+				GeneratedTimestamp: fixedTimestamp,
+				Metadata: map[string]string{
+					"cluster":  "prod-cluster-1",
+					"csp":      "oci",
+					"trace_id": "12bd33114d7ede9c9227d988eccd9725",
+				},
+			},
+			metadata: map[string]string{"cluster": "prod-cluster-1", "environment": "production"},
+			wantErr:  false,
+			validateFunc: func(t *testing.T, ce *CloudEvent) {
+				healthEvent := ce.Data["healthEvent"].(map[string]any)
+				eventMetadata := healthEvent["metadata"].(map[string]string)
+				if eventMetadata["trace_id"] != "12bd33114d7ede9c9227d988eccd9725" {
+					t.Errorf("trace_id = %v, want 12bd33114d7ede9c9227d988eccd9725", eventMetadata["trace_id"])
+				}
+				if eventMetadata["cluster"] != "prod-cluster-1" {
+					t.Errorf("cluster = %v, want prod-cluster-1", eventMetadata["cluster"])
+				}
+				if eventMetadata["csp"] != "oci" {
+					t.Errorf("csp = %v, want oci", eventMetadata["csp"])
+				}
+			},
+		},
+		{
 			name: "event with empty metadata map",
 			event: &pb.HealthEvent{
 				Version:            1,
