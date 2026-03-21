@@ -340,9 +340,9 @@ func setupE2EReconcilerWithOptions(t *testing.T, ctx context.Context, cfg E2ERec
 		}
 	}
 
-	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
+	r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
 
-	r.initializeQuarantineMetrics()
+	r.initializeQuarantineMetrics(context.Background())
 
 	// Create mock watcher
 	mockWatcher := testutils.NewMockChangeStreamWatcher()
@@ -531,8 +531,8 @@ func runReconcilerAndQuarantineNode(
 			}
 		}
 
-		r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
-		r.initializeQuarantineMetrics()
+		r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
+		r.initializeQuarantineMetrics(context.Background())
 
 		mockWatcher := testutils.NewMockChangeStreamWatcher()
 
@@ -4185,7 +4185,7 @@ func TestE2E_UnhealthyEventNotMatchingRulesNotPropagated(t *testing.T) {
 // 		}
 // 	}
 
-// 	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
+// 	r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
 // 	fqClient.NodeInformer.SetOnManualUncordonCallback(r.handleManualUncordon)
 
 // 	mockWatcher := testutils.NewMockChangeStreamWatcher()

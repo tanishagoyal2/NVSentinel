@@ -89,7 +89,7 @@ type serverSetup struct {
 }
 
 func main() {
-	logger.SetDefaultStructuredLogger("janitor", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("janitor", version)
 	slog.Info("Starting janitor", "version", version, "commit", commit, "date", date)
 
 	if err := auditlogger.InitAuditLogger("janitor"); err != nil {

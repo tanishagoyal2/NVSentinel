@@ -152,23 +152,33 @@ Each module creates two categories of spans:
 
 ### Health-Events-Analyzer
 
-| What is tracked | Span Attributes | Use case |
-|-----------------|----------------|-------------------|
-| Ruleset execution (MongoDB pipeline) | `analyzer.mongo.pipeline.stages` (int), `analyzer.mongo.pipeline.duration_ms` (float), `analyzer.mongo.pipeline.documents_matched` (int) | How many pipeline stages ran? How long did the pipeline take? How many documents matched? |
-| Event publication | `analyzer.event.published` (bool), `analyzer.event.published_event_id` (string), `analyzer.event.recommended_action` (string) | Was an event published? What was the recommended action? |
-| XID burst detection | `analyzer.xid.burst_detected` (bool), `analyzer.xid.burst_count` (int), `analyzer.xid.history_cleared` (bool), `analyzer.xid.node` (string) | Was an XID burst detected? On which node? Was history cleared? |
-| Errors | `analyzer.error.type`, `analyzer.error.message` | What went wrong in the analyzer and why? |
+**Root span:** `analyzer.process_event` (linked to `platform_connector` span via `span_ids`)
+
+| What is tracked | Span / Attribute | Use case |
+|-----------------|-----------------|-------------------|
+| Event processing (root) | `analyzer.process_event` root span (linked to platform_connector); `analyzer.event.node_name`, `analyzer.event.component_class`, `analyzer.event.agent`, `analyzer.event.is_healthy`, `analyzer.event.published` (bool), `analyzer.event.processing_duration_ms` (float) | Full lifecycle of one health event through the analyzer. How long did processing take? Was a new event published? |
+| Event handling | `analyzer.handle_event` child span; `analyzer.rules.evaluated` (int), `analyzer.rules.matched` (int), `analyzer.rules.skipped` (int), `analyzer.event.published` (bool) | How many rules were evaluated, matched, and skipped for this event? |
+| Rule evaluation | `analyzer.evaluate_rule` child span; `analyzer.rule.name`, `analyzer.rule.recommended_action`, `analyzer.rule.stages_count` (int), `analyzer.rule.matched` (bool), `analyzer.rule.evaluation_duration_ms` (float) | Which rule was evaluated? Did it match? How long did evaluation take? |
+| Aggregation pipeline (MongoDB) | `analyzer.mongo.aggregate` child span; `analyzer.mongo.rule_name`, `analyzer.mongo.pipeline.stages` (int), `analyzer.mongo.pipeline.duration_ms` (float), `analyzer.mongo.pipeline.documents_matched` (int) | How many pipeline stages ran? How long did the pipeline take? How many documents matched? |
+| Event publication (matched rule) | `analyzer.publish_matched_event` child span; `analyzer.event.rule_name`, `analyzer.event.recommended_action`, `analyzer.event.node_name`, `analyzer.event.published` (bool) | Was a matched event published? Which rule triggered it? |
+| Publisher (gRPC) | `analyzer.publish` child span; `analyzer.publish.rule_name`, `analyzer.publish.recommended_action`, `analyzer.publish.node_name`, `analyzer.publish.is_fatal` (bool), `analyzer.publish.processing_strategy`, `analyzer.publish.success` (bool) | What was published to platform-connector? Was it fatal? |
+| gRPC call with retry | `analyzer.grpc.publish` child span; `analyzer.grpc.retry_count` (int), `analyzer.grpc.duration_ms` (float), `analyzer.grpc.status` = "success"/"failure" | How many retries were needed for the gRPC call? What was the latency? |
+| XID detector handling | `analyzer.xid.handle` child span; `analyzer.xid.node`, `analyzer.xid.component_class`, `analyzer.xid.is_healthy`, `analyzer.xid.history_cleared` (bool), `analyzer.xid.burst_detected` (bool) | Was XID history cleared? Was a burst detected? |
+| XID burst detection | `analyzer.xid.burst_detection` child span; `analyzer.xid.node`, `analyzer.xid.error_code`, `analyzer.xid.burst_detected` (bool), `analyzer.xid.burst_count` (int), `analyzer.event.published` (bool), `analyzer.event.published_rule` | Was an XID burst detected? How many bursts? Which XID code? |
+| Errors | `analyzer.error.type`, `analyzer.error.message` on relevant spans | What went wrong in the analyzer and why? |
 
 ### Platform-Connector
 
 | What is tracked | Span Attributes | Use case |
 |-----------------|----------------|-------------------|
 | gRPC event reception | `platform_connector.grpc.event_received` (bool), `platform_connector.grpc.events_count` (int), `platform_connector.grpc.duration_ms` (float) | Was a health event received via gRPC? How many? How long did the call take? |
-| MongoDB insert (also writes `span_ids.platform_connector`) | `platform_connector.db.operation = "insert"`, `platform_connector.db.duration_ms` (float) | Was the event written to MongoDB? How long did the insert take? |
+| MongoDB insert (writes `span_ids.platform_connector` and `trace_id` into `healthevent.metadata`) | `platform_connector.db.operation = "insert"`, `platform_connector.db.duration_ms` (float) | Was the event written to MongoDB? How long did the insert take? |
 | Node condition updates | `platform_connector.k8s.node_condition.updated` (bool) | Were node conditions updated in Kubernetes for this event? |
 | Errors | `platform_connector.error.type`, `platform_connector.error.message` | What went wrong in platform-connector and why? |
 
 ### Event Exporter
+
+The `trace_id` stored in `healthevent.metadata` by platform-connector is automatically included in the exported CloudEvent because the CloudEvents transformer copies all health event metadata into the output. This allows linking an exported event in Kibana/Kratos back to the MongoDB document and its distributed trace — search by `metadata.trace_id` in Kibana to find the corresponding trace in Grafana/Tempo.
 
 | What is tracked | Span Attributes | Use case |
 |-----------------|----------------|-------------------|
@@ -256,7 +266,7 @@ Why we use links in this system:
 
 ### Cross-Service Trace Continuity via `trace_id` in MongoDB
 
-Platform-connector creates the root trace when it receives a health event via gRPC and stores `trace_id` as a top-level field in the MongoDB document.
+Platform-connector creates the root trace when it receives a health event via gRPC and writes `trace_id` into the health event's `metadata` map (`healthevent.metadata.trace_id`). This single location is used by all downstream modules for trace continuity and also flows through to the event-exporter CloudEvent output (since the transformer copies all health event metadata).
 
 ```
 Health Monitor (sends event, NO trace context)
@@ -265,16 +275,17 @@ Health Monitor (sends event, NO trace context)
     ▼
 Platform Connector (creates ROOT trace, trace_id: abc123)
     │
-    │ [2. MongoDB Storage - trace_id + span_ids stored as top-level fields]
+    │ [2. MongoDB Storage - trace_id written into healthevent.metadata,
+    │     span_ids stored as top-level field]
     ▼
-MongoDB (stores event with trace_id and span_ids)
+MongoDB (stores event with trace_id in healthevent.metadata and span_ids)
     │
-    │ [3. MongoDB Change Streams - trace context extracted from top-level fields]
+    │ [3. MongoDB Change Streams - trace_id extracted from healthevent.metadata]
     ├──► Fault Quarantine (links to platform_connector span, writes fault_quarantine span ID)
     ├──► Node Drainer (links to fault_quarantine span, writes node_drainer span ID)
     ├──► Fault Remediation (links to node_drainer span)
     ├──► Health Events Analyzer (continues trace abc123)
-    └──► Event Exporter (continues trace abc123)
+    └──► Event Exporter (continues trace abc123, trace_id included in exported CloudEvent via metadata)
 ```
 
 **All modules share the same trace ID (`abc123`)** — this is only possible with context propagation at each step.
@@ -284,27 +295,52 @@ MongoDB document structure:
 ```json
 {
   "_id": "...",
-  "trace_id": "abc123",
   "span_ids": {
     "platform_connector": "<span-id-of-platform_connector.db.insert>",
     "fault_quarantine":   "<span-id-of-fault_quarantine.db.update_status>",
     "node_drainer":       "<span-id-of-node_drainer active span>"
   },
   "createdAt": "...",
-  "healthevent": { ... },
+  "healthevent": {
+    "metadata": {
+      "trace_id": "abc123"
+    },
+    ...
+  },
   "healtheventstatus": { ... }
 }
 ```
 
-The `HealthEventWithStatus` struct carries both fields:
+The `HealthEventWithStatus` struct carries the trace context fields:
 
 ```go
 type HealthEventWithStatus struct {
-    TraceID           string            `bson:"trace_id" json:"trace_id"`
     SpanIDs           map[string]string `bson:"span_ids,omitempty" json:"span_ids,omitempty"`
     CreatedAt         time.Time         `bson:"createdAt"`
     HealthEvent       *protos.HealthEvent `bson:"healthevent,omitempty"`
     HealthEventStatus HealthEventStatus   `bson:"healtheventstatus"`
+}
+```
+
+The `trace_id` is stored in `healthevent.metadata["trace_id"]` — inside the health event proto's metadata map. All downstream modules extract it using `tracing.TraceIDFromMetadata(healthEvent.GetMetadata())`. The CloudEvents transformer in event-exporter copies all health event metadata into the exported event, so the `trace_id` is automatically included in the Kibana/Kratos event, allowing operators to link an exported event back to the MongoDB document and its distributed trace.
+
+**How platform-connector stores the trace_id:**
+
+```go
+clonedHealthEvent := proto.Clone(healthEvent).(*protos.HealthEvent)
+
+if clonedHealthEvent.Metadata == nil {
+    clonedHealthEvent.Metadata = make(map[string]string)
+}
+clonedHealthEvent.Metadata[tracing.MetadataKeyTraceID] = traceID
+
+healthEventWithStatusObj := model.HealthEventWithStatus{
+    SpanIDs: map[string]string{
+        tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
+    },
+    CreatedAt:   time.Now().UTC(),
+    HealthEvent: clonedHealthEvent,
+    ...
 }
 ```
 
@@ -313,20 +349,31 @@ type HealthEventWithStatus struct {
 Each module that writes to the MongoDB health event document also writes its own span ID into the `span_ids` map. This allows the next module in the pipeline to pick up the exact span to link against, creating an auditable causal chain without requiring synchronous gRPC calls between modules.
 
 
-**How each module reads the upstream span ID:**
+**How each module reads the trace_id and upstream span ID:**
 
 ```go
-// fault-quarantine reads platform_connector's span ID
+// All modules extract trace_id from the health event metadata using the shared helper:
+traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
+
+// fault-quarantine reads trace_id and platform_connector's span ID
 parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
-ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, parentSpanID, "fault_quarantine.process_event")
+ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
+    parentSpanID, "fault_quarantine.process_event")
 
-// node-drainer reads fault_quarantine's span ID
+// node-drainer reads trace_id and fault_quarantine's span ID
 parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
-ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, parentSpanID, "node_drainer.enqueue_event")
+ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
+    parentSpanID, "node_drainer.enqueue_event")
 
-// fault-remediation reads node_drainer's span ID
+// fault-remediation reads trace_id and node_drainer's span ID
 parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
 sessionCtx, session := r.startOrReuseEventSession(ctx, traceID, parentSpanID, ...)
+
+// event-exporter — trace_id flows automatically via healthevent.metadata["trace_id"]
+// The CloudEvents transformer copies all health event metadata into the exported event:
+//   healthEventData["metadata"] = event.Metadata
+// So the exported CloudEvent in Kibana/Kratos will contain metadata.trace_id,
+// which can be used to look up the full distributed trace in Grafana/Tempo.
 ```
 
 Service name constants are defined in `commons/pkg/tracing/tracing.go`:
@@ -385,7 +432,7 @@ Platform-Connector creates the root trace when it receives a health event via gR
 - **Span name**: `platform_connector.receive_event`
 - **Trace ID generated here** in platform-connector
 - **No trace context propagation needed from health monitor**: Health monitor just sends the gRPC call with the health event
-- Platform-connector stores both `trace_id` and initial `span_ids` map in MongoDB
+- Platform-connector writes `trace_id` into `healthevent.metadata["trace_id"]` and stores the initial `span_ids` map as a top-level field in MongoDB
 
 ```
 Health Monitor:
@@ -397,7 +444,8 @@ Platform Connector:
   1. Receive gRPC call
   2. Create NEW trace (trace_id: abc123)
   3. Create root span: "platform_connector.receive_event"
-  4. Store event in MongoDB with trace_id and span_ids as top-level fields
+  4. Write trace_id into healthevent.metadata["trace_id"]
+  5. Store event in MongoDB with span_ids as top-level field
 ```
 
 ### Trace Export
@@ -455,6 +503,135 @@ env:
   - name: OTEL_SERVICE_NAME
     value: "platform-connector"
 ```
+
+## Log-Trace Correlation (OTel Log Appender)
+
+An **OTel Log Appender** (or **log bridge**) is a mechanism that automatically attaches `trace_id` and `span_id` from the active span context to every log line. Without it, logs and traces are separate signals: you can see a trace in Grafana Tempo or logs in Loki/Kibana, but you cannot jump from a trace to the corresponding logs (or vice versa) for the same health event. With log-trace correlation enabled, operators can click a trace and see all log lines for that request, or filter logs by `trace_id` to find the associated trace.
+
+OpenTelemetry defines two standard workflows for achieving this; the choice depends on how logs are collected (direct OTLP export vs. stdout/file with a log shipper).
+
+### Approach 1: Direct-to-Collector (OTel Logs SDK + `otelslog` bridge)
+
+In this workflow, logs are emitted **directly from the application to the OTel Collector** via OTLP (similar to traces). The OpenTelemetry Logs SDK attaches `trace_id` and `span_id` automatically. Go's `slog` is connected to this pipeline using the official **otelslog** bridge (`go.opentelemetry.io/contrib/bridges/otelslog`).
+
+**Setup:**
+
+1. Initialize a `LoggerProvider` with an OTLP log exporter and batch processor (analogous to `TracerProvider` for traces).
+2. Register it as the global logger provider.
+3. Use the bridge as the default `slog` handler.
+
+**Example:**
+
+```go
+import "go.opentelemetry.io/contrib/bridges/otelslog"
+
+// After initializing LoggerProvider with OTLP exporter + batch processor:
+global.SetLoggerProvider(loggerProvider)
+slog.SetDefault(otelslog.NewLogger("my-service"))
+
+// All subsequent slog calls that pass context automatically include trace_id and span_id:
+slog.InfoContext(ctx, "processing event")
+```
+
+**Pros:** Full OTel integration; logs flow through the same collector pipeline as traces; trace context is attached by the SDK.  
+**Cons:** Heavier — adds a second OTLP export path (traces + logs); requires the full OTel Logs SDK; the Go Logs SDK is still **Experimental**. Logs are sent over the network to the collector instead of to stdout, so existing Kubernetes log collection (e.g., tailing container stdout) may need to be adjusted or duplicated.
+
+### Approach 2: Via stdout with custom slog Handler wrapper
+
+In this workflow, logs continue to be written to stdout/stderr as JSON. A **custom `slog.Handler`** wraps the existing handler and injects `trace_id` and `span_id` from the active span (via `context.Context`) into each log record. A log shipper (FluentBit, Grafana Alloy, Promtail, etc.) tails container logs, parses the JSON (including the new fields), and forwards them to Loki or another backend. Correlation works because both traces (Tempo) and logs (Loki) share the same `trace_id`/`span_id` fields.
+
+**Example handler wrapper:**
+
+```go
+import (
+    "context"
+    "log/slog"
+    "go.opentelemetry.io/otel/trace"
+)
+
+type traceHandler struct {
+    inner slog.Handler
+}
+
+func (h *traceHandler) Handle(ctx context.Context, r slog.Record) error {
+    span := trace.SpanFromContext(ctx)
+    if span.SpanContext().IsValid() {
+        r.AddAttrs(
+            slog.String("trace_id", span.SpanContext().TraceID().String()),
+            slog.String("span_id", span.SpanContext().SpanID().String()),
+        )
+    }
+    return h.inner.Handle(ctx, r)
+}
+
+func (h *traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+    return &traceHandler{inner: h.inner.WithAttrs(attrs)}
+}
+
+func (h *traceHandler) WithGroup(name string) slog.Handler {
+    return &traceHandler{inner: h.inner.WithGroup(name)}
+}
+
+func (h *traceHandler) Enabled(ctx context.Context, level slog.Level) bool {
+    return h.inner.Enabled(ctx, level)
+}
+```
+
+Integration with NVSentinel's logger (`commons/pkg/logger/logger.go`): wrap the existing `slog.NewJSONHandler(...)` with this handler when creating the structured logger, so that all JSON log lines include `trace_id` and `span_id` when an active span exists in the context.
+
+**Example log output:**
+
+```json
+{
+  "time": "2026-03-18T10:00:00Z",
+  "level": "INFO",
+  "msg": "processing event",
+  "module": "fault-quarantine",
+  "trace_id": "abc123def456...",
+  "span_id": "789ghi012..."
+}
+```
+
+**Pros:** Lightweight; no new OTLP log export; works with existing Kubernetes log collection (stdout → shipper → Loki).  
+**Cons:** Callers must use context-aware logging methods (see below).
+
+**NVSentinel implementation:** `commons/pkg/logger` provides `TraceContextHandler` and `SetDefaultStructuredLoggerWithTraceCorrelation` / `NewStructuredLoggerWithTraceCorrelation`, which wrap `slog.NewJSONHandler` on stderr. The following modules call `SetDefaultStructuredLoggerWithTraceCorrelation` in `main` (Approach 2 only): **fault-quarantine**, **platform-connectors**, **node-drainer**, **fault-remediation**, **janitor**, **janitor-provider**, **event-exporter**, **health-events-analyzer**. Traces still export via OTLP from `tracing.InitTracing`; application logs reach Panoptes through the existing **tail → Alloy → OTLP gateway** path with `trace_id` / `span_id` on JSON lines when callers use `slog.*Context(ctx, ...)`.
+
+### Current cluster log pipeline (riva-dgxc / observability)
+
+In clusters such as `riva-dgxc-k8s-oci-ord-dev1`, logs reach the OTel collector as follows:
+
+- **dgxc-alloy-node** (DaemonSet in `dgxc-alloy`): Alloy runs `loki.source.file` to tail pod logs from configured namespaces (including `nvsentinel`). It converts Loki-format to OTLP and forwards to **dgxc-alloy-gateway** via `otelcol.exporter.otlphttp` with endpoint `http://dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4318`. So NVSentinel container stdout is collected by Alloy and sent to the same gateway that receives OTLP traces.
+- **kratos-fluent-bit** (DaemonSet in `observability`): Fluent Bit tails a limited set of container log paths (e.g. `*vault*`, `*ingress*`, `*secret*`) and sends to **Kratos ingest** (`ingest.kratos.nvidia.com`), not to dgxc-alloy. NVSentinel logs are not on that path unless they match those patterns.
+
+So today, **NVSentinel logs flow**: app stdout/stderr → **dgxc-alloy-node** (tail + Loki→OTLP) → **dgxc-alloy-gateway:4318** → Panoptes. No application-level log endpoint is required for that path; the endpoint is in the Alloy node config. Optional **Approach 1** (in-app OTLP logs via `otelslog`) can additionally send logs over `OTEL_EXPORTER_OTLP_ENDPOINT` but is **not** used for fault-quarantine (to avoid duplicate log ingestion when tail-based collection is enabled).
+
+#### Tail and Loki in this pipeline
+
+- **Tail:** In log collection, “tailing” means continuously reading log files as new lines are appended—like the Unix `tail -f`. In Kubernetes, each container’s stdout/stderr is written to a log file under `/var/log/containers/` (or similar). A log shipper (e.g. Alloy, Fluent Bit) runs on the node, discovers these files, and tails them so that every line the app writes is read and forwarded. So “tail” here is the **mechanism** that pulls logs from the filesystem into the pipeline; the app never talks to the collector directly.
+
+- **Loki:** [Grafana Loki](https://grafana.com/oss/loki/) is a log aggregation system (label-based, like Prometheus for logs). In the Alloy/Grafana ecosystem, “Loki” also refers to the **log data model and in-memory stream format** used between components. Alloy’s `loki.source.file` tails files and emits log entries in that Loki format (streams with labels such as `namespace`, `pod`, `container`). Other Alloy blocks (e.g. `loki.process.*`) work on these streams. To send logs to an OTLP endpoint (like dgxc-alloy-gateway), Alloy uses a **Loki → OTLP bridge** (`otelcol.receiver.loki` or a convert step) that turns Loki-format streams into OTLP log records. So in this pipeline, Loki is the **internal format** for logs inside Alloy; the gateway still receives OTLP, not raw Loki API.
+
+### Comparison
+
+| Aspect | Direct-to-Collector (otelslog) | Via stdout (custom handler) |
+|--------|--------------------------------|----------------------------|
+| Log transport | OTLP to collector | stdout → shipper → backend |
+| Trace context | Injected by OTel Logs SDK | Injected by custom handler from `context.Context` |
+| Dependencies | OTel Logs SDK + otelslog bridge | Only `go.opentelemetry.io/otel/trace` (already used for tracing) |
+| NVSentinel fit | New export path; may duplicate or replace current log collection | Fits current pattern (JSON to stderr, collected by cluster log shipper) |
+
+For NVSentinel, where modules already write JSON logs to stderr and Kubernetes typically collects them via a shipper, **Approach 2** is the natural fit: it enriches existing logs with `trace_id`/`span_id` without changing the log collection architecture.
+
+### Requirement for callers
+
+**Both approaches** require that logging calls pass the request or span context so the handler (or bridge) can read the active span. Use the context-aware `slog` APIs:
+
+- `slog.InfoContext(ctx, "message", ...)` instead of `slog.Info("message", ...)`
+- `slog.ErrorContext(ctx, "message", ...)` instead of `slog.Error("message", ...)`
+- and similarly for `DebugContext`, `WarnContext`, etc.
+
+When `ctx` contains an active span (e.g., from `tracing.StartSpan` or `StartSpanWithLinkFromTraceContext`), the log record will include `trace_id` and `span_id`. When there is no active span, the handler can omit these fields (Approach 2) or the bridge will omit them (Approach 1).
 
 ## References
 Traces[https://opentelemetry.io/docs/concepts/signals/traces/#consumer]

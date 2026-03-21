@@ -102,14 +102,14 @@ func (rb *RingBuffer) Enqueue(item *QueuedHealthEvents) {
 func (rb *RingBuffer) Dequeue() (*QueuedHealthEvents, bool) {
 	item, quit := rb.healthMetricQueue.Get()
 	if quit {
-		slog.Info("Queue signaled shutdown")
+		slog.InfoContext(rb.ctx, "Queue signaled shutdown")
 		return nil, true
 	}
 
-	slog.Info("Successfully got item", "healthEvents", item.Events)
+	slog.InfoContext(rb.ctx, "Successfully got item", "healthEvents", item.Events)
 
 	if errors.Is(rb.ctx.Err(), context.Canceled) {
-		slog.Info("Context cancelled, signaling quit")
+		slog.InfoContext(rb.ctx, "Context cancelled, signaling quit")
 		rb.healthMetricQueue.Forget(item)
 		rb.healthMetricQueue.Done(item)
 

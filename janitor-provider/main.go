@@ -77,8 +77,7 @@ func (s *janitorProviderServer) SendRebootSignal(
 	span.SetAttributes(
 		attribute.String("janitor_provider.reboot.node", req.NodeName),
 	)
-	slog.Info("Sending reboot signal", "node", req.NodeName)
-
+	slog.InfoContext(ctx, "Sending reboot signal", "node", req.NodeName)
 	node, err := s.k8sClient.CoreV1().Nodes().Get(ctx, req.NodeName, metav1.GetOptions{})
 	if err != nil {
 		span.SetAttributes(
@@ -115,8 +114,17 @@ func (s *janitorProviderServer) SendRebootSignal(
 }
 
 func (s *janitorProviderServer) IsNodeReady(ctx context.Context, req *cspv1alpha1.IsNodeReadyRequest) (*cspv1alpha1.IsNodeReadyResponse, error) {
-	slog.Info("Checking if node is ready", "node", req.NodeName)
-
+	ctx, span := tracing.StartSpan(ctx, "janitor_provider.IsNodeReady")
+	defer func() {
+		if span != nil {
+			span.End()
+		}
+	}()
+	span.SetAttributes(
+		attribute.String("janitor_provider.reboot.node", req.NodeName),
+		attribute.String("janitor_provider.reboot.request_ref", req.RequestId),
+	)
+	slog.InfoContext(ctx, "Checking if node is ready", "node", req.NodeName)
 	node, err := s.k8sClient.CoreV1().Nodes().Get(ctx, req.NodeName, metav1.GetOptions{})
 	if err != nil {
 		span.SetAttributes(
@@ -146,8 +154,14 @@ func (s *janitorProviderServer) IsNodeReady(ctx context.Context, req *cspv1alpha
 }
 
 func (s *janitorProviderServer) SendTerminateSignal(ctx context.Context, req *cspv1alpha1.SendTerminateSignalRequest) (*cspv1alpha1.SendTerminateSignalResponse, error) {
-	slog.Info("Sending terminate signal", "node", req.NodeName)
-
+	ctx, span := tracing.StartSpan(ctx, "janitor_provider.SendTerminateSignal")
+	defer func() {
+		if span != nil {
+			span.End()
+		}
+	}()
+	span.SetAttributes(attribute.String("janitor_provider.terminate.node", req.NodeName))
+	slog.InfoContext(ctx, "Sending terminate signal", "node", req.NodeName)
 	node, err := s.k8sClient.CoreV1().Nodes().Get(ctx, req.NodeName, metav1.GetOptions{})
 	if err != nil {
 		span.SetAttributes(
@@ -182,7 +196,7 @@ func (s *janitorProviderServer) SendTerminateSignal(ctx context.Context, req *cs
 }
 
 func main() {
-	logger.SetDefaultStructuredLogger("janitor-provider", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("janitor-provider", version)
 	slog.Info("Starting janitor-provider", "version", version, "commit", commit, "date", date)
 
 	if err := tracing.InitTracing("janitor-provider"); err != nil {

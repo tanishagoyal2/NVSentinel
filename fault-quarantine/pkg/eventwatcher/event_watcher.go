@@ -131,7 +131,7 @@ func (w *EventWatcher) watchEvents(ctx context.Context) error {
 		metrics.TotalEventsReceived.Inc()
 
 		if processErr := w.processEvent(ctx, event); processErr != nil {
-			slog.Error("Event processing failed, but still marking as processed to proceed ahead", "error", processErr)
+			slog.ErrorContext(ctx, "Event processing failed, but still marking as processed to proceed ahead", "error", processErr)
 		}
 
 		// Extract the resume token from the event to avoid race condition
@@ -139,7 +139,7 @@ func (w *EventWatcher) watchEvents(ctx context.Context) error {
 		resumeToken := event.GetResumeToken()
 		if err := w.changeStreamWatcher.MarkProcessed(ctx, resumeToken); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("mark_processed_error").Inc()
-			slog.Error("Failed to mark event as processed", "error", err)
+			slog.ErrorContext(ctx, "Failed to mark event as processed", "error", err)
 
 			return fmt.Errorf("failed to mark event as processed: %w", err)
 		}
@@ -158,7 +158,7 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 		return fmt.Errorf("failed to unmarshal event: %w", err)
 	}
 
-	slog.Debug("Processing event", "event", healthEventWithStatus)
+	slog.DebugContext(ctx, "Processing event", "event", healthEventWithStatus)
 
 	eventID, err := event.GetDocumentID()
 	if err != nil {
@@ -207,7 +207,7 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	if status != nil {
 		if err := w.updateNodeQuarantineStatus(ctx, recordUUID, status, healthEventWithStatus.SpanIDs); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("update_quarantine_status_error").Inc()
-			slog.Error("Failed to update node quarantine status", "error", err)
+			slog.ErrorContext(ctx, "Failed to update node quarantine status", "error", err)
 
 			return fmt.Errorf("failed to update node quarantine status: %w", err)
 		}
@@ -445,7 +445,7 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
 		HealthEvent struct {
 			NodeName           string            `bson:"nodename" json:"nodeName"`
-			GeneratedTimestamp *dbTimestamp       `bson:"generatedtimestamp" json:"generatedTimestamp"`
+			GeneratedTimestamp *dbTimestamp      `bson:"generatedtimestamp" json:"generatedTimestamp"`
 			Metadata           map[string]string `bson:"metadata" json:"metadata"`
 		} `bson:"healthevent" json:"healthEvent"`
 		SpanIDs           map[string]string `bson:"span_ids"`

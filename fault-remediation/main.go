@@ -69,7 +69,7 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("fault-remediation", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("fault-remediation", version)
 	slog.Info("Starting fault-remediation", "version", version, "commit", commit, "date", date)
 
 	// Set controller-runtime's log sink so manager and controllers can log (required for shutdown, etc.)

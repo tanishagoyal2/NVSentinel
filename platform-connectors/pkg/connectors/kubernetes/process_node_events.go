@@ -89,7 +89,7 @@ func (r *K8sConnector) updateNodeConditions(ctx context.Context, healthEvents []
 			conditionTypes = append(conditionTypes, string(ct))
 		}
 
-		slog.Error("Failed to update node conditions",
+		slog.ErrorContext(ctx, "Failed to update node conditions",
 			"node", nodeName,
 			"conditionTypes", conditionTypes,
 			"error", err)
@@ -149,7 +149,7 @@ func (r *K8sConnector) processNodeCondition(ctx context.Context, node *corev1.No
 	span := tracing.SpanFromContext(ctx)
 
 	latestEvent := events[len(events)-1]
-	latestTime := metav1.NewTime(safeTimestamp(latestEvent.GeneratedTimestamp))
+	latestTime := metav1.NewTime(safeTimestamp(ctx, latestEvent.GeneratedTimestamp))
 
 	matchedCondition, conditionIndex, conditionExists := findNodeCondition(node, conditionType)
 
@@ -193,9 +193,9 @@ func (r *K8sConnector) processNodeCondition(ctx context.Context, node *corev1.No
 	}
 }
 
-func safeTimestamp(ts *timestamppb.Timestamp) time.Time {
+func safeTimestamp(ctx context.Context, ts *timestamppb.Timestamp) time.Time {
 	if ts == nil {
-		slog.Warn("HealthEvent has nil GeneratedTimestamp, falling back to current time")
+		slog.WarnContext(ctx, "HealthEvent has nil GeneratedTimestamp, falling back to current time")
 
 		return time.Now()
 	}
@@ -472,12 +472,12 @@ func (r *K8sConnector) constructHealthEventMessage(healthEvent *protos.HealthEve
 }
 
 // filterProcessableEvents filters out STORE_ONLY events that should not create node conditions or K8s events.
-func filterProcessableEvents(healthEvents *protos.HealthEvents) []*protos.HealthEvent {
+func filterProcessableEvents(ctx context.Context, healthEvents *protos.HealthEvents) []*protos.HealthEvent {
 	var processableEvents []*protos.HealthEvent
 
 	for _, healthEvent := range healthEvents.Events {
 		if healthEvent.ProcessingStrategy == protos.ProcessingStrategy_STORE_ONLY {
-			slog.Info("Skipping STORE_ONLY health event (no node conditions / node events)",
+			slog.InfoContext(ctx, "Skipping STORE_ONLY health event (no node conditions / node events)",
 				"node", healthEvent.NodeName,
 				"checkName", healthEvent.CheckName,
 				"agent", healthEvent.Agent)
@@ -492,8 +492,8 @@ func filterProcessableEvents(healthEvents *protos.HealthEvents) []*protos.Health
 }
 
 // createK8sEvent creates a Kubernetes event from a health event.
-func (r *K8sConnector) createK8sEvent(healthEvent *protos.HealthEvent) *corev1.Event {
-	ts := safeTimestamp(healthEvent.GeneratedTimestamp)
+func (r *K8sConnector) createK8sEvent(ctx context.Context, healthEvent *protos.HealthEvent) *corev1.Event {
+	ts := safeTimestamp(ctx, healthEvent.GeneratedTimestamp)
 
 	return &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
@@ -527,7 +527,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 	var nodeConditionsUpdated int
 	var nodeEventsWritten int
 
-	processableEvents := filterProcessableEvents(healthEvents)
+	processableEvents := filterProcessableEvents(ctx, healthEvents)
 
 	span.SetAttributes(
 		attribute.Int("platform_connector.k8s.processable_events_count", len(processableEvents)),
@@ -542,7 +542,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 			if firstErr == nil {
 				firstErr = err
 			} else {
-				slog.Error("Failed to process node condition updates", "node", nodeName, "error", err)
+				slog.ErrorContext(ctx, "Failed to process node condition updates", "node", nodeName, "error", err)
 			}
 		} else {
 			nodeConditionsUpdated++
@@ -552,7 +552,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 	for _, healthEvent := range processableEvents {
 		if !healthEvent.IsHealthy && !healthEvent.IsFatal {
 			start := time.Now()
-			err := r.writeNodeEvent(ctx, r.createK8sEvent(healthEvent), healthEvent.NodeName)
+			err := r.writeNodeEvent(ctx, r.createK8sEvent(ctx, healthEvent), healthEvent.NodeName)
 
 			nodeEventUpdateCreateDuration.Observe(float64(time.Since(start).Milliseconds()))
 
@@ -560,7 +560,7 @@ func (r *K8sConnector) processHealthEvents(ctx context.Context, healthEvents *pr
 				if firstErr == nil {
 					firstErr = fmt.Errorf("failed to write node event for %s: %w", healthEvent.NodeName, err)
 				} else {
-					slog.Error("Failed to write node event", "node", healthEvent.NodeName, "error", err)
+					slog.ErrorContext(ctx, "Failed to write node event", "node", healthEvent.NodeName, "error", err)
 				}
 			} else {
 				nodeEventsWritten++

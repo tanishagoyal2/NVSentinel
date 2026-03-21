@@ -225,7 +225,7 @@ func (r *FaultRemediationReconciler) shouldSkipEvent(ctx context.Context,
 	span := tracing.SpanFromContext(ctx)
 
 	if action == protos.RecommendedAction_NONE {
-		slog.Info("Skipping event for node: recommended action is NONE (no remediation needed)",
+		slog.InfoContext(ctx, "Skipping event for node: recommended action is NONE (no remediation needed)",
 			"node", nodeName)
 		if span != nil {
 			span.SetAttributes(
@@ -255,7 +255,7 @@ func (r *FaultRemediationReconciler) shouldSkipEvent(ctx context.Context,
 	}
 
 	// Unsupported action detected
-	slog.Info("Unsupported recommended action for node",
+	slog.InfoContext(ctx, "Unsupported recommended action for node",
 		"action", action.String(),
 		"node", nodeName)
 	metrics.TotalUnsupportedRemediationActions.WithLabelValues(action.String(), nodeName).Inc()
@@ -272,7 +272,7 @@ func (r *FaultRemediationReconciler) shouldSkipEvent(ctx context.Context,
 		healthEventWithStatus.HealthEvent.NodeName,
 		statemanager.RemediationFailedLabelValue, false)
 	if err != nil {
-		slog.Error("Error updating node label",
+		slog.ErrorContext(ctx, "Error updating node label",
 			"label", statemanager.RemediationFailedLabelValue,
 			"error", err)
 		metrics.ProcessingErrors.WithLabelValues("label_update_error",
@@ -300,12 +300,12 @@ func (r *FaultRemediationReconciler) runLogCollector(
 		attribute.String("fault_remediation.log_collector.event_id", eventUID),
 	)
 
-	slog.Info("Log collector feature enabled; running log collector for node",
+	slog.InfoContext(ctx, "Log collector feature enabled; running log collector for node",
 		"node", healthEvent.NodeName)
 
 	result, err := r.Config.RemediationClient.RunLogCollectorJob(ctx, healthEvent.NodeName, eventUID)
 	if err != nil {
-		slog.Error("Log collector job failed to launch for node",
+		slog.ErrorContext(ctx, "Log collector job failed to launch for node",
 			"node", healthEvent.NodeName,
 			"error", err)
 		tracing.RecordError(span, err)
@@ -329,7 +329,7 @@ func (r *FaultRemediationReconciler) performRemediation(ctx context.Context,
 		healthEventWithStatus.HealthEvent.NodeName,
 		statemanager.RemediatingLabelValue, false)
 	if err != nil {
-		slog.Error("Error updating node label to remediating", "error", err)
+		slog.ErrorContext(ctx, "Error updating node label to remediating", "error", err)
 		metrics.ProcessingErrors.WithLabelValues("label_update_error", nodeName).Inc()
 
 		return "", fmt.Errorf("error updating node label to remediating: %w", err)
@@ -370,7 +370,7 @@ func (r *FaultRemediationReconciler) performRemediation(ctx context.Context,
 		healthEventWithStatus.HealthEvent.NodeName,
 		remediationLabelValue, false)
 	if err != nil {
-		slog.Error("Error updating node label",
+		slog.ErrorContext(ctx, "Error updating node label",
 			"label", remediationLabelValue,
 			"error", err)
 		metrics.ProcessingErrors.WithLabelValues("label_update_error", nodeName).Inc()
@@ -396,7 +396,7 @@ func (r *FaultRemediationReconciler) handleCancellationEvent(
 	ctx, span := tracing.StartSpan(ctx, "fault_remediation.cancellation_event")
 	defer span.End()
 
-	slog.Info("Cancellation event received, clearing all remediation state",
+	slog.InfoContext(ctx, "Cancellation event received, clearing all remediation state",
 		"node", nodeName,
 		"status", status)
 	span.SetAttributes(
@@ -405,7 +405,7 @@ func (r *FaultRemediationReconciler) handleCancellationEvent(
 	)
 
 	if err := r.annotationManager.ClearRemediationState(ctx, nodeName); err != nil {
-		slog.Error("Failed to clear remediation state for node",
+		slog.ErrorContext(ctx, "Failed to clear remediation state for node",
 			"node", nodeName,
 			"error", err)
 		tracing.RecordError(span, err)
@@ -419,7 +419,7 @@ func (r *FaultRemediationReconciler) handleCancellationEvent(
 
 	if err := watcherInstance.MarkProcessed(context.Background(), resumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
-		slog.Error("Error updating resume token", "error", err)
+		slog.ErrorContext(ctx, "Error updating resume token", "error", err)
 		tracing.RecordError(span, err)
 		span.SetAttributes(
 			attribute.String("fault_remediation.error.type", "mark_processed_error"),
@@ -449,7 +449,7 @@ func (r *FaultRemediationReconciler) handleRemediationEvent(
 	if err != nil {
 		// If we got an error, groupConfig will be nil which will result in shouldSkipEvent setting state label to
 		// remediation-failed
-		slog.Error("Got an error getting group config for event, skipping event and failing remediation",
+		slog.ErrorContext(ctx, "Got an error getting group config for event, skipping event and failing remediation",
 			"error", err, "event", healthEventWithStatus.ID)
 	}
 
@@ -466,7 +466,7 @@ func (r *FaultRemediationReconciler) handleRemediationEvent(
 	shouldCreateCR, existingCR, err := r.checkExistingCRStatus(ctx, healthEvent, groupConfig)
 	if err != nil {
 		metrics.ProcessingErrors.WithLabelValues("cr_status_check_error", nodeName).Inc()
-		slog.Error("Error checking existing CR status", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Error checking existing CR status", "node", nodeName, "error", err)
 		if span != nil {
 			span.SetAttributes(
 				attribute.String("fault_remediation.status", "failed"),
@@ -515,7 +515,7 @@ func (r *FaultRemediationReconciler) trySkipEvent(
 
 	if err := watcherInstance.MarkProcessed(ctx, eventWithToken.ResumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
-		slog.Error("Error updating resume token", "error", err)
+		slog.ErrorContext(ctx, "Error updating resume token", "error", err)
 		tracing.RecordError(skipSpan, err)
 		skipSpan.SetAttributes(
 			attribute.String("fault_remediation.error.type", "mark_processed_error"),
@@ -536,7 +536,7 @@ func (r *FaultRemediationReconciler) handleExistingCRSkip(
 	nodeName, existingCR string,
 ) (ctrl.Result, error) {
 	span := tracing.SpanFromContext(ctx)
-	slog.Info("Skipping event for node due to existing CR",
+	slog.InfoContext(ctx, "Skipping event for node due to existing CR",
 		"node", nodeName,
 		"existingCR", existingCR)
 
@@ -554,7 +554,7 @@ func (r *FaultRemediationReconciler) handleExistingCRSkip(
 
 	if err := watcherInstance.MarkProcessed(ctx, eventWithToken.ResumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
-		slog.Error("Error updating resume token", "error", err)
+		slog.ErrorContext(ctx, "Error updating resume token", "error", err)
 
 		return ctrl.Result{}, fmt.Errorf("error updating resume token: %w", err)
 	}
@@ -605,7 +605,7 @@ func (r *FaultRemediationReconciler) runLogCollectorAndRemediate(
 	}
 	if err = r.updateNodeRemediatedStatus(ctx, healthEventStore, eventWithToken, nodeRemediatedStatus); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("update_status_error", nodeName).Inc()
-		slog.Error("Error updating remediation status for node", "error", err)
+		slog.ErrorContext(ctx, "Error updating remediation status for node", "error", err)
 		tracing.RecordError(span, err)
 		span.SetAttributes(
 			attribute.String("fault_remediation.status", "failed"),
@@ -639,7 +639,7 @@ func (r *FaultRemediationReconciler) markProcessedOrError(
 ) (ctrl.Result, error) {
 	if err := watcherInstance.MarkProcessed(ctx, eventWithToken.ResumeToken); err != nil {
 		metrics.ProcessingErrors.WithLabelValues("mark_processed_error", nodeName).Inc()
-		slog.Error("Error updating resume token", "error", err)
+		slog.ErrorContext(ctx, "Error updating resume token", "error", err)
 
 		return ctrl.Result{}, fmt.Errorf("error updating resume token: %w", err)
 	}
@@ -678,7 +678,7 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 	}
 
 	// Use the healthEventStore to update the status with retries
-	slog.Info("Updating health event with ID", "id", documentID)
+	slog.InfoContext(ctx, "Updating health event with ID", "id", documentID)
 
 	err = healthEventStore.UpdateHealthEventStatus(ctx, documentID, status)
 	if err != nil {
@@ -694,7 +694,7 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 	// Enables downstream modules or trace UIs to link to this span.
 	if spanID := tracing.SpanIDFromSpan(statusSpan); spanID != "" {
 		if updateErr := healthEventStore.UpdateSpanID(ctx, documentID, tracing.ServiceFaultRemediation, spanID); updateErr != nil {
-			slog.Warn("Failed to write fault_remediation span ID to document", "id", documentID, "error", updateErr)
+			slog.WarnContext(ctx, "Failed to write fault_remediation span ID to document", "id", documentID, "error", updateErr)
 			// Non-fatal: status was updated; span_id is for trace linking only
 		}
 	}
@@ -704,7 +704,7 @@ func (r *FaultRemediationReconciler) updateNodeRemediatedStatus(
 		attribute.Bool("fault_remediation.remediation.status_updated", nodeRemediatedStatus),
 	)
 
-	slog.Info("Health event has been updated with status",
+	slog.InfoContext(ctx, "Health event has been updated with status",
 		"id", documentID,
 		"status", nodeRemediatedStatus)
 
@@ -721,12 +721,12 @@ func (r *FaultRemediationReconciler) checkExistingCRStatus(ctx context.Context, 
 
 	state, _, err := r.annotationManager.GetRemediationState(ctx, nodeName)
 	if err != nil {
-		slog.Error("Error getting remediation state", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Error getting remediation state", "node", nodeName, "error", err)
 		return true, "", fmt.Errorf("error getting remediation state: %w", err)
 	}
 
 	if state == nil {
-		slog.Warn("Remediation state is nil for node, allowing CR creation",
+		slog.WarnContext(ctx, "Remediation state is nil for node, allowing CR creation",
 			"node", nodeName)
 
 		return true, "", nil
@@ -734,7 +734,7 @@ func (r *FaultRemediationReconciler) checkExistingCRStatus(ctx context.Context, 
 
 	statusChecker := r.Config.RemediationClient.GetStatusChecker()
 	if statusChecker == nil {
-		slog.Warn("Status checker is not available, allowing creation")
+		slog.WarnContext(ctx, "Status checker is not available, allowing creation")
 		return true, "", nil
 	}
 
@@ -745,11 +745,11 @@ func (r *FaultRemediationReconciler) checkExistingCRStatus(ctx context.Context, 
 	for groupName, groupState := range groupStates {
 		shouldSkip := statusChecker.ShouldSkipCRCreation(ctx, groupState.ActionName, groupState.MaintenanceCR)
 		if shouldSkip {
-			slog.Info("CR exists and is in progress, skipping event", "node", nodeName, "crName", groupState.MaintenanceCR)
+			slog.InfoContext(ctx, "CR exists and is in progress, skipping event", "node", nodeName, "crName", groupState.MaintenanceCR)
 			return false, groupState.MaintenanceCR, nil
 		}
 
-		slog.Info("CR completed or failed, allowing retry", "node", nodeName, "crName", groupState.MaintenanceCR)
+		slog.InfoContext(ctx, "CR completed or failed, allowing retry", "node", nodeName, "crName", groupState.MaintenanceCR)
 
 		groupsToRemove = append(groupsToRemove, groupName)
 	}

@@ -105,12 +105,12 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 	for {
 		select {
 		case <-r.stopCh:
-			slog.Info("k8sConnector queue received stop signal")
+			slog.InfoContext(r.ctx, "k8sConnector queue received stop signal")
 			return
 		default:
 			item, quit := r.ringBuffer.Dequeue()
 			if quit {
-				slog.Info("Queue signaled shutdown, exiting processing loop")
+				slog.InfoContext(ctx, "Queue signaled shutdown, exiting processing loop")
 				return
 			}
 
@@ -132,7 +132,7 @@ func (r *K8sConnector) FetchAndProcessHealthMetric(ctx context.Context) {
 
 			err := r.processHealthEvents(batchCtx, healthEvents)
 			if err != nil {
-				slog.Error("Not able to process healthEvent", "error", err)
+				slog.ErrorContext(batchCtx, "Not able to process healthEvent", "error", err)
 				tracing.RecordError(span, err)
 				span.SetAttributes(
 					attribute.String("platform_connector.k8s.error.type", "not_able_to_process_health_event"),

@@ -331,7 +331,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 				)
 				tracing.RecordError(span, nodeReadyErr)
 			}
-			slog.Warn("Transient CSP error during node ready check, will requeue",
+			slog.WarnContext(ctx, "Transient CSP error during node ready check, will requeue",
 				"node", node.Name, "error", nodeReadyErr, "requeueAfter", requeueBackoffForTransientCSPError)
 			return ctrl.Result{RequeueAfter: requeueBackoffForTransientCSPError}
 		}
@@ -342,7 +342,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 			)
 			tracing.RecordError(span, nodeReadyErr)
 		}
-		slog.Error("Node ready status check failed", "node", node.Name, "error", nodeReadyErr)
+		slog.ErrorContext(ctx, "Node ready status check failed", "node", node.Name, "error", nodeReadyErr)
 		r.endRebootSession(crKey, rebootNode, metav1.ConditionFalse, "Failed", metrics.StatusFailed)
 		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionFalse, "Failed",
 			fmt.Sprintf("Node status could not be checked from CSP: %s", nodeReadyErr), metrics.StatusFailed)
@@ -355,7 +355,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 					time.Since(rebootNode.CreationTimestamp.Time).Seconds()),
 			)
 		}
-		slog.Info("Node reached ready state post-reboot", "node", node.Name)
+		slog.InfoContext(ctx, "Node reached ready state post-reboot", "node", node.Name)
 		metrics.GlobalMetrics.RecordActionMTTR(metrics.ActionTypeReboot, time.Since(rebootNode.CreationTimestamp.Time))
 		r.endRebootSession(crKey, rebootNode, metav1.ConditionTrue, "Succeeded", metrics.StatusSucceeded)
 		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionTrue, "Succeeded",
@@ -369,7 +369,7 @@ func (r *RebootNodeReconciler) handleRebootInProgress(
 				attribute.Float64("janitor.rebootnode.reboot_session.timeout_seconds", r.getRebootTimeout().Seconds()),
 			)
 		}
-		slog.Error("Node reboot timed out", "node", node.Name, "timeout", r.getRebootTimeout())
+		slog.ErrorContext(ctx, "Node reboot timed out", "node", node.Name, "timeout", r.getRebootTimeout())
 		r.endRebootSession(crKey, rebootNode, metav1.ConditionFalse, "Timeout", metrics.StatusFailed)
 		return r.completeNodeReadyCheck(ctx, rebootNode, node, metav1.ConditionFalse, "Timeout",
 			"Node failed to return to ready state after timeout duration", metrics.StatusFailed)
@@ -502,7 +502,7 @@ func (r *RebootNodeReconciler) handleManualMode(
 		metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeReboot, metrics.StatusStarted, node.Name)
 	}
 
-	slog.Info("Manual mode enabled, janitor will not send reboot signal for node", "node", node.Name)
+	slog.InfoContext(ctx, "Manual mode enabled, janitor will not send reboot signal for node", "node", node.Name)
 	return ctrl.Result{}
 }
 
@@ -518,7 +518,7 @@ func (r *RebootNodeReconciler) sendRebootSignalAndSetCondition(
 	)
 
 	metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeReboot, metrics.StatusStarted, node.Name)
-	slog.Info("Sending reboot signal to node", "node", node.Name)
+	slog.InfoContext(ctx, "Sending reboot signal to node", "node", node.Name)
 
 	rsp, rebootErr := cspClient.SendRebootSignal(ctx, &cspv1alpha1.SendRebootSignalRequest{
 		NodeName: node.Name,
@@ -548,7 +548,7 @@ func (r *RebootNodeReconciler) sendRebootSignalAndSetCondition(
 			attribute.String("janitor.error.message", rebootErr.Error()),
 		)
 		tracing.RecordError(span, rebootErr)
-		slog.Warn("Transient CSP error sending reboot signal, will requeue",
+		slog.WarnContext(ctx, "Transient CSP error sending reboot signal, will requeue",
 			"node", node.Name, "error", rebootErr)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}
 	}

@@ -151,7 +151,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 
 	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
-	sessionCtx, enqueueSpan := tracing.StartSpanWithLinkFromTraceContext(
+	ctx, enqueueSpan := tracing.StartSpanWithLinkFromTraceContext(
 		ctx,
 		traceID,
 		parentSpanID,
@@ -168,7 +168,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 	)
 	defer enqueueSpan.End()
 
-	slog.Debug("Preprocessing event", "node", nodeName, "nodeQuarantined", nodeQuarantined)
+	slog.DebugContext(ctx, "Preprocessing event", "node", nodeName, "nodeQuarantined", nodeQuarantined)
 
 	// Skip if already in terminal state
 	if healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus != nil &&
@@ -184,7 +184,7 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 		case model.AlreadyDrained:
 			result = "already_drained"
 		}
-		slog.Debug("Skipping event - already in terminal state",
+		slog.DebugContext(ctx, "Skipping event - already in terminal state",
 			"node", healthEventWithStatus.HealthEvent.NodeName,
 			"status", healthEventWithStatus.HealthEventStatus.UserPodsEvictionStatus.Status)
 
@@ -204,8 +204,8 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 
 	// Handle cancellation logic (Cancelled/UnQuarantined events)
 	if shouldSkip := r.handleEventCancellation(
-		documentID, nodeName, (*model.Status)(&healthEventWithStatus.HealthEventStatus.NodeQuarantined)); shouldSkip {
-		slog.Debug("Event skipped due to cancellation", "node", nodeName)
+		ctx, documentID, nodeName, (*model.Status)(&healthEventWithStatus.HealthEventStatus.NodeQuarantined)); shouldSkip {
+		slog.DebugContext(ctx, "Event skipped due to cancellation", "node", nodeName)
 
 		enqueueSpan.SetAttributes(
 			attribute.String("node_drainer.reconciler.status", "skipped"),
@@ -216,12 +216,13 @@ func (r *Reconciler) PreprocessAndEnqueueEvent(ctx context.Context, event client
 		return nil
 	}
 
-	return r.setInitialStatusAndEnqueue(sessionCtx, document, documentID, nodeName)
+	return r.setInitialStatusAndEnqueue(ctx, document, documentID, nodeName)
 }
 
 // handleEventCancellation handles Cancelled and UnQuarantined events
 // Returns true if the event should be skipped (not enqueued)
 func (r *Reconciler) handleEventCancellation(
+	ctx context.Context,
 	documentID interface{},
 	nodeName string,
 	statusPtr *model.Status,
@@ -232,11 +233,11 @@ func (r *Reconciler) handleEventCancellation(
 
 	eventID := fmt.Sprintf("%v", documentID)
 
-	slog.Debug("Processing cancellation", "node", nodeName, "eventID", eventID, "status", *statusPtr)
+	slog.DebugContext(ctx, "Processing cancellation", "node", nodeName, "eventID", eventID, "status", *statusPtr)
 
 	// Handle Cancelled events - mark specific event as cancelled
 	if *statusPtr == model.Cancelled {
-		slog.Info("Detected Cancelled event, marking event as cancelled",
+		slog.InfoContext(ctx, "Detected Cancelled event, marking event as cancelled",
 			"node", nodeName,
 			"eventID", eventID)
 		r.HandleCancellation(eventID, nodeName, model.Cancelled)
@@ -246,7 +247,7 @@ func (r *Reconciler) handleEventCancellation(
 
 	// Handle UnQuarantined events - mark all in-progress events for node as cancelled
 	if *statusPtr == model.UnQuarantined {
-		slog.Info("Detected UnQuarantined event, marking all in-progress events for node as cancelled",
+		slog.InfoContext(ctx, "Detected UnQuarantined event, marking all in-progress events for node as cancelled",
 			"node", nodeName,
 			"eventID", eventID)
 		r.HandleCancellation(eventID, nodeName, model.UnQuarantined)
@@ -307,7 +308,7 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 	)
 	tracing.SetOperationStatus(dbSpan, tracing.OperationStatusSuccess, "node_drainer")
 
-	r.logStatusUpdateResult(result, nodeName, documentID)
+	r.logStatusUpdateResult(ctx, result, nodeName, documentID)
 
 	if err := r.queueManager.EnqueueEventGeneric(ctx, nodeName, datastore.Event(document), r.databaseClient, r.healthEventStore, nil); err != nil {
 		tracing.RecordError(span, err)
@@ -325,14 +326,14 @@ func (r *Reconciler) setInitialStatusAndEnqueue(ctx context.Context, document ma
 }
 
 // logStatusUpdateResult logs the result of the status update
-func (r *Reconciler) logStatusUpdateResult(result *client.UpdateResult, nodeName string, documentID any) {
+func (r *Reconciler) logStatusUpdateResult(ctx context.Context, result *client.UpdateResult, nodeName string, documentID any) {
 	switch {
 	case result.ModifiedCount > 0:
-		slog.Info("Set initial eviction status to InProgress", "node", nodeName)
+		slog.InfoContext(ctx, "Set initial eviction status to InProgress", "node", nodeName)
 	case result.MatchedCount == 0:
-		slog.Warn("No document matched for status update", "node", nodeName, "documentID", fmt.Sprintf("%v", documentID))
+		slog.WarnContext(ctx, "No document matched for status update", "node", nodeName, "documentID", fmt.Sprintf("%v", documentID))
 	default:
-		slog.Debug("Status already set to InProgress", "node", nodeName, "documentID", fmt.Sprintf("%v", documentID))
+		slog.DebugContext(ctx, "Status already set to InProgress", "node", nodeName, "documentID", fmt.Sprintf("%v", documentID))
 	}
 }
 
@@ -395,14 +396,14 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 		}
 	}
 
-	slog.Debug("Processing event", "node", nodeName, "eventID", eventID)
+	slog.DebugContext(ctx, "Processing event", "node", nodeName, "eventID", eventID)
 
 	metrics.TotalEventsReceived.Inc()
 
 	nodeQuarantinedStatus := healthEventWithStatus.HealthEventStatus.NodeQuarantined
 
 	if r.isEventCancelled(eventID, nodeName, (*model.Status)(&nodeQuarantinedStatus)) {
-		slog.Info("Event was cancelled, performing cleanup", "node", nodeName, "eventID", eventID)
+		slog.InfoContext(ctx, "Event was cancelled, performing cleanup", "node", nodeName, "eventID", eventID)
 
 		err := r.handleCancelledEvent(ctx, nodeName, &healthEventWithStatus, event, database, eventID)
 		if err != nil {
@@ -434,7 +435,7 @@ func (r *Reconciler) ProcessEventGeneric(ctx context.Context,
 		return fmt.Errorf("failed to evaluate event: %w", err)
 	}
 
-	slog.Info("Evaluated action for node",
+	slog.InfoContext(ctx, "Evaluated action for node",
 		"node", nodeName,
 		"action", actionResult.Action.String())
 
@@ -478,7 +479,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return r.executeSkip(ctx, nodeName, healthEvent, event, database)
 
 	case evaluator.ActionWait:
-		slog.Info("Waiting for node",
+		slog.InfoContext(ctx, "Waiting for node",
 			"node", nodeName,
 			"delay", action.WaitDelay)
 
@@ -515,7 +516,7 @@ func (r *Reconciler) executeAction(ctx context.Context, action *evaluator.DrainA
 		return err
 
 	case evaluator.ActionCheckCompletion:
-		slog.Debug("Executing ActionCheckCompletion", "node", nodeName)
+		slog.DebugContext(ctx, "Executing ActionCheckCompletion", "node", nodeName)
 		r.updateNodeDrainStatus(ctx, nodeName, &healthEvent, true)
 
 		return r.executeCheckCompletion(ctx, action, healthEvent, action.PartialDrainEntity)
@@ -581,11 +582,11 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 	ctx, span := tracing.StartSpan(ctx, "node_drainer.execute_skip")
 	defer span.End()
 
-	slog.Info("Skipping event for node", "node", nodeName)
+	slog.InfoContext(ctx, "Skipping event for node", "node", nodeName)
 
 	if healthEvent.HealthEventStatus.NodeQuarantined == string(model.UnQuarantined) {
 		if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
-			slog.Error("HealthEventStatus is missing UserPodsEvictionStatus",
+			slog.ErrorContext(ctx, "HealthEventStatus is missing UserPodsEvictionStatus",
 				"node", nodeName)
 
 			return errors.New("missing UserPodsEvictionStatus")
@@ -596,7 +597,7 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 
 		if err := r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus, nodeName,
 			metrics.DrainStatusCancelled); err != nil {
-			slog.Error("Failed to update MongoDB status for unquarantined node",
+			slog.ErrorContext(ctx, "Failed to update MongoDB status for unquarantined node",
 				"node", nodeName,
 				"error", err)
 			tracing.RecordError(span, err)
@@ -608,7 +609,7 @@ func (r *Reconciler) executeSkip(ctx context.Context,
 			return fmt.Errorf("failed to update MongoDB status for node %s: %w", nodeName, err)
 		}
 
-		slog.Info("Updated MongoDB status for unquarantined node",
+		slog.InfoContext(ctx, "Updated MongoDB status for unquarantined node",
 			"node", nodeName,
 			"status", "succeeded")
 	}
@@ -693,10 +694,10 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 	_, nodeCancelled := r.cancelledNodes[nodeName]
 	r.nodeEventsMapMu.Unlock()
 
-	slog.Debug("Checking cancellation status before timeout eviction", "node", nodeName, "eventID", eventID)
+	slog.DebugContext(ctx, "Checking cancellation status before timeout eviction", "node", nodeName, "eventID", eventID)
 
 	if (eventExists && eventStatus == model.Cancelled) || nodeCancelled {
-		slog.Info("Event cancelled, aborting timeout eviction",
+		slog.InfoContext(ctx, "Event cancelled, aborting timeout eviction",
 			"node", nodeName,
 			"eventID", eventID)
 		tracing.SetOperationStatus(span, tracing.OperationStatusCancelled, "node_drainer")
@@ -713,7 +714,7 @@ func (r *Reconciler) executeTimeoutEviction(ctx context.Context, action *evaluat
 		r.nodeEventsMapMu.Unlock()
 
 		if (checkEventExists && checkEventStatus == model.Cancelled) || checkNodeCancelled {
-			slog.Info("Event was cancelled during timeout eviction, stopping",
+			slog.InfoContext(ctx, "Event was cancelled during timeout eviction, stopping",
 				"node", nodeName, "eventID", eventID)
 			tracing.SetOperationStatus(span, tracing.OperationStatusCancelled, "node_drainer")
 			return nil
@@ -787,7 +788,7 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 
 		if err := r.informers.UpdateNodeEvent(ctx, nodeName, reason, message); err != nil {
 			// Don't fail the whole operation just because event update failed
-			slog.Error("Failed to update node event",
+			slog.ErrorContext(ctx, "Failed to update node event",
 				"node", nodeName,
 				"error", err)
 			tracing.RecordError(span, err)
@@ -797,13 +798,13 @@ func (r *Reconciler) executeCheckCompletion(ctx context.Context, action *evaluat
 				attribute.String("node_drainer.error.message", err.Error()),
 			)
 		}
-		slog.Info("Pods still running on node, requeuing for later check",
+		slog.InfoContext(ctx, "Pods still running on node, requeuing for later check",
 			"node", nodeName,
 			"remainingPods", remainingPods)
 		return fmt.Errorf("waiting for pods to complete: %d pods remaining", len(remainingPods))
 	}
 
-	slog.Info("All pods completed on node", "node", nodeName)
+	slog.InfoContext(ctx, "All pods completed on node", "node", nodeName)
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 	return fmt.Errorf("pod completion verified, requeuing for status update")
 }
@@ -816,7 +817,7 @@ func (r *Reconciler) executeMarkAlreadyDrained(ctx context.Context,
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
-		slog.Error("HealthEventStatus is missing UserPodsEvictionStatus",
+		slog.ErrorContext(ctx, "HealthEventStatus is missing UserPodsEvictionStatus",
 			"node", nodeName)
 
 		return errors.New("missing UserPodsEvictionStatus")
@@ -848,7 +849,7 @@ func (r *Reconciler) executeUpdateStatus(ctx context.Context, healthEvent model.
 	nodeName := healthEvent.HealthEvent.NodeName
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
-		slog.Error("HealthEventStatus is missing UserPodsEvictionStatus",
+		slog.ErrorContext(ctx, "HealthEventStatus is missing UserPodsEvictionStatus",
 			"node", nodeName)
 
 		return errors.New("missing UserPodsEvictionStatus")
@@ -864,7 +865,7 @@ func (r *Reconciler) executeUpdateStatus(ctx context.Context, healthEvent model.
 
 	if _, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
 		nodeName, nodeDrainLabelValue, false); err != nil {
-		slog.Error("Failed to update node label",
+		slog.ErrorContext(ctx, "Failed to update node label",
 			"label", nodeDrainLabelValue,
 			"node", nodeName,
 			"error", err)
@@ -900,7 +901,7 @@ func (r *Reconciler) updateNodeDrainStatus(ctx context.Context,
 		_, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
 			nodeName, statemanager.DrainingLabelValue, true)
 		if err != nil {
-			slog.Error("Failed to remove draining label for unquarantined node",
+			slog.ErrorContext(ctx, "Failed to remove draining label for unquarantined node",
 				"node", nodeName,
 				"error", err)
 			tracing.RecordError(span, err)
@@ -921,7 +922,7 @@ func (r *Reconciler) updateNodeDrainStatus(ctx context.Context,
 			nodeName, statemanager.DrainingLabelValue, false)
 		if err != nil {
 			_, span := tracing.StartSpan(ctx, "node_drainer.update_node_drain_status")
-			slog.Error("Failed to update node label to draining",
+			slog.ErrorContext(ctx, "Failed to update node label to draining",
 				"node", nodeName,
 				"error", err)
 			metrics.ProcessingErrors.WithLabelValues("label_update_error", nodeName).Inc()
@@ -989,14 +990,14 @@ func (r *Reconciler) updateNodeUserPodsEvictedStatus(ctx context.Context, databa
 		return fmt.Errorf("error updating document with ID: %v, error: %w", documentID, err)
 	}
 
-	r.observeEvictionDurationIfSucceeded(event, userPodsEvictionStatus)
+	r.observeEvictionDurationIfSucceeded(ctx, event, userPodsEvictionStatus)
 
 	span.SetAttributes(
 		attribute.String("node_drainer.user_pods_eviction_status", string(userPodsEvictionStatus.Status)),
 	)
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
 
-	slog.Info("Health event status has been updated",
+	slog.InfoContext(ctx, "Health event status has been updated",
 		"documentID", documentID,
 		"evictionStatus", userPodsEvictionStatus.Status)
 	metrics.EventsProcessed.WithLabelValues(drainStatus, nodeName).Inc()
@@ -1005,7 +1006,7 @@ func (r *Reconciler) updateNodeUserPodsEvictedStatus(ctx context.Context, databa
 }
 
 // observeEvictionDurationIfSucceeded observes eviction duration metric if status is succeeded and timestamp is present
-func (r *Reconciler) observeEvictionDurationIfSucceeded(event datastore.Event,
+func (r *Reconciler) observeEvictionDurationIfSucceeded(ctx context.Context, event datastore.Event,
 	userPodsEvictionStatus *protos.OperationStatus) {
 	if userPodsEvictionStatus.Status != string(model.StatusSucceeded) {
 		return
@@ -1017,7 +1018,7 @@ func (r *Reconciler) observeEvictionDurationIfSucceeded(event datastore.Event,
 	}
 
 	evictionDuration := time.Since(healthEvent.HealthEventStatus.QuarantineFinishTimestamp.AsTime()).Seconds()
-	slog.Info("Node drainer evictionDuration is", "evictionDuration", evictionDuration)
+	slog.InfoContext(ctx, "Node drainer evictionDuration is", "evictionDuration", evictionDuration)
 
 	if evictionDuration > 0 {
 		metrics.PodEvictionDuration.Observe(evictionDuration)
@@ -1187,7 +1188,7 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 	r.clearEventStatus(eventID, nodeName)
 
 	if healthEvent.HealthEventStatus.UserPodsEvictionStatus == nil {
-		slog.Error("HealthEventStatus is missing UserPodsEvictionStatus",
+		slog.ErrorContext(ctx, "HealthEventStatus is missing UserPodsEvictionStatus",
 			"node", nodeName)
 
 		return errors.New("missing UserPodsEvictionStatus")
@@ -1198,7 +1199,7 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 
 	if err := r.updateNodeUserPodsEvictedStatus(ctx, database, event, podsEvictionStatus, nodeName,
 		metrics.DrainStatusCancelled); err != nil {
-		slog.Error("Failed to update MongoDB status for cancelled event",
+		slog.ErrorContext(ctx, "Failed to update MongoDB status for cancelled event",
 			"node", nodeName,
 			"error", err)
 		tracing.RecordError(span, err)
@@ -1214,7 +1215,7 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 
 	if _, err := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
 		nodeName, statemanager.DrainingLabelValue, true); err != nil {
-		slog.Error("Failed to remove draining label for cancelled event",
+		slog.ErrorContext(ctx, "Failed to remove draining label for cancelled event",
 			"node", nodeName,
 			"error", err)
 		span.SetAttributes(
@@ -1227,7 +1228,7 @@ func (r *Reconciler) handleCancelledEvent(ctx context.Context, nodeName string,
 
 	metrics.CancelledEvent.WithLabelValues(nodeName, healthEvent.HealthEvent.CheckName).Inc()
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
-	slog.Info("Successfully cleaned up cancelled event", "node", nodeName, "eventID", eventID)
+	slog.InfoContext(ctx, "Successfully cleaned up cancelled event", "node", nodeName, "eventID", eventID)
 
 	return nil
 }
@@ -1250,7 +1251,7 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 	for _, ns := range action.Namespaces {
 		pods, err := r.informers.FindEvictablePodsInNamespaceAndNode(ns, nodeName, partialDrainEntity)
 		if err != nil {
-			slog.Warn("Failed to find evictable pods",
+			slog.WarnContext(ctx, "Failed to find evictable pods",
 				"namespace", ns,
 				"node", nodeName,
 				"error", err)
@@ -1286,7 +1287,7 @@ func (r *Reconciler) executeCustomDrain(ctx context.Context, action *evaluator.D
 		return r.handleCustomDrainCRCreationError(ctx, err, nodeName, healthEvent, event, database)
 	}
 
-	slog.Info("Created custom drain CR",
+	slog.InfoContext(ctx, "Created custom drain CR",
 		"node", nodeName,
 		"crName", crName)
 
@@ -1305,7 +1306,7 @@ func (r *Reconciler) deleteCustomDrainCRIfEnabled(ctx context.Context, nodeName 
 
 	eventID, err := utils.ExtractDocumentID(event)
 	if err != nil {
-		slog.Warn("Failed to extract document ID for custom drain CR deletion",
+		slog.WarnContext(ctx, "Failed to extract document ID for custom drain CR deletion",
 			"node", nodeName,
 			"error", err)
 
@@ -1314,12 +1315,12 @@ func (r *Reconciler) deleteCustomDrainCRIfEnabled(ctx context.Context, nodeName 
 
 	crName := customdrain.GenerateCRName(nodeName, eventID)
 	if err := r.customDrainClient.DeleteDrainCR(ctx, crName); err != nil {
-		slog.Warn("Failed to delete custom drain CR",
+		slog.WarnContext(ctx, "Failed to delete custom drain CR",
 			"node", nodeName,
 			"crName", crName,
 			"error", err)
 	} else {
-		slog.Info("Deleted custom drain CR",
+		slog.InfoContext(ctx, "Deleted custom drain CR",
 			"node", nodeName,
 			"crName", crName)
 		span := tracing.SpanFromContext(ctx)
@@ -1357,7 +1358,7 @@ func (r *Reconciler) handleCustomDrainCRCreationError(
 		attribute.String("node_drainer.error.message", err.Error()),
 	)
 
-	slog.Error("Custom drain CRD not found - marking drain as failed",
+	slog.ErrorContext(ctx, "Custom drain CRD not found - marking drain as failed",
 		"node", nodeName,
 		"apiGroup", r.Config.TomlConfig.CustomDrain.ApiGroup,
 		"kind", r.Config.TomlConfig.CustomDrain.Kind,
@@ -1367,7 +1368,7 @@ func (r *Reconciler) handleCustomDrainCRCreationError(
 
 	if setErr := r.setDrainFailedStatus(ctx, healthEvent, event, database,
 		fmt.Sprintf("Custom drain CRD not found: %v", err)); setErr != nil {
-		slog.Error("Failed to update drain failed status",
+		slog.ErrorContext(ctx, "Failed to update drain failed status",
 			"node", nodeName,
 			"error", setErr)
 		tracing.RecordError(span, setErr)
@@ -1381,7 +1382,7 @@ func (r *Reconciler) handleCustomDrainCRCreationError(
 
 	if _, labelErr := r.Config.StateManager.UpdateNVSentinelStateNodeLabel(ctx,
 		nodeName, statemanager.DrainFailedLabelValue, false); labelErr != nil {
-		slog.Error("Failed to update node label to drain-failed",
+		slog.ErrorContext(ctx, "Failed to update node label to drain-failed",
 			"node", nodeName,
 			"error", labelErr)
 		tracing.RecordError(span, labelErr)
@@ -1446,7 +1447,7 @@ func (r *Reconciler) setDrainFailedStatus(
 	}
 
 	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "node_drainer")
-	slog.Info("Updated drain status to failed",
+	slog.InfoContext(ctx, "Updated drain status to failed",
 		"node", nodeName,
 		"reason", reason)
 

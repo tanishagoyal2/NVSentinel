@@ -174,7 +174,7 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 
 			result = ctrl.Result{}
 		} else if isNodeNotReady(node) {
-			slog.Info("Node reached not ready state, deleting from cluster", "node", terminateNode.Spec.NodeName)
+			slog.InfoContext(ctx, "Node reached not ready state, deleting from cluster", "node", terminateNode.Spec.NodeName)
 
 			if err := r.Delete(ctx, node); err != nil {
 				return ctrl.Result{}, err
@@ -205,7 +205,7 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 
 			result = ctrl.Result{}
 		} else if time.Since(terminateNode.Status.StartTime.Time) > r.getTimeout() {
-			slog.Error("Node terminate timed out", "node", node.Name, "timeout", r.getTimeout())
+			slog.ErrorContext(ctx, "Node terminate timed out", "node", node.Name, "timeout", r.getTimeout())
 
 			// Update status
 			terminateNode.SetCompletionTime()
@@ -253,7 +253,7 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 
 		if signalAlreadySent {
 			// Signal was already sent, just continue monitoring
-			slog.Debug("Terminate signal already sent for node, continuing monitoring", "node", node.Name)
+			slog.DebugContext(ctx, "Terminate signal already sent for node, continuing monitoring", "node", node.Name)
 
 			result = ctrl.Result{RequeueAfter: 30 * time.Second}
 		} else {
@@ -279,11 +279,11 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 					metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusStarted, node.Name)
 				}
 
-				slog.Info("Manual mode enabled, janitor will not send terminate signal for node", "node", node.Name)
+				slog.InfoContext(ctx, "Manual mode enabled, janitor will not send terminate signal for node", "node", node.Name)
 
 				result = ctrl.Result{}
 			} else {
-				slog.Info("Sending terminate signal to node", "node", terminateNode.Spec.NodeName)
+				slog.InfoContext(ctx, "Sending terminate signal to node", "node", terminateNode.Spec.NodeName)
 				metrics.GlobalMetrics.IncActionCount(metrics.ActionTypeTerminate, metrics.StatusStarted, node.Name)
 				_, terminateErr := cspClient.SendTerminateSignal(ctx, &cspv1alpha1.SendTerminateSignalRequest{
 					NodeName: node.Name,
@@ -343,12 +343,12 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 		objectKey := client.ObjectKey{Name: terminateNode.Name, Namespace: terminateNode.Namespace}
 		if err := r.Get(ctx, objectKey, &freshTerminateNode); err != nil {
 			if apierrors.IsNotFound(err) {
-				slog.Debug("Post-reconciliation status update: not found, object assumed deleted", "node", terminateNode.Name)
+				slog.DebugContext(ctx, "Post-reconciliation status update: not found, object assumed deleted", "node", terminateNode.Name)
 
 				return ctrl.Result{}, nil
 			}
 
-			slog.Error("failed to refresh TerminateNode before status update", "error", err)
+			slog.ErrorContext(ctx, "failed to refresh TerminateNode before status update", "error", err)
 
 			return ctrl.Result{}, err
 		}
@@ -357,11 +357,11 @@ func (r *TerminateNodeReconciler) reconcileHelper(ctx context.Context, terminate
 		freshTerminateNode.Status = terminateNode.Status
 
 		if err := r.Status().Update(ctx, &freshTerminateNode); err != nil {
-			slog.Error("failed to update TerminateNode status", "error", err)
+			slog.ErrorContext(ctx, "failed to update TerminateNode status", "error", err)
 			return ctrl.Result{}, err
 		}
 
-		slog.Info("TerminateNode status updated", "node", terminateNode.Spec.NodeName)
+		slog.InfoContext(ctx, "TerminateNode status updated", "node", terminateNode.Spec.NodeName)
 	}
 
 	return result, nil

@@ -61,7 +61,7 @@ func (p *PlatformConnectorServer) HealthEventOccurredV1(ctx context.Context,
 		attribute.Int("platform_connector.grpc.event_count", eventCount),
 	)
 
-	slog.Info("Health events received", "events", he)
+	slog.InfoContext(ctx, "Health events received", "events", he)
 	healthEventsReceived.Add(float64(eventCount))
 
 	// Custom monitors that don't set processingStrategy will default to EXECUTE_REMEDIATION.

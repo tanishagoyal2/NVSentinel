@@ -112,7 +112,7 @@ func (m *eventQueueManager) processNextWorkItem(ctx context.Context) bool {
 	nodeEvent.PartialDrainEntityValue = drainMetrics.PartialDrainEntityValue
 
 	if err != nil {
-		slog.Warn("Error processing event for node (will retry)",
+		slog.WarnContext(processCtx, "Error processing event for node (will retry)",
 			"node", nodeEvent.NodeName,
 			"attempt", m.queue.NumRequeues(nodeEvent)+1,
 			"error", err)

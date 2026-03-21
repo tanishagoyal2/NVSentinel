@@ -82,7 +82,7 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 		DrainSessionSpan: drainSessionSpan,
 	}
 
-	slog.Debug("Enqueueing event", "nodeName", nodeName, "eventID", eventID)
+	slog.DebugContext(ctx, "Enqueueing event", "nodeName", nodeName, "eventID", eventID)
 
 	m.queue.Add(nodeEvent)
 	metrics.QueueDepth.Set(float64(m.queue.Len()))

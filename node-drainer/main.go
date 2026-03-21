@@ -61,7 +61,7 @@ func (d *dataStoreAdapter) FindDocuments(ctx context.Context, filter interface{}
 }
 
 func main() {
-	logger.SetDefaultStructuredLogger("node-drainer", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("node-drainer", version)
 	slog.Info("Starting node-drainer", "version", version, "commit", commit, "date", date)
 
 	if err := auditlogger.InitAuditLogger("node-drainer"); err != nil {

@@ -42,7 +42,9 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("fault-quarantine", version)
+	// Approach 2 (028): JSON to stderr with trace_id/span_id on slog.*Context when ctx has a span;
+	// cluster tail (e.g. Alloy) forwards to OTLP / Panoptes.
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("fault-quarantine", version)
 	slog.Info("Starting fault-quarantine", "version", version, "commit", commit, "date", date)
 
 	if err := auditlogger.InitAuditLogger("fault-quarantine"); err != nil {

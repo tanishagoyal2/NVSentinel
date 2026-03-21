@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -29,6 +30,7 @@ import (
 	"github.com/nvidia/nvsentinel/commons/pkg/flags"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	protos "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	config "github.com/nvidia/nvsentinel/health-events-analyzer/pkg/config"
 	"github.com/nvidia/nvsentinel/health-events-analyzer/pkg/publisher"
@@ -46,8 +48,19 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("health-events-analyzer", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("health-events-analyzer", version)
 	slog.Info("Starting health-events-analyzer", "version", version, "commit", commit, "date", date)
+
+	if err := tracing.InitTracing("health-events-analyzer"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracing.ShutdownTracing(shutdownCtx); err != nil {
+			slog.Warn("Failed to shutdown tracing", "error", err)
+		}
+	}()
 
 	if err := run(); err != nil {
 		slog.Error("Fatal error", "error", err)

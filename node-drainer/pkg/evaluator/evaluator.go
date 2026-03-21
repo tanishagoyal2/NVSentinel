@@ -105,7 +105,7 @@ func (e *NodeDrainEvaluator) EvaluateEventWithDatabase(ctx context.Context, heal
 
 	partialDrainEntity, err := e.shouldExecutePartialDrain(healthEvent.HealthEvent)
 	if err != nil {
-		slog.Error("Failed to check if node should be partially drained",
+		slog.ErrorContext(ctx, "Failed to check if node should be partially drained",
 			"node", nodeName,
 			"error", err)
 
@@ -139,7 +139,7 @@ func (e *NodeDrainEvaluator) handleAlreadyQuarantined(ctx context.Context, statu
 	isDrained, err := e.isNodeAlreadyDrained(ctx, healthEvent.HealthEvent.Id, partialDrainEntity,
 		nodeName, healthEventStore)
 	if err != nil {
-		slog.Error("Failed to check if node is already drained",
+		slog.ErrorContext(ctx, "Failed to check if node is already drained",
 			"node", nodeName,
 			"error", err)
 
@@ -173,7 +173,7 @@ func (e *NodeDrainEvaluator) evaluateUserNamespaceActions(ctx context.Context,
 		healthEvent.HealthEvent.DrainOverrides.Force
 
 	if forceImmediateEviction {
-		slog.Info("DrainOverrides.Force is true, forcing immediate eviction for all namespaces on node",
+		slog.InfoContext(ctx, "DrainOverrides.Force is true, forcing immediate eviction for all namespaces on node",
 			"node", nodeName)
 	}
 
@@ -181,7 +181,7 @@ func (e *NodeDrainEvaluator) evaluateUserNamespaceActions(ctx context.Context,
 		matchedNamespaces, err := e.informers.GetNamespacesMatchingPattern(ctx,
 			userNamespace.Name, systemNamespaces, nodeName)
 		if err != nil {
-			slog.Error("Failed to get namespaces for pattern",
+			slog.ErrorContext(ctx, "Failed to get namespaces for pattern",
 				"pattern", userNamespace.Name,
 				"error", err)
 
@@ -217,7 +217,7 @@ func (e *NodeDrainEvaluator) getAction(ctx context.Context, ns namespaces, nodeN
 		timeout := e.config.EvictionTimeoutInSeconds.Duration
 		if !e.informers.CheckIfAllPodsAreEvictedInImmediateMode(ctx, ns.immediateEvictionNamespaces, nodeName,
 			timeout, partialDrainEntity) {
-			slog.Info("Performing immediate eviction for node", "node", nodeName)
+			slog.InfoContext(ctx, "Performing immediate eviction for node", "node", nodeName)
 
 			return &DrainActionResult{
 				Action:             ActionEvictImmediate,
@@ -246,7 +246,7 @@ func (e *NodeDrainEvaluator) getAction(ctx context.Context, ns namespaces, nodeN
 		}
 	}
 
-	slog.Info("All pods evicted successfully on node", "node", nodeName)
+	slog.InfoContext(ctx, "All pods evicted successfully on node", "node", nodeName)
 
 	return &DrainActionResult{
 		Action: ActionUpdateStatus,
@@ -349,7 +349,7 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 
 	nodeHasCR, nodeDrainComplete, err := e.customDrainClient.ExistsForNode(ctx, nodeName)
 	if err != nil {
-		slog.Error("Failed to check if any drain CR exists for node",
+		slog.ErrorContext(ctx, "Failed to check if any drain CR exists for node",
 			"node", nodeName,
 			"error", err)
 
@@ -367,7 +367,7 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 			return nil, fmt.Errorf("failed to get user namespaces: %w", err)
 		}
 
-		slog.Info("Creating custom drain CR",
+		slog.InfoContext(ctx, "Creating custom drain CR",
 			"node", nodeName,
 			"crName", crName)
 
@@ -380,7 +380,7 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 
 	crExists, isComplete, err := e.customDrainClient.GetCRStatus(ctx, crName)
 	if err != nil {
-		slog.Error("Failed to get drain CR status",
+		slog.ErrorContext(ctx, "Failed to get drain CR status",
 			"node", nodeName,
 			"crName", crName,
 			"error", err)
@@ -439,7 +439,7 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 
 	span := tracing.SpanFromContext(ctx)
 	if !isComplete {
-		slog.Debug("Drain CR in progress",
+		slog.DebugContext(ctx, "Drain CR in progress",
 			"node", nodeName,
 			"crName", crName)
 
@@ -454,7 +454,7 @@ func (e *NodeDrainEvaluator) evaluateCustomDrain(ctx context.Context, healthEven
 		}, nil
 	}
 
-	slog.Info("Drain CR completed",
+	slog.InfoContext(ctx, "Drain CR completed",
 		"node", nodeName,
 		"crName", crName)
 
@@ -554,7 +554,7 @@ func (e *NodeDrainEvaluator) isNodeAlreadyDrained(ctx context.Context, currentEv
 
 	quarantineHealthEventAnnotationStr, ok := node.Annotations[common.QuarantineHealthEventAnnotationKey]
 	if !ok {
-		slog.Info("No quarantine annotation found for node", "node", nodeName)
+		slog.InfoContext(ctx, "No quarantine annotation found for node", "node", nodeName)
 
 		return false, nil
 	}
@@ -566,12 +566,12 @@ func (e *NodeDrainEvaluator) isNodeAlreadyDrained(ctx context.Context, currentEv
 		return false, fmt.Errorf("failed to unmarshal quarantine annotation for node %s: %w", nodeName, err)
 	}
 
-	slog.Info("HealthEvents which are part of quarantineHealthEvent annotation", "eventCount", len(healthEventsMap.Events))
+	slog.InfoContext(ctx, "HealthEvents which are part of quarantineHealthEvent annotation", "eventCount", len(healthEventsMap.Events))
 
 	for _, healthEventFromAnnotation := range healthEventsMap.Events {
 		id := healthEventFromAnnotation.Id
 		if len(id) == 0 {
-			slog.Error("HealthEvent is missing ID for database lookup, expected for old events",
+			slog.ErrorContext(ctx, "HealthEvent is missing ID for database lookup, expected for old events",
 				"message", healthEventFromAnnotation.Message)
 
 			continue

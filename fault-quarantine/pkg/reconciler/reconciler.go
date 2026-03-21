@@ -179,11 +179,11 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	r.SetupNodeInformerCallbacks()
 
-	slog.Info("Starting node informer")
+	slog.InfoContext(ctx, "Starting node informer")
 
 	go func() {
 		if err := r.k8sClient.NodeInformer.Run(ctx.Done()); err != nil {
-			slog.Error("Node informer failed", "error", err)
+			slog.ErrorContext(ctx, "Node informer failed", "error", err)
 		}
 	}()
 
@@ -192,7 +192,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to sync NodeInformer cache")
 	}
 
-	slog.Info("Node informer started and synced")
+	slog.InfoContext(ctx, "Node informer started and synced")
 
 	// Check circuit breaker state AFTER informer is synced (IsTripped needs node counts from informer)
 	if err := r.checkCircuitBreakerAtStartup(ctx); err != nil {
@@ -208,9 +208,9 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	rulesetsConfig := r.buildRulesetsConfig()
 
-	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
+	r.precomputeTaintInitKeys(ctx, ruleSetEvals, rulesetsConfig)
 
-	r.initializeQuarantineMetrics()
+	r.initializeQuarantineMetrics(ctx)
 
 	r.eventWatcher.SetProcessEventCallback(
 		func(ctx context.Context, event *model.HealthEventWithStatus) *model.Status {
@@ -224,7 +224,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 		return fmt.Errorf("event watcher failed: %w", err)
 	}
 
-	slog.Info("Event watcher stopped, exiting fault-quarantine reconciler.")
+	slog.InfoContext(ctx, "Event watcher stopped, exiting fault-quarantine reconciler.")
 
 	return nil
 }
@@ -312,6 +312,7 @@ func (r *Reconciler) buildRulesetsConfig() rulesetsConfig {
 
 // precomputeTaintInitKeys pre-computes taint keys from rulesets for efficient map initialization
 func (r *Reconciler) precomputeTaintInitKeys(
+	ctx context.Context,
 	ruleSetEvals []evaluator.RuleSetEvaluatorIface,
 	rulesetsConfig rulesetsConfig,
 ) {
@@ -328,14 +329,14 @@ func (r *Reconciler) precomputeTaintInitKeys(
 		}
 	}
 
-	slog.Info("Pre-computed taint initialization keys", "count", len(r.taintInitKeys))
+	slog.InfoContext(ctx, "Pre-computed taint initialization keys", "count", len(r.taintInitKeys))
 }
 
 // initializeQuarantineMetrics initializes metrics for already quarantined nodes
-func (r *Reconciler) initializeQuarantineMetrics() {
+func (r *Reconciler) initializeQuarantineMetrics(ctx context.Context) {
 	totalNodes, quarantinedNodesMap, err := r.k8sClient.NodeInformer.GetNodeCounts()
 	if err != nil {
-		slog.Error("Failed to get initial node counts", "error", err)
+		slog.ErrorContext(ctx, "Failed to get initial node counts", "error", err)
 		return
 	}
 
@@ -343,7 +344,7 @@ func (r *Reconciler) initializeQuarantineMetrics() {
 		metrics.CurrentQuarantinedNodes.WithLabelValues(nodeName).Set(1)
 	}
 
-	slog.Info("Initial state", "totalNodes", totalNodes, "quarantinedNodes", len(quarantinedNodesMap),
+	slog.InfoContext(ctx, "Initial state", "totalNodes", totalNodes, "quarantinedNodes", len(quarantinedNodesMap),
 		"quarantinedNodesMap", quarantinedNodesMap)
 }
 
@@ -361,20 +362,20 @@ func (r *Reconciler) checkCircuitBreakerAtStartup(ctx context.Context) error {
 			return err
 		}
 
-		slog.Error("Error checking if circuit breaker is tripped", "error", err)
+		slog.ErrorContext(ctx, "Error checking if circuit breaker is tripped", "error", err)
 		<-ctx.Done()
 
 		return fmt.Errorf("circuit breaker check failed: %w", err)
 	}
 
 	if tripped {
-		slog.Error("Fault Quarantine circuit breaker is TRIPPED. Halting event dequeuing indefinitely.")
+		slog.ErrorContext(ctx, "Fault Quarantine circuit breaker is TRIPPED. Halting event dequeuing indefinitely.")
 		<-ctx.Done()
 
 		return fmt.Errorf("circuit breaker is TRIPPED at startup")
 	}
 
-	slog.Info("Listening for events on the channel...")
+	slog.InfoContext(ctx, "Listening for events on the channel...")
 
 	return nil
 }
@@ -386,26 +387,26 @@ func (r *Reconciler) handleCircuitBreakerCursorMode(ctx context.Context, dbClien
 
 	cursorMode, err := r.cb.GetCursorMode(ctx)
 	if err != nil {
-		slog.Error("Failed to read cursor mode, defaulting to RESUME", "error", err)
+		slog.ErrorContext(ctx, "Failed to read cursor mode, defaulting to RESUME", "error", err)
 		return fmt.Errorf("failed to read cursor mode: %w", err)
 	}
 
 	if cursorMode == breaker.CursorModeCreate {
-		slog.Info("Circuit breaker cursor is CREATE, deleting resume token to skip accumulated events")
+		slog.InfoContext(ctx, "Circuit breaker cursor is CREATE, deleting resume token to skip accumulated events")
 
 		if err := r.deleteResumeToken(ctx, dbClient); err != nil {
-			slog.Error("Failed to delete resume token", "error", err)
+			slog.ErrorContext(ctx, "Failed to delete resume token", "error", err)
 			return fmt.Errorf("failed to delete resume token: %w", err)
 		}
 
 		if err := r.cb.SetCursorMode(ctx, breaker.CursorModeResume); err != nil {
-			slog.Error("Failed to reset cursor to RESUME", "error", err)
+			slog.ErrorContext(ctx, "Failed to reset cursor to RESUME", "error", err)
 			return fmt.Errorf("failed to reset cursor to RESUME: %w", err)
 		}
 
-		slog.Info("Resume token deleted, will start from latest events")
+		slog.InfoContext(ctx, "Resume token deleted, will start from latest events")
 	} else {
-		slog.Info("Circuit breaker cursor is RESUME, will process accumulated events")
+		slog.InfoContext(ctx, "Circuit breaker cursor is RESUME, will process accumulated events")
 	}
 
 	return nil
@@ -427,7 +428,7 @@ func (r *Reconciler) deleteResumeToken(ctx context.Context, dbClient client.Data
 		return fmt.Errorf("failed to delete resume token: %w", err)
 	}
 
-	slog.Info("Successfully deleted resume token", "clientName", tokenConfig.ClientName)
+	slog.InfoContext(ctx, "Successfully deleted resume token", "clientName", tokenConfig.ClientName)
 
 	return nil
 }
@@ -460,12 +461,12 @@ func (r *Reconciler) ProcessEvent(
 		return nil
 	}
 
-	slog.Debug("Processing event", "checkName", event.HealthEvent.CheckName)
+	slog.DebugContext(ctx, "Processing event", "checkName", event.HealthEvent.CheckName)
 
 	isNodeQuarantined := r.handleEvent(ctx, event, ruleSetEvals, rulesetsConfig)
 
 	if isNodeQuarantined == nil {
-		slog.Debug("Skipped processing event for node, no status update needed", "node", event.HealthEvent.NodeName)
+		slog.DebugContext(ctx, "Skipped processing event for node, no status update needed", "node", event.HealthEvent.NodeName)
 		span.SetAttributes(attribute.String("fault_quarantine.processing_status", "skipped"))
 		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped, "fault_quarantine")
 	} else {
@@ -492,14 +493,14 @@ func (r *Reconciler) checkCircuitBreakerAndHalt(ctx context.Context) bool {
 
 	tripped, err := r.cb.IsTripped(ctx)
 	if err != nil {
-		slog.Error("Error checking if circuit breaker is tripped", "error", err)
+		slog.ErrorContext(ctx, "Error checking if circuit breaker is tripped", "error", err)
 		<-ctx.Done()
 
 		return true
 	}
 
 	if tripped {
-		slog.Error("Circuit breaker TRIPPED. Halting event processing until restart and breaker reset.")
+		slog.ErrorContext(ctx, "Circuit breaker TRIPPED. Halting event processing until restart and breaker reset.")
 		span := tracing.SpanFromContext(ctx)
 		if span != nil {
 			span.SetAttributes(
@@ -525,7 +526,7 @@ func (r *Reconciler) handleEvent(
 	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.handle_event")
 	defer span.End()
 
-	annotations, quarantineAnnotationExists := r.hasExistingQuarantine(event.HealthEvent.NodeName)
+	annotations, quarantineAnnotationExists := r.hasExistingQuarantine(ctx, event.HealthEvent.NodeName)
 
 	if quarantineAnnotationExists {
 		status := r.handleAlreadyQuarantinedNode(ctx, event.HealthEvent, ruleSetEvals)
@@ -540,7 +541,7 @@ func (r *Reconciler) handleEvent(
 	// For healthy events, if there's no existing quarantine annotation,
 	// skip processing as there's no transition from unhealthy to healthy
 	if event.HealthEvent.IsHealthy {
-		slog.Info("Skipping healthy event for node as there's no existing quarantine annotation",
+		slog.InfoContext(ctx, "Skipping healthy event for node as there's no existing quarantine annotation",
 			"node", event.HealthEvent.NodeName, "event", event.HealthEvent)
 		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped, "fault_quarantine")
 		return nil
@@ -565,7 +566,7 @@ func (r *Reconciler) handleEvent(
 
 	taintsToBeApplied := r.collectTaintsToApply(taintAppliedMap)
 
-	annotationsMap := r.prepareAnnotations(taintsToBeApplied, &labelsMap, &isCordoned)
+	annotationsMap := r.prepareAnnotations(ctx, taintsToBeApplied, &labelsMap, &isCordoned)
 
 	isNodeQuarantined := len(taintsToBeApplied) > 0 || isCordoned.Load()
 
@@ -584,10 +585,10 @@ func (r *Reconciler) handleEvent(
 	return status
 }
 
-func (r *Reconciler) hasExistingQuarantine(nodeName string) (map[string]string, bool) {
-	annotations, err := r.getNodeQuarantineAnnotations(nodeName)
+func (r *Reconciler) hasExistingQuarantine(ctx context.Context, nodeName string) (map[string]string, bool) {
+	annotations, err := r.getNodeQuarantineAnnotations(ctx, nodeName)
 	if err != nil {
-		slog.Error("Failed to fetch annotations for node", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to fetch annotations for node", "node", nodeName, "error", err)
 		return make(map[string]string), false
 	}
 
@@ -727,7 +728,7 @@ func (r *Reconciler) evaluateRulesets(
 		go func(eval evaluator.RuleSetEvaluatorIface) {
 			defer wg.Done()
 
-			slog.Info("Handling event for ruleset", "event", event, "ruleset", eval.GetName())
+			slog.InfoContext(ctx, "Handling event for ruleset", "event", event, "ruleset", eval.GetName())
 
 			ruleEvaluatedResult, err := eval.Evaluate(event.HealthEvent)
 
@@ -826,7 +827,7 @@ func (r *Reconciler) handleRuleEvaluationError(
 		attribute.String("fault_quarantine.error.type", "rule_evaluation_error"),
 		attribute.String("fault_quarantine.error.message", err.Error()),
 	)
-	slog.Error("Rule evaluation failed", "ruleset", evalName, "node", event.NodeName, "error", err)
+	slog.ErrorContext(ctx, "Rule evaluation failed", "ruleset", evalName, "node", event.NodeName, "error", err)
 	metrics.ProcessingErrors.WithLabelValues("ruleset_evaluation_error").Inc()
 	metrics.RulesetEvaluations.WithLabelValues(evalName, metrics.StatusFailed).Inc()
 }
@@ -850,6 +851,7 @@ func (r *Reconciler) collectTaintsToApply(taintAppliedMap map[keyValTaint]string
 
 // prepareAnnotations prepares annotations and labels to be applied if any
 func (r *Reconciler) prepareAnnotations(
+	ctx context.Context,
 	taintsToBeApplied []config.Taint,
 	labelsMap *sync.Map,
 	isCordoned *atomic.Bool,
@@ -859,7 +861,7 @@ func (r *Reconciler) prepareAnnotations(
 	if len(taintsToBeApplied) > 0 {
 		taintsJsonStr, err := json.Marshal(taintsToBeApplied)
 		if err != nil {
-			slog.Error("Failed to marshal taints for annotation", "error", err)
+			slog.ErrorContext(ctx, "Failed to marshal taints for annotation", "error", err)
 		} else {
 			annotationsMap[common.QuarantineHealthEventAppliedTaintsAnnotationKey] = string(taintsJsonStr)
 		}
@@ -911,13 +913,13 @@ func (r *Reconciler) applyQuarantine(
 	updated := healthEvents.AddOrUpdateEvent(event.HealthEvent)
 
 	if !updated {
-		slog.Info("Health event already exists for node, skipping quarantine", "node", event.HealthEvent.NodeName)
+		slog.InfoContext(ctx, "Health event already exists for node, skipping quarantine", "node", event.HealthEvent.NodeName)
 		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped, "fault_quarantine")
 		return nil
 	}
 
 	if err := r.addHealthEventAnnotation(healthEvents, annotationsMap); err != nil {
-		slog.Error("Failed to add health event annotation", "error", err, "node", event.HealthEvent.NodeName)
+		slog.ErrorContext(ctx, "Failed to add health event annotation", "error", err, "node", event.HealthEvent.NodeName)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 		tracing.RecordError(span, err)
 		span.SetAttributes(
@@ -927,11 +929,11 @@ func (r *Reconciler) applyQuarantine(
 		return nil
 	}
 
-	slog.Debug("Added health event annotation successfully", "node", event.HealthEvent.NodeName)
+	slog.DebugContext(ctx, "Added health event annotation successfully", "node", event.HealthEvent.NodeName)
 
 	// Remove manual uncordon annotation if present before applying new quarantine
 	if err := r.cleanupManualUncordonAnnotation(ctx, event.HealthEvent.NodeName, annotations); err != nil {
-		slog.Error("Failed to cleanup manual uncordon annotation",
+		slog.ErrorContext(ctx, "Failed to cleanup manual uncordon annotation",
 			"error", err, "node", event.HealthEvent.NodeName)
 		metrics.ProcessingErrors.WithLabelValues("cleanup_manual_uncordon_annotation_error").Inc()
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
@@ -944,7 +946,7 @@ func (r *Reconciler) applyQuarantine(
 	}
 
 	if !r.config.CircuitBreakerEnabled {
-		slog.Info("Circuit breaker is disabled, proceeding with quarantine action without protection",
+		slog.InfoContext(ctx, "Circuit breaker is disabled, proceeding with quarantine action without protection",
 			"node", event.HealthEvent.NodeName)
 	}
 
@@ -977,7 +979,7 @@ func (r *Reconciler) applyQuarantine(
 		labels,
 	)
 	if err != nil {
-		slog.Error("Failed to taint and cordon node", "node", event.HealthEvent.NodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to taint and cordon node", "node", event.HealthEvent.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("taint_and_cordon_error").Inc()
 		tracing.RecordError(span, err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
@@ -990,7 +992,7 @@ func (r *Reconciler) applyQuarantine(
 		return nil
 	}
 
-	slog.Debug("QuarantineNodeAndSetAnnotations completed successfully", "node", event.HealthEvent.NodeName)
+	slog.DebugContext(ctx, "QuarantineNodeAndSetAnnotations completed successfully", "node", event.HealthEvent.NodeName)
 
 	r.updateQuarantineMetrics(event.HealthEvent.NodeName, taintsToBeApplied, isCordoned)
 
@@ -1074,7 +1076,7 @@ func (r *Reconciler) handleUnhealthyEventOnQuarantinedNode(
 	healthEventsAnnotationMap *healthEventsAnnotation.HealthEventsAnnotationMap,
 ) bool {
 	if !r.isForceQuarantine(event) && !r.eventMatchesAnyRule(event, ruleSetEvals) {
-		slog.Info("Unhealthy event on node doesn't match any rules, skipping annotation update",
+		slog.InfoContext(ctx, "Unhealthy event on node doesn't match any rules, skipping annotation update",
 			"checkName", event.CheckName, "node", event.NodeName)
 
 		return true
@@ -1083,15 +1085,15 @@ func (r *Reconciler) handleUnhealthyEventOnQuarantinedNode(
 	added := healthEventsAnnotationMap.AddOrUpdateEvent(event)
 
 	if added {
-		slog.Info("Added entity failures for check on node",
+		slog.InfoContext(ctx, "Added entity failures for check on node",
 			"checkName", event.CheckName, "node", event.NodeName, "totalTrackedEntities", healthEventsAnnotationMap.Count())
 
 		if err := r.addEventToAnnotation(ctx, event); err != nil {
-			slog.Error("Failed to update health events annotation", "error", err)
+			slog.ErrorContext(ctx, "Failed to update health events annotation", "error", err)
 			return true
 		}
 	} else {
-		slog.Debug("All entities already tracked for check on node",
+		slog.DebugContext(ctx, "All entities already tracked for check on node",
 			"checkName", event.CheckName, "node", event.NodeName)
 	}
 
@@ -1125,7 +1127,7 @@ func (r *Reconciler) handleQuarantinedNode(
 	}
 
 	if !hasExistingCheck {
-		slog.Debug("Received healthy event for untracked check (other checks may still be failing)",
+		slog.DebugContext(ctx, "Received healthy event for untracked check (other checks may still be failing)",
 			"check", event.CheckName,
 			"node", event.NodeName)
 
@@ -1137,20 +1139,20 @@ func (r *Reconciler) handleQuarantinedNode(
 	removedCount := healthEventsAnnotationMap.RemoveEvent(event)
 
 	if removedCount > 0 {
-		slog.Info("Removed recovered entities for check on node",
+		slog.InfoContext(ctx, "Removed recovered entities for check on node",
 			"removedCount", removedCount,
 			"check", event.CheckName,
 			"node", event.NodeName,
 			"remainingEntities", healthEventsAnnotationMap.Count())
 	} else {
-		slog.Debug("No matching entities to remove for check on node",
+		slog.DebugContext(ctx, "No matching entities to remove for check on node",
 			"check", event.CheckName,
 			"node", event.NodeName)
 	}
 
 	updatedHealthEventsMap, err := r.removeEventFromAnnotation(ctx, event)
 	if err != nil {
-		slog.Error("Failed to update health events annotation after recovery", "error", err)
+		slog.ErrorContext(ctx, "Failed to update health events annotation after recovery", "error", err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 		tracing.RecordError(span, err)
 		span.SetAttributes(
@@ -1161,12 +1163,12 @@ func (r *Reconciler) handleQuarantinedNode(
 	}
 
 	if updatedHealthEventsMap.IsEmpty() {
-		slog.Info("All health checks recovered for node, proceeding with uncordon",
+		slog.InfoContext(ctx, "All health checks recovered for node, proceeding with uncordon",
 			"node", event.NodeName)
 
 		isUncordoned, err := r.performUncordon(ctx, event, annotations)
 		if err != nil {
-			slog.Error("Failed to uncordon node", "error", err, "node", event.NodeName)
+			slog.ErrorContext(ctx, "Failed to uncordon node", "error", err, "node", event.NodeName)
 			metrics.ProcessingErrors.WithLabelValues("uncordon_error").Inc()
 			tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 			tracing.RecordError(span, err)
@@ -1179,7 +1181,7 @@ func (r *Reconciler) handleQuarantinedNode(
 		return isUncordoned
 	}
 
-	slog.Info("Node remains quarantined with failing checks",
+	slog.InfoContext(ctx, "Node remains quarantined with failing checks",
 		"node", event.NodeName,
 		"failingChecksCount", updatedHealthEventsMap.Count(),
 		"checks", updatedHealthEventsMap.GetAllCheckNames())
@@ -1195,9 +1197,9 @@ func (r *Reconciler) getHealthEventsFromAnnotation(
 	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.get_health_events_from_annotation")
 	defer span.End()
 
-	annotations, err := r.getNodeQuarantineAnnotations(event.NodeName)
+	annotations, err := r.getNodeQuarantineAnnotations(ctx, event.NodeName)
 	if err != nil {
-		slog.Error("Failed to get node annotations for node", "node", event.NodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to get node annotations for node", "node", event.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("get_node_annotations_error").Inc()
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 		tracing.RecordError(span, err)
@@ -1210,7 +1212,7 @@ func (r *Reconciler) getHealthEventsFromAnnotation(
 
 	quarantineAnnotationStr, exists := annotations[common.QuarantineHealthEventAnnotationKey]
 	if !exists || quarantineAnnotationStr == "" {
-		slog.Info("No quarantine annotation found for node", "node", event.NodeName)
+		slog.InfoContext(ctx, "No quarantine annotation found for node", "node", event.NodeName)
 		tracing.SetOperationStatus(span, tracing.OperationStatusSkipped, "fault_quarantine")
 		return nil, nil, errNoQuarantineAnnotation
 	}
@@ -1223,7 +1225,7 @@ func (r *Reconciler) getHealthEventsFromAnnotation(
 		var singleHealthEvent protos.HealthEvent
 
 		if err2 := json.Unmarshal([]byte(quarantineAnnotationStr), &singleHealthEvent); err2 == nil {
-			slog.Info("Found old format annotation for node, converting locally", "node", event.NodeName)
+			slog.InfoContext(ctx, "Found old format annotation for node, converting locally", "node", event.NodeName)
 
 			healthEventsMap = *healthEventsAnnotation.NewHealthEventsAnnotationMap()
 			healthEventsMap.AddOrUpdateEvent(&singleHealthEvent)
@@ -1268,7 +1270,7 @@ func (r *Reconciler) addEventToAnnotation(
 
 		added := healthEventsMap.AddOrUpdateEvent(event)
 		if !added {
-			slog.Debug("Event already exists for node, no annotation update needed", "node", event.NodeName)
+			slog.DebugContext(ctx, "Event already exists for node, no annotation update needed", "node", event.NodeName)
 			return nil
 		}
 
@@ -1279,7 +1281,7 @@ func (r *Reconciler) addEventToAnnotation(
 
 		node.Annotations[common.QuarantineHealthEventAnnotationKey] = string(annotationBytes)
 
-		slog.Debug("Added/updated event for node", "node", event.NodeName, "totalEntityLevelEvents", healthEventsMap.Count())
+		slog.DebugContext(ctx, "Added/updated event for node", "node", event.NodeName, "totalEntityLevelEvents", healthEventsMap.Count())
 
 		return nil
 	}
@@ -1323,7 +1325,7 @@ func (r *Reconciler) removeEventFromAnnotation(
 
 		removed := healthEventsMap.RemoveEvent(event)
 		if removed == 0 {
-			slog.Debug("No matching entities to remove for node, no annotation update needed", "node", event.NodeName)
+			slog.DebugContext(ctx, "No matching entities to remove for node, no annotation update needed", "node", event.NodeName)
 
 			updatedMap = healthEventsMap
 
@@ -1337,7 +1339,7 @@ func (r *Reconciler) removeEventFromAnnotation(
 
 		node.Annotations[common.QuarantineHealthEventAnnotationKey] = string(annotationBytes)
 
-		slog.Debug("Removed entities for node", "node", event.NodeName, "remainingEntityLevelEvents", healthEventsMap.Count())
+		slog.DebugContext(ctx, "Removed entities for node", "node", event.NodeName, "remainingEntityLevelEvents", healthEventsMap.Count())
 
 		updatedMap = healthEventsMap
 
@@ -1366,7 +1368,7 @@ func (r *Reconciler) performUncordon(
 	ctx, span := tracing.StartSpan(ctx, "fault_quarantine.perform_uncordon")
 	defer span.End()
 
-	slog.Info("All entities recovered for check - proceeding with uncordon",
+	slog.InfoContext(ctx, "All entities recovered for check - proceeding with uncordon",
 		"check", event.CheckName,
 		"node", event.NodeName)
 
@@ -1374,7 +1376,7 @@ func (r *Reconciler) performUncordon(
 	taintsToBeRemoved, annotationsToBeRemoved, isUnCordon, labelsMap, err := r.prepareUncordonParams(
 		event, annotations)
 	if err != nil {
-		slog.Error("Failed to prepare uncordon params for node", "node", event.NodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to prepare uncordon params for node", "node", event.NodeName, "error", err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
 		tracing.RecordError(span, err)
 		span.SetAttributes(
@@ -1390,14 +1392,14 @@ func (r *Reconciler) performUncordon(
 	}
 
 	if !isUnCordon {
-		slog.Warn("Node is not cordoned but has quarantine taints/annotations, proceeding with cleanup",
+		slog.WarnContext(ctx, "Node is not cordoned but has quarantine taints/annotations, proceeding with cleanup",
 			"node", event.NodeName)
 	}
 
 	annotationsToBeRemoved = append(annotationsToBeRemoved, common.QuarantineHealthEventAnnotationKey)
 
 	if !r.config.CircuitBreakerEnabled {
-		slog.Info("Circuit breaker is disabled, proceeding with unquarantine action for node", "node", event.NodeName)
+		slog.InfoContext(ctx, "Circuit breaker is disabled, proceeding with unquarantine action for node", "node", event.NodeName)
 	}
 
 	labelsToRemove := []string{
@@ -1415,7 +1417,7 @@ func (r *Reconciler) performUncordon(
 		labelsToRemove,
 		labelsMap,
 	); err != nil {
-		slog.Error("Failed to untaint and uncordon node", "node", event.NodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to untaint and uncordon node", "node", event.NodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("untaint_and_uncordon_error").Inc()
 		tracing.RecordError(span, err)
 		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
@@ -1427,7 +1429,7 @@ func (r *Reconciler) performUncordon(
 		return true, fmt.Errorf("failed to untaint and uncordon node %s: %w", event.NodeName, err)
 	}
 
-	r.updateUncordonMetrics(event.NodeName, taintsToBeRemoved, isUnCordon)
+	r.updateUncordonMetrics(ctx, event.NodeName, taintsToBeRemoved, isUnCordon)
 
 	span.SetAttributes(
 		attribute.Bool("fault_quarantine.action.uncordon", isUnCordon),
@@ -1478,13 +1480,14 @@ func (r *Reconciler) prepareUncordonParams(
 }
 
 func (r *Reconciler) updateUncordonMetrics(
+	ctx context.Context,
 	nodeName string,
 	taintsToBeRemoved []config.Taint,
 	isUnCordon bool,
 ) {
 	metrics.TotalNodesUnquarantined.WithLabelValues(nodeName).Inc()
 	metrics.CurrentQuarantinedNodes.WithLabelValues(nodeName).Set(0)
-	slog.Info("Set currentQuarantinedNodes to 0 for unquarantined node", "node", nodeName)
+	slog.InfoContext(ctx, "Set currentQuarantinedNodes to 0 for unquarantined node", "node", nodeName)
 
 	for _, taint := range taintsToBeRemoved {
 		metrics.TaintsRemoved.WithLabelValues(taint.Key, taint.Effect).Inc()
@@ -1509,7 +1512,7 @@ func formatCordonOrUncordonReasonValue(input string, length int) string {
 }
 
 // getNodeQuarantineAnnotations retrieves quarantine annotations from the informer cache
-func (r *Reconciler) getNodeQuarantineAnnotations(nodeName string) (map[string]string, error) {
+func (r *Reconciler) getNodeQuarantineAnnotations(ctx context.Context, nodeName string) (map[string]string, error) {
 	node, err := r.k8sClient.NodeInformer.GetNode(nodeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node from cache: %w", err)
@@ -1532,7 +1535,7 @@ func (r *Reconciler) getNodeQuarantineAnnotations(nodeName string) (map[string]s
 		}
 	}
 
-	slog.Debug("Retrieved quarantine annotations for node from informer cache", "node", nodeName)
+	slog.DebugContext(ctx, "Retrieved quarantine annotations for node from informer cache", "node", nodeName)
 
 	return quarantineAnnotations, nil
 }
@@ -1540,16 +1543,16 @@ func (r *Reconciler) getNodeQuarantineAnnotations(nodeName string) (map[string]s
 func (r *Reconciler) cleanupManualUncordonAnnotation(ctx context.Context, nodeName string,
 	annotations map[string]string) error {
 	if _, hasManualUncordon := annotations[common.QuarantinedNodeUncordonedManuallyAnnotationKey]; hasManualUncordon {
-		slog.Info("Removing manual uncordon annotation from node before applying new quarantine", "node", nodeName)
+		slog.InfoContext(ctx, "Removing manual uncordon annotation from node before applying new quarantine", "node", nodeName)
 
 		updateFn := func(node *corev1.Node) error {
 			if node.Annotations == nil {
-				slog.Debug("Node has no annotations, manual uncordon annotation already absent", "node", nodeName)
+				slog.DebugContext(ctx, "Node has no annotations, manual uncordon annotation already absent", "node", nodeName)
 				return nil
 			}
 
 			if _, exists := node.Annotations[common.QuarantinedNodeUncordonedManuallyAnnotationKey]; !exists {
-				slog.Debug("Manual uncordon annotation already removed from node", "node", nodeName)
+				slog.DebugContext(ctx, "Manual uncordon annotation already removed from node", "node", nodeName)
 				return nil
 			}
 
@@ -1559,7 +1562,7 @@ func (r *Reconciler) cleanupManualUncordonAnnotation(ctx context.Context, nodeNa
 		}
 
 		if err := r.k8sClient.UpdateNode(ctx, nodeName, updateFn); err != nil {
-			slog.Error("Failed to remove manual uncordon annotation from node", "node", nodeName, "error", err)
+			slog.ErrorContext(ctx, "Failed to remove manual uncordon annotation from node", "node", nodeName, "error", err)
 			return fmt.Errorf("failed to remove manual uncordon annotation from node %s: %w", nodeName, err)
 		}
 	}
@@ -1569,13 +1572,17 @@ func (r *Reconciler) cleanupManualUncordonAnnotation(ctx context.Context, nodeNa
 
 // handleManualUncordon handles the case when a node is manually uncordoned while having FQ annotations
 func (r *Reconciler) handleManualUncordon(nodeName string) error {
-	annotations, err := r.getNodeQuarantineAnnotations(nodeName)
+	ctx, span := tracing.StartSpan(context.Background(), "fault_quarantine.manual_uncordon")
+	defer span.End()
+	span.SetAttributes(attribute.String("fault_quarantine.node_name", nodeName))
+
+	annotations, err := r.getNodeQuarantineAnnotations(ctx, nodeName)
 	if err != nil {
-		slog.Error("Failed to get node annotations", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to get node annotations", "node", nodeName, "error", err)
 		return fmt.Errorf("failed to get annotations for manually uncordoned node %s: %w", nodeName, err)
 	}
 
-	slog.Debug("Retrieved node annotations for manual uncordon", "node", nodeName, "annotationCount", len(annotations))
+	slog.DebugContext(ctx, "Retrieved node annotations for manual uncordon", "node", nodeName, "annotationCount", len(annotations))
 
 	annotationsToRemove := []string{}
 
@@ -1592,13 +1599,11 @@ func (r *Reconciler) handleManualUncordon(nodeName string) error {
 		annotationsToRemove = append(annotationsToRemove, common.QuarantineHealthEventIsCordonedAnnotationKey)
 	}
 
-	slog.Debug("Prepared annotations to remove", "node", nodeName, "count", len(annotationsToRemove))
+	slog.DebugContext(ctx, "Prepared annotations to remove", "node", nodeName, "count", len(annotationsToRemove))
 
 	newAnnotations := map[string]string{
 		common.QuarantinedNodeUncordonedManuallyAnnotationKey: common.QuarantinedNodeUncordonedManuallyAnnotationValue,
 	}
-
-	ctx := context.Background()
 
 	if err := r.k8sClient.HandleManualUncordonCleanup(
 		ctx,
@@ -1607,47 +1612,51 @@ func (r *Reconciler) handleManualUncordon(nodeName string) error {
 		newAnnotations,
 		[]string{statemanager.NVSentinelStateLabelKey},
 	); err != nil {
-		slog.Error("Failed to clean up manually uncordoned node", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to clean up manually uncordoned node", "node", nodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("manual_uncordon_cleanup_error").Inc()
 
 		return fmt.Errorf("failed to clean up manually uncordoned node %s: %w", nodeName, err)
 	}
 
-	slog.Debug("Successfully completed K8s cleanup for manual uncordon", "node", nodeName)
+	slog.DebugContext(ctx, "Successfully completed K8s cleanup for manual uncordon", "node", nodeName)
 
-	slog.Info("Set currentQuarantinedNodes to 0 for manually uncordoned node", "node", nodeName)
+	slog.InfoContext(ctx, "Set currentQuarantinedNodes to 0 for manually uncordoned node", "node", nodeName)
 	metrics.CurrentQuarantinedNodes.WithLabelValues(nodeName).Set(0)
 	metrics.TotalNodesManuallyUncordoned.WithLabelValues(nodeName).Inc()
 
 	// Cancel latest quarantining events (if eventWatcher is available)
 	if r.eventWatcher != nil {
-		slog.Debug("Calling CancelLatestQuarantiningEvents for manual uncordon", "node", nodeName)
+		slog.DebugContext(ctx, "Calling CancelLatestQuarantiningEvents for manual uncordon", "node", nodeName)
 
 		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName, "Manual uncordoning detected"); err != nil {
-			slog.Error("Failed to cancel latest quarantining events for manually uncordoned node",
+			slog.ErrorContext(ctx, "Failed to cancel latest quarantining events for manually uncordoned node",
 				"node", nodeName, "error", err)
 			metrics.ProcessingErrors.WithLabelValues("mongodb_cancel_quarantine_error").Inc()
 		} else {
-			slog.Debug("Successfully cancelled latest quarantining events", "node", nodeName)
+			slog.DebugContext(ctx, "Successfully cancelled latest quarantining events", "node", nodeName)
 		}
 	} else {
-		slog.Warn("eventWatcher is NIL - cannot cancel quarantining events in database", "node", nodeName)
+		slog.WarnContext(ctx, "eventWatcher is NIL - cannot cancel quarantining events in database", "node", nodeName)
 	}
 
-	slog.Info("Successfully completed manual uncordon handling", "node", nodeName)
+	slog.InfoContext(ctx, "Successfully completed manual uncordon handling", "node", nodeName)
 
 	return nil
 }
 
 // handleManualUntaint handles the case when a node is manually untainted while having FQ annotations
 func (r *Reconciler) handleManualUntaint(nodeName string) error {
-	annotations, err := r.getNodeQuarantineAnnotations(nodeName)
+	ctx, span := tracing.StartSpan(context.Background(), "fault_quarantine.manual_untaint")
+	defer span.End()
+	span.SetAttributes(attribute.String("fault_quarantine.node_name", nodeName))
+
+	annotations, err := r.getNodeQuarantineAnnotations(ctx, nodeName)
 	if err != nil {
-		slog.Error("Failed to get node annotations", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to get node annotations", "node", nodeName, "error", err)
 		return fmt.Errorf("failed to get annotations for manually untainted node %s: %w", nodeName, err)
 	}
 
-	slog.Debug("Retrieved node annotations for manual untaint", "node", nodeName, "annotationCount", len(annotations))
+	slog.DebugContext(ctx, "Retrieved node annotations for manual untaint", "node", nodeName, "annotationCount", len(annotations))
 
 	annotationsToRemove := []string{}
 
@@ -1663,13 +1672,11 @@ func (r *Reconciler) handleManualUntaint(nodeName string) error {
 		annotationsToRemove = append(annotationsToRemove, common.QuarantineHealthEventIsCordonedAnnotationKey)
 	}
 
-	slog.Debug("Prepared annotations to remove", "node", nodeName, "count", len(annotationsToRemove))
+	slog.DebugContext(ctx, "Prepared annotations to remove", "node", nodeName, "count", len(annotationsToRemove))
 
 	newAnnotations := map[string]string{
 		common.QuarantinedNodeIsUntaintedManuallyAnnotationKey: common.QuarantinedNodeIsUntaintedManuallyAnnotationValue,
 	}
-
-	ctx := context.Background()
 
 	if err := r.k8sClient.HandleManualUntaintCleanup(
 		ctx,
@@ -1678,33 +1685,33 @@ func (r *Reconciler) handleManualUntaint(nodeName string) error {
 		newAnnotations,
 		[]string{statemanager.NVSentinelStateLabelKey},
 	); err != nil {
-		slog.Error("Failed to clean up manually untainted node", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to clean up manually untainted node", "node", nodeName, "error", err)
 		metrics.ProcessingErrors.WithLabelValues("manual_untaint_cleanup_error").Inc()
 
 		return fmt.Errorf("failed to clean up manually untainted node %s: %w", nodeName, err)
 	}
 
-	slog.Debug("Successfully completed K8s cleanup for manual untaint", "node", nodeName)
+	slog.DebugContext(ctx, "Successfully completed K8s cleanup for manual untaint", "node", nodeName)
 
 	// Reset the quarantine gauge metric since the node is no longer quarantined
 	metrics.CurrentQuarantinedNodes.WithLabelValues(nodeName).Set(0)
 	metrics.TotalNodesManuallyUntainted.WithLabelValues(nodeName).Inc()
-	slog.Info("Set currentQuarantinedNodes to 0 after manual untaint", "node", nodeName)
+	slog.InfoContext(ctx, "Set currentQuarantinedNodes to 0 after manual untaint", "node", nodeName)
 
 	// Cancel latest quarantining events (if eventWatcher is available)
 	if r.eventWatcher != nil {
-		slog.Debug("Calling CancelLatestQuarantiningEvents for manual untaint", "node", nodeName)
+		slog.DebugContext(ctx, "Calling CancelLatestQuarantiningEvents for manual untaint", "node", nodeName)
 
 		if err := r.eventWatcher.CancelLatestQuarantiningEvents(ctx, nodeName, "Manual untainting detected"); err != nil {
-			slog.Error("Failed to cancel latest quarantining events for manually untainted node",
+			slog.ErrorContext(ctx, "Failed to cancel latest quarantining events for manually untainted node",
 				"node", nodeName, "error", err)
 			metrics.ProcessingErrors.WithLabelValues("mongodb_cancel_quarantine_error").Inc()
 		} else {
-			slog.Debug("Successfully cancelled latest quarantining events", "node", nodeName)
+			slog.DebugContext(ctx, "Successfully cancelled latest quarantining events", "node", nodeName)
 		}
 	}
 
-	slog.Info("Successfully completed manual untaint handling", "node", nodeName)
+	slog.InfoContext(ctx, "Successfully completed manual untaint handling", "node", nodeName)
 
 	return nil
 }

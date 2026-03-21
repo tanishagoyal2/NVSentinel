@@ -42,7 +42,7 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("event-exporter", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("event-exporter", version)
 	slog.Info("Health Events Exporter starting", "version", version, "commit", commit, "date", date)
 
 	if err := tracing.InitTracing("event-exporter"); err != nil {
