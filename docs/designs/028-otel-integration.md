@@ -510,33 +510,7 @@ An **OTel Log Appender** (or **log bridge**) is a mechanism that automatically a
 
 OpenTelemetry defines two standard workflows for achieving this; the choice depends on how logs are collected (direct OTLP export vs. stdout/file with a log shipper).
 
-### Approach 1: Direct-to-Collector (OTel Logs SDK + `otelslog` bridge)
-
-In this workflow, logs are emitted **directly from the application to the OTel Collector** via OTLP (similar to traces). The OpenTelemetry Logs SDK attaches `trace_id` and `span_id` automatically. Go's `slog` is connected to this pipeline using the official **otelslog** bridge (`go.opentelemetry.io/contrib/bridges/otelslog`).
-
-**Setup:**
-
-1. Initialize a `LoggerProvider` with an OTLP log exporter and batch processor (analogous to `TracerProvider` for traces).
-2. Register it as the global logger provider.
-3. Use the bridge as the default `slog` handler.
-
-**Example:**
-
-```go
-import "go.opentelemetry.io/contrib/bridges/otelslog"
-
-// After initializing LoggerProvider with OTLP exporter + batch processor:
-global.SetLoggerProvider(loggerProvider)
-slog.SetDefault(otelslog.NewLogger("my-service"))
-
-// All subsequent slog calls that pass context automatically include trace_id and span_id:
-slog.InfoContext(ctx, "processing event")
-```
-
-**Pros:** Full OTel integration; logs flow through the same collector pipeline as traces; trace context is attached by the SDK.  
-**Cons:** Heavier — adds a second OTLP export path (traces + logs); requires the full OTel Logs SDK; the Go Logs SDK is still **Experimental**. Logs are sent over the network to the collector instead of to stdout, so existing Kubernetes log collection (e.g., tailing container stdout) may need to be adjusted or duplicated.
-
-### Approach 2: Via stdout with custom slog Handler wrapper
+### Custom slog Handler wrapper
 
 In this workflow, logs continue to be written to stdout/stderr as JSON. A **custom `slog.Handler`** wraps the existing handler and injects `trace_id` and `span_id` from the active span (via `context.Context`) into each log record. A log shipper (FluentBit, Grafana Alloy, Promtail, etc.) tails container logs, parses the JSON (including the new fields), and forwards them to Loki or another backend. Correlation works because both traces (Tempo) and logs (Loki) share the same `trace_id`/`span_id` fields.
 
@@ -595,47 +569,10 @@ Integration with NVSentinel's logger (`commons/pkg/logger/logger.go`): wrap the 
 **Pros:** Lightweight; no new OTLP log export; works with existing Kubernetes log collection (stdout → shipper → Loki).  
 **Cons:** Callers must use context-aware logging methods (see below).
 
-**NVSentinel implementation:** `commons/pkg/logger` provides `TraceContextHandler` and `SetDefaultStructuredLoggerWithTraceCorrelation` / `NewStructuredLoggerWithTraceCorrelation`, which wrap `slog.NewJSONHandler` on stderr. The following modules call `SetDefaultStructuredLoggerWithTraceCorrelation` in `main` (Approach 2 only): **fault-quarantine**, **platform-connectors**, **node-drainer**, **fault-remediation**, **janitor**, **janitor-provider**, **event-exporter**, **health-events-analyzer**. Traces still export via OTLP from `tracing.InitTracing`; application logs reach Panoptes through the existing **tail → Alloy → OTLP gateway** path with `trace_id` / `span_id` on JSON lines when callers use `slog.*Context(ctx, ...)`.
-
-### Current cluster log pipeline (riva-dgxc / observability)
-
-In clusters such as `riva-dgxc-k8s-oci-ord-dev1`, logs reach the OTel collector as follows:
-
-- **dgxc-alloy-node** (DaemonSet in `dgxc-alloy`): Alloy runs `loki.source.file` to tail pod logs from configured namespaces (including `nvsentinel`). It converts Loki-format to OTLP and forwards to **dgxc-alloy-gateway** via `otelcol.exporter.otlphttp` with endpoint `http://dgxc-alloy-gateway.dgxc-alloy.svc.cluster.local:4318`. So NVSentinel container stdout is collected by Alloy and sent to the same gateway that receives OTLP traces.
-- **kratos-fluent-bit** (DaemonSet in `observability`): Fluent Bit tails a limited set of container log paths (e.g. `*vault*`, `*ingress*`, `*secret*`) and sends to **Kratos ingest** (`ingest.kratos.nvidia.com`), not to dgxc-alloy. NVSentinel logs are not on that path unless they match those patterns.
-
-So today, **NVSentinel logs flow**: app stdout/stderr → **dgxc-alloy-node** (tail + Loki→OTLP) → **dgxc-alloy-gateway:4318** → Panoptes. No application-level log endpoint is required for that path; the endpoint is in the Alloy node config. Optional **Approach 1** (in-app OTLP logs via `otelslog`) can additionally send logs over `OTEL_EXPORTER_OTLP_ENDPOINT` but is **not** used for fault-quarantine (to avoid duplicate log ingestion when tail-based collection is enabled).
-
-#### Tail and Loki in this pipeline
-
-- **Tail:** In log collection, “tailing” means continuously reading log files as new lines are appended—like the Unix `tail -f`. In Kubernetes, each container’s stdout/stderr is written to a log file under `/var/log/containers/` (or similar). A log shipper (e.g. Alloy, Fluent Bit) runs on the node, discovers these files, and tails them so that every line the app writes is read and forwarded. So “tail” here is the **mechanism** that pulls logs from the filesystem into the pipeline; the app never talks to the collector directly.
-
-- **Loki:** [Grafana Loki](https://grafana.com/oss/loki/) is a log aggregation system (label-based, like Prometheus for logs). In the Alloy/Grafana ecosystem, “Loki” also refers to the **log data model and in-memory stream format** used between components. Alloy’s `loki.source.file` tails files and emits log entries in that Loki format (streams with labels such as `namespace`, `pod`, `container`). Other Alloy blocks (e.g. `loki.process.*`) work on these streams. To send logs to an OTLP endpoint (like dgxc-alloy-gateway), Alloy uses a **Loki → OTLP bridge** (`otelcol.receiver.loki` or a convert step) that turns Loki-format streams into OTLP log records. So in this pipeline, Loki is the **internal format** for logs inside Alloy; the gateway still receives OTLP, not raw Loki API.
-
-### Comparison
-
-| Aspect | Direct-to-Collector (otelslog) | Via stdout (custom handler) |
-|--------|--------------------------------|----------------------------|
-| Log transport | OTLP to collector | stdout → shipper → backend |
-| Trace context | Injected by OTel Logs SDK | Injected by custom handler from `context.Context` |
-| Dependencies | OTel Logs SDK + otelslog bridge | Only `go.opentelemetry.io/otel/trace` (already used for tracing) |
-| NVSentinel fit | New export path; may duplicate or replace current log collection | Fits current pattern (JSON to stderr, collected by cluster log shipper) |
-
-For NVSentinel, where modules already write JSON logs to stderr and Kubernetes typically collects them via a shipper, **Approach 2** is the natural fit: it enriches existing logs with `trace_id`/`span_id` without changing the log collection architecture.
-
-### Requirement for callers
-
-**Both approaches** require that logging calls pass the request or span context so the handler (or bridge) can read the active span. Use the context-aware `slog` APIs:
-
-- `slog.InfoContext(ctx, "message", ...)` instead of `slog.Info("message", ...)`
-- `slog.ErrorContext(ctx, "message", ...)` instead of `slog.Error("message", ...)`
-- and similarly for `DebugContext`, `WarnContext`, etc.
-
-When `ctx` contains an active span (e.g., from `tracing.StartSpan` or `StartSpanWithLinkFromTraceContext`), the log record will include `trace_id` and `span_id`. When there is no active span, the handler can omit these fields (Approach 2) or the bridge will omit them (Approach 1).
-
 ## References
 Traces[https://opentelemetry.io/docs/concepts/signals/traces/#consumer]
 OpenTelemetry[https://opentelemetry.io/docs/]
 OpenTelemetry Collector[https://github.com/open-telemetry/opentelemetry-collector]
 Alloy Collector[https://grafana.com/oss/alloy-opentelemetry-collector/]
 Tracing Guide[https://vfunction.com/blog/opentelemetry-tracing-guide/]
+OTEL Logging[https://opentelemetry.io/docs/specs/otel/logs/]
