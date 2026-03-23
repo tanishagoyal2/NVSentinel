@@ -52,7 +52,7 @@ Traces are per-request: each health event gets one trace with spans across all m
 ## Architecture Diagram
 
 The following diagram shows how traces flow from NVSentinel modules to a OpenTelemetry Collector. 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                         NVSentinel Namespace                                 │
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -616,13 +616,11 @@ env:
 
 ## Log-Trace Correlation (OTel Log Appender)
 
-An **OTel Log Appender** (or **log bridge**) is a mechanism that automatically attaches `trace_id` and `span_id` from the active span context to every log line. Without it, logs and traces are separate signals: you can see a trace in Grafana Tempo or logs in Loki/Kibana, but you cannot jump from a trace to the corresponding logs (or vice versa) for the same health event. With log-trace correlation enabled, operators can click a trace and see all log lines for that request, or filter logs by `trace_id` to find the associated trace.
-
-OpenTelemetry defines two standard workflows for achieving this; the choice depends on how logs are collected (direct OTLP export vs. stdout/file with a log shipper).
+An **OTel Log Appender** (or **log bridge**) is a mechanism that automatically attaches `trace_id` and `span_id` from the active span context to every log line. Without it, logs and traces are separate signals: you can see a trace in Grafana Tempo or logs in Loki/Kibana, but you cannot jump from a trace to the corresponding logs (or vice versa) for the same health event. With log-trace correlation enabled, developer filter logs by `trace_id` to find the associated trace.
 
 ### Custom slog Handler wrapper
 
-In this workflow, logs continue to be written to stdout/stderr as JSON. A **custom `slog.Handler`** wraps the existing handler and injects `trace_id` and `span_id` from the active span (via `context.Context`) into each log record. A log shipper (FluentBit, Grafana Alloy, Promtail, etc.) tails container logs, parses the JSON (including the new fields), and forwards them to Loki or another backend. Correlation works because both traces (Tempo) and logs (Loki) share the same `trace_id`/`span_id` fields.
+In this workflow, logs continue to be written to stdout/stderr as JSON. A custom `slog.Handler` wraps the existing handler and injects `trace_id` and `span_id` from the active span (via `context.Context`) into each log record. A log shipper (FluentBit, Grafana Alloy, Promtail, etc.) tails container logs, parses the JSON (including the new fields), and forwards them to Loki or another backend. Correlation works because both traces (Tempo) and logs (Loki) share the same `trace_id`/`span_id` fields.
 
 **Example handler wrapper:**
 
