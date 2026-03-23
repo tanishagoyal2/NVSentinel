@@ -24,17 +24,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// HTTPClientSpanNameForMethod returns a span name http.client.<method> with the HTTP
-// method lowercased (e.g. http.client.get, http.client.patch). Empty or whitespace-only
-// method yields http.client.request.
-func HTTPClientSpanNameForMethod(method string) string {
-	m := strings.ToLower(strings.TrimSpace(method))
-	if m == "" {
-		return "http.client.request"
-	}
-	return fmt.Sprintf("http.client.%s", m)
-}
-
 // conditionalHTTPTracingRT wraps an http.RoundTripper and creates a child OpenTelemetry
 // span per outbound HTTP request only when req.Context() already carries a valid span
 // (ongoing trace). Otherwise the request passes through unchanged.
@@ -67,7 +56,8 @@ func (t *conditionalHTTPTracingRT) RoundTrip(req *http.Request) (*http.Response,
 		return t.next.RoundTrip(req)
 	}
 
-	spanName := HTTPClientSpanNameForMethod(req.Method)
+	method := strings.ToLower(strings.TrimSpace(req.Method))
+	spanName := fmt.Sprintf("http.client.%s", method)
 	ctx, span := StartSpan(req.Context(), spanName)
 	defer span.End()
 
