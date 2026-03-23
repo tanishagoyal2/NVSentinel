@@ -426,38 +426,22 @@ All spans include `db.error` (string) when the operation fails. The `db.duration
 
 NVSentinel modules make outbound HTTP calls to two categories of external APIs:
 
-- **Kubernetes API** — cordon, taint, uncordon, pod eviction, CR creation/deletion, node get/update, status patches (via client-go)
-- **Cloud Service Provider (CSP) APIs** — reboot signal, node-ready check, terminate signal (via Azure ARM SDK, GCP, AWS, OCI SDKs in janitor-provider)
+- Kubernetes API — cordon, taint, uncordon, pod eviction, CR creation/deletion, node get/update, status patches (via client-go)
+- Cloud Service Provider (CSP) APIs — reboot signal, node-ready check, terminate signal (via Azure ARM SDK, GCP, AWS, OCI SDKs in janitor-provider)
 
 Both categories are traced automatically using a shared conditional HTTP `RoundTripper` wrapper that creates child spans only when the request context already carries an active trace. Not every outbound HTTP call is traced — modules routinely make requests that are unrelated to any health event (informer list/watch, leader election, health probes, metrics endpoints, periodic resyncs). Tracing all of them would flood the backend with noise and make it harder to find relevant trace. By requiring a valid parent span in the request context, only HTTP calls made during the processing of a traced health event produce spans, while all other traffic passes through with zero tracing overhead.
 
 #### Required Changes
 
-1. **Create `commons/pkg/tracing/http_transport.go`** — Add a new `conditionalHTTPTracingRT` struct implementing `http.RoundTripper`. It wraps any existing transport and, on each `RoundTrip`, checks whether `req.Context()` carries a valid parent span. If no active trace exists, the request passes through unchanged. If an active trace exists, it creates a child span named `http.client.<method>`, executes the request, records span attributes and errors, then ends the span. Export `NewConditionalHTTPTracingRoundTripper(next http.RoundTripper) http.RoundTripper` for use by the audit logger.
+Modules do not wire the tracing `RoundTripper` directly. Instead, they use `auditlogger.NewAuditingRoundTripper` (`commons/pkg/auditlogger/roundtripper.go`) which will internally wrap the delegate transport with the conditional tracing `RoundTripper`. This gives modules both audit logging and conditional HTTP tracing from a single `config.Wrap` call.
 
-2. **Update `commons/pkg/auditlogger/roundtripper.go`** — In `NewAuditingRoundTripper`, wrap the delegate transport with `tracing.NewConditionalHTTPTracingRoundTripper(delegate)` before assigning it. This ensures every module that already uses the auditing wrapper automatically gets conditional HTTP tracing with no additional wiring.
+1. Create `commons/pkg/tracing/http_transport.go` — Add a new `conditionalHTTPTracingRT` struct implementing `http.RoundTripper`. It wraps any existing transport and, on each `RoundTrip`, checks whether `req.Context()` carries a valid parent span. If no active trace exists, the request passes through unchanged. If an active trace exists, it creates a child span named `http.client.<method>`, executes the request, records span attributes and errors, then ends the span. Export `NewConditionalHTTPTracingRoundTripper(next http.RoundTripper) http.RoundTripper` for use by the audit logger.
 
-3. **Update `event-exporter/pkg/sink/http.go`** — Wrap the sink's `http.Transport` with `tracing.NewConditionalHTTPTracingRoundTripper` so that CloudEvents POST calls to the external sink endpoint produce `http.client.post` child spans when the request context has an active trace. Event-exporter does not use `auditlogger.NewAuditingRoundTripper` (it has its own `http.Client` with custom TLS and connection-pool settings), so the tracing wrapper needs to be added explicitly. The OIDC token request (`pkg/auth/oidc.go`) does not need tracing — it is a short-lived authentication call unrelated to health event processing.
+2. Update `commons/pkg/auditlogger/roundtripper.go` — In `NewAuditingRoundTripper`, wrap the delegate transport with `tracing.NewConditionalHTTPTracingRoundTripper(delegate)` before assigning it. This ensures every module that already uses the auditing wrapper automatically gets conditional HTTP tracing with no additional wiring.
+
+3. Update `event-exporter/pkg/sink/http.go` — Wrap the sink's `http.Transport` with `tracing.NewConditionalHTTPTracingRoundTripper` so that CloudEvents POST calls to the external sink endpoint produce `http.client.post` child spans when the request context has an active trace. Event-exporter does not use `auditlogger.NewAuditingRoundTripper` (it has its own `http.Client` with custom TLS and connection-pool settings), so the tracing wrapper needs to be added explicitly. 
 
 No other module-level changes are required — `config.Wrap` with `auditlogger.NewAuditingRoundTripper` is already present in the remaining modules, so they will pick up HTTP tracing automatically once the audit logger wraps the delegate with the tracing transport. The modules that already use the auditing wrapper are:
-
-| Module | Integration point | Covers |
-|--------|-------------------|--------|
-| fault-quarantine | `config.Wrap` in `NewFaultQuarantineClient` | Cordon, taint, uncordon, untaint, node get/update |
-| node-drainer | `restConfig.Wrap` in initializer | Pod eviction, force-delete, custom drain CR create/delete |
-| fault-remediation | `cfg.Wrap` in `main.go` | Remediation CR creation (GPUReset, RebootNode, TerminateNode), log collector job creation |
-| janitor | `restConfig.Wrap` in `main.go` | Node lock acquire/release, service teardown/restore, reset job creation, CR status patches |
-| platform-connectors | `config.Wrap` in `k8s_connector.go` | Node condition updates |
-| labeler | `config.Wrap` in initializer | Node label updates |
-| event-exporter | `NewConditionalHTTPTracingRoundTripper` on sink `http.Transport` (new) | CloudEvents POST to external sink endpoint |
-| janitor-provider (Azure) | `NewAuditingRoundTripper` on transport | Azure ARM VM reboot/terminate API calls |
-| janitor-provider (GCP) | `NewAuditingRoundTripper` on `client.Transport` | GCP Compute Engine API calls |
-| janitor-provider (OCI) | `NewAuditingRoundTripper` on HTTP client transport | OCI Compute API calls |
-| janitor-provider (AWS) | `NewAuditingRoundTripper` on `http.Client` | AWS EC2 API calls |
-
-#### Wiring: How Modules Get HTTP Tracing
-
-Modules do not wire the tracing `RoundTripper` directly. Instead, they use `auditlogger.NewAuditingRoundTripper` (`commons/pkg/auditlogger/roundtripper.go`) which will internally wrap the delegate transport with the conditional tracing `RoundTripper`. This gives modules both audit logging and conditional HTTP tracing from a single `config.Wrap` call.
 
 **Kubernetes client-go wiring** — every module wraps `rest.Config` before creating the clientset:
 
@@ -493,19 +477,36 @@ httpClient := &http.Client{
 }
 ```
 
-#### Span Attributes
+In the NewAuditingRoundTripper we can wrap delegate with NewConditionalHTTPTracingRoundTripper to handle tracing of http calls.
 
-Each `http.client.*` span records the following attributes:
+```go
+func NewAuditingRoundTripper(delegate http.RoundTripper) *AuditingRoundTripper {
+    return &AuditingRoundTripper{
+        delegate:       tracing.NewConditionalHTTPTracingRoundTripper(delegate),
+        logRequestBody: envutil.GetEnvBool(EnvAuditLogRequestBody, false),
+    }
+}
+```
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `http.request.method` | string | HTTP method (GET, PATCH, POST, DELETE, etc.) |
-| `url.full` | string | Full request URL including scheme, host, path, and query. For Kubernetes calls this shows which resource was targeted (e.g. `/api/v1/nodes/gpu-node-01`). For CSP calls this shows the cloud API endpoint and resource path. |
-| `server.address` | string | Host portion of the URL (e.g. `kubernetes.default.svc`, `management.azure.com`) |
-| `http.response.status_code` | int | HTTP response status code (200, 404, 409, 500, etc.) |
+**Event-exporter sink wiring** — event-exporter does not use `auditlogger.NewAuditingRoundTripper` because the sink has its own `http.Client` with custom TLS and connection-pool settings. Instead, the tracing wrapper is applied directly to the sink's `http.Transport` in `event-exporter/pkg/sink/http.go`:
 
-When the response status code is >= 400, the span status is set to `Error` with a message like `HTTP 409`. When the `RoundTrip` itself returns an error (e.g. connection refused, timeout), it is recorded on the span via `RecordError`.
+```go
+transport := &http.Transport{
+    MaxIdleConns:        maxConcurrency * 2,
+    MaxIdleConnsPerHost: maxConcurrency,
+    MaxConnsPerHost:     maxConcurrency,
+    IdleConnTimeout:     90 * time.Second,
+    TLSClientConfig: &tls.Config{
+        MinVersion:         tls.VersionTLS12,
+        InsecureSkipVerify: insecureSkipVerify,
+    },
+}
 
+client: &http.Client{
+    Timeout:   timeout,
+    Transport: tracing.NewConditionalHTTPTracingRoundTripper(transport),
+}
+```
 
 ### Fault-Quarantine
 
