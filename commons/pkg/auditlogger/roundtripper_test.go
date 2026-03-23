@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,9 +30,11 @@ import (
 type mockRoundTripper struct {
 	response *http.Response
 	err      error
+	calls    int
 }
 
 func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	m.calls++
 	return m.response, m.err
 }
 
@@ -61,15 +64,25 @@ func TestIsWriteMethod(t *testing.T) {
 }
 
 func TestNewAuditingRoundTripper(t *testing.T) {
-	delegate := &mockRoundTripper{}
+	delegate := &mockRoundTripper{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+		},
+	}
 	rt := NewAuditingRoundTripper(delegate)
 
 	if rt == nil {
 		t.Fatal("NewAuditingRoundTripper returned nil")
 	}
 
-	if rt.delegate != delegate {
-		t.Error("NewAuditingRoundTripper did not set delegate correctly")
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if _, err := rt.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if delegate.calls != 1 {
+		t.Errorf("inner transport RoundTrip calls = %d, want 1 (delegate wrapped with conditional tracing)", delegate.calls)
 	}
 }
 
