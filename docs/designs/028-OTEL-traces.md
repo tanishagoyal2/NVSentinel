@@ -164,7 +164,7 @@ NVSentinel uses three propagation mechanisms depending on the communication chan
 
 | Boundary | Channel | Propagation Mechanism |
 |----------|---------|----------------------|
-| platform-connector → fault-quarantine → node-drainer → fault-remediation, health-events-analyzer, event-exporter | MongoDB change stream | `trace_id` in `healthevent.metadata` + `span_ids` map as a top-level document field — each module reads `trace_id` and the upstream module's span ID, creates a linked root span, then writes its own span ID for the next module |
+| platform-connector → fault-quarantine → node-drainer → fault-remediation, health-events-analyzer, event-exporter | MongoDB change stream | `trace_id` in `healthevent.metadata` + `span_ids` map under `healtheventstatus` — each module reads `trace_id` and the upstream module's span ID, creates a linked root span, then writes its own span ID for the next module |
 | fault-remediation → janitor | Kubernetes CR creation / watch | CR annotations: `nvsentinel.nvidia.com/trace-id` and `nvsentinel.nvidia.com/span-id` |
 | janitor → janitor-provider | Synchronous gRPC | W3C `traceparent` header via `otelgrpc` client/server interceptors (automatic) |
 
@@ -174,30 +174,30 @@ NVSentinel uses three propagation mechanisms depending on the communication chan
 platform-connector
   1. Creates root trace (trace_id: abc123)
   2. Writes trace_id into healthevent.metadata["trace_id"]
-  3. Writes span_ids.platform_connector into the MongoDB document
+  3. Writes span_ids.platform_connector into healtheventstatus
         │
         │  MongoDB change stream
         ▼
 fault-quarantine
   1. Reads trace_id from healthevent.metadata["trace_id"]
-  2. Reads span_ids.platform_connector as the upstream span ID
+  2. Reads healtheventstatus.span_ids.platform_connector as the upstream span ID
   3. Calls StartSpanWithLinkFromTraceContext(ctx, traceID, upstreamSpanID, ...)
      → creates a new root span in the same trace, linked to the upstream span
-  4. Writes span_ids.fault_quarantine after processing
+  4. Writes healtheventstatus.span_ids.fault_quarantine after processing
         │
         │  MongoDB change stream (status update triggers node-drainer)
         ▼
 node-drainer
   1. Reads trace_id from healthevent.metadata["trace_id"]
-  2. Reads span_ids.fault_quarantine as the upstream span ID
+  2. Reads healtheventstatus.span_ids.fault_quarantine as the upstream span ID
   3. Calls StartSpanWithLinkFromTraceContext(ctx, traceID, upstreamSpanID, ...)
-  4. Writes span_ids.node_drainer after processing
+  4. Writes healtheventstatus.span_ids.node_drainer after processing
         │
         │  MongoDB change stream (status update triggers fault-remediation)
         ▼
 fault-remediation
   1. Reads trace_id from healthevent.metadata["trace_id"]
-  2. Reads span_ids.node_drainer as the upstream span ID
+  2. Reads healtheventstatus.span_ids.node_drainer as the upstream span ID
   3. Calls StartSpanWithLinkFromTraceContext(ctx, traceID, upstreamSpanID, ...)
 ```
 
@@ -261,9 +261,9 @@ Health Monitor (sends event, NO trace context)
 Platform Connector (creates ROOT trace, trace_id: abc123)
     │
     │ [2. MongoDB Storage - trace_id written into healthevent.metadata,
-    │     span_ids stored as top-level field]
+    │     span_ids stored under healtheventstatus]
     ▼
-MongoDB (stores event with trace_id in healthevent.metadata and span_ids)
+MongoDB (stores event with trace_id in healthevent.metadata and span_ids in healtheventstatus)
     │
     │ [3. MongoDB Change Streams - trace_id extracted from healthevent.metadata]
     ├──► Fault Quarantine (links to platform_connector span, writes fault_quarantine span ID)
@@ -280,11 +280,6 @@ MongoDB document structure:
 ```json
 {
   "_id": "...",
-  "span_ids": {
-    "platform_connector": "<span-id-of-platform_connector.db.insert>",
-    "fault_quarantine":   "<span-id-of-fault_quarantine.db.update_status>",
-    "node_drainer":       "<span-id-of-node_drainer active span>"
-  },
   "createdAt": "...",
   "healthevent": {
     "metadata": {
@@ -292,18 +287,29 @@ MongoDB document structure:
     },
     ...
   },
-  "healtheventstatus": { ... }
+  "healtheventstatus": {
+    "span_ids": {
+      "platform_connector": "<span-id-of-platform_connector.db.insert>",
+      "fault_quarantine":   "<span-id-of-fault_quarantine.db.update_status>",
+      "node_drainer":       "<span-id-of-node_drainer active span>"
+    },
+    ...
+  }
 }
 ```
 
-The `HealthEventWithStatus` struct carries the trace context fields:
+The `HealthEventWithStatus` struct carries `trace_id` via the embedded health event; the `span_ids` map lives on `HealthEventStatus`.
 
 ```go
 type HealthEventWithStatus struct {
-    SpanIDs           map[string]string `bson:"span_ids,omitempty" json:"span_ids,omitempty"`
-    CreatedAt         time.Time         `bson:"createdAt"`
+    CreatedAt         time.Time           `bson:"createdAt"`
     HealthEvent       *protos.HealthEvent `bson:"healthevent,omitempty"`
     HealthEventStatus HealthEventStatus   `bson:"healtheventstatus"`
+}
+
+type HealthEventStatus struct {
+    // ... existing quarantine / eviction / remediation status fields ...
+    SpanIDs map[string]string `bson:"span_ids,omitempty" json:"span_ids,omitempty"`
 }
 ```
 
@@ -320,18 +326,21 @@ if clonedHealthEvent.Metadata == nil {
 clonedHealthEvent.Metadata[tracing.MetadataKeyTraceID] = traceID
 
 healthEventWithStatusObj := model.HealthEventWithStatus{
-    SpanIDs: map[string]string{
-        tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
-    },
     CreatedAt:   time.Now().UTC(),
     HealthEvent: clonedHealthEvent,
+    HealthEventStatus: model.HealthEventStatus{
+        SpanIDs: map[string]string{
+            tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
+        },
+        // ... other initial status fields ...
+    },
     ...
 }
 ```
 
-### Trace Context via `span_ids` Map in MongoDB
+### Trace Context via `span_ids` Under `healtheventstatus`
 
-Each module that writes to the MongoDB health event document also writes its own span ID into the `span_ids` map. This allows the next module in the pipeline to pick up the exact span to link against, creating an auditable causal chain without requiring synchronous gRPC calls between modules.
+Each module that writes to the MongoDB health event document also writes its own span ID into the `healtheventstatus.span_ids` map. The next module in the pipeline reads the upstream span ID from the status map, which yields an auditable causal chain without synchronous gRPC calls between modules.
 
 
 **How each module reads the trace_id and upstream span ID:**
@@ -341,17 +350,17 @@ Each module that writes to the MongoDB health event document also writes its own
 traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 
 // fault-quarantine reads trace_id and platform_connector's span ID
-parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventStatus.SpanIDs, tracing.ServicePlatformConnector)
 ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
     parentSpanID, "fault_quarantine.process_event")
 
 // node-drainer reads trace_id and fault_quarantine's span ID
-parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceFaultQuarantine)
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventStatus.SpanIDs, tracing.ServiceFaultQuarantine)
 ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
     parentSpanID, "node_drainer.enqueue_event")
 
 // fault-remediation reads trace_id and node_drainer's span ID
-parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServiceNodeDrainer)
+parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventStatus.SpanIDs, tracing.ServiceNodeDrainer)
 sessionCtx, session := r.startOrReuseEventSession(ctx, traceID, parentSpanID, ...)
 
 // event-exporter — trace_id flows automatically via healthevent.metadata["trace_id"]
@@ -518,7 +527,7 @@ client: &http.Client{
 | Cordon + taint applied | `fault_quarantine.apply_quarantine` child span; `fault_quarantine.action.cordon` (bool), `fault_quarantine.action.taint` (bool), `fault_quarantine.event.processing_status = "Quarantined"`, `fault_quarantine.k8s.cordon.duration_ms` (float), `fault_quarantine.k8s.taint.duration_ms` (float) | Did this health event lead to cordoning and tainting of the node? How long did each K8s API call take? |
 | Unquarantine | `fault_quarantine.perform_uncordon` child span; `fault_quarantine.event.processing_status = "UnQuarantined"`, `fault_quarantine.k8s.uncordon.duration_ms` (float), `fault_quarantine.k8s.untaint.duration_ms` (float) | Did this health event lead to uncordoning/untainting of the node? How long did each K8s API call take? |
 | Ruleset evaluation | `fault_quarantine.evaluate_rulesets` child span | Which rulesets were evaluated for this event? How long did evaluation take? |
-| DB status write (used as link target by node-drainer) | `span_ids.fault_quarantine` written to MongoDB; DB latency tracked automatically by store client span (`db.health_event.update_quarantine_status`) | When did fault-quarantine persist status so node-drainer could pick up this event? How long did the DB write take? |
+| DB status write (used as link target by node-drainer) | `healtheventstatus.span_ids.fault_quarantine` written to MongoDB; DB latency tracked automatically by store client span (`db.health_event.update_quarantine_status`) | When did fault-quarantine persist status so node-drainer could pick up this event? How long did the DB write take? |
 | Cancellation of quarantining events on manual uncordon/untaint | `fault_quarantine.cancel_latest_quarantining_events` root span (linked to `fault_quarantine.db.update_status` of the cancelled event) | Were quarantining events cancelled for this event due to manual uncordon/untaint? |
 | Errors | `fault_quarantine.error.type`, `fault_quarantine.error.message` | What went wrong in fault-quarantine and why? |
 
@@ -533,7 +542,6 @@ client: &http.Client{
 | Drain scope (partial vs full) | `node_drainer.drain.scope` = "partial" or "full"; `node_drainer.partial_drain.entity_type`, `node_drainer.partial_drain.entity_value` — set on `drain_session` at session end | Was this a partial or full drain? What was the partial-drain target (entity type/value)? |
 | Pods targeted at phase entry | `node_drainer.immediate_eviction_pods`, `node_drainer.allow_completion_pods`, `node_drainer.delete_after_timeout_pods` — set on `drain_session` at session end | Which pods were in each phase (immediate eviction, allow completion, delete after timeout)? |
 | Phase durations (wall-clock) | `node_drainer.immediate_eviction_duration_s`, `node_drainer.allow_completion_duration_s`, `node_drainer.delete_after_timeout_duration_s` — set on `drain_session` at session end | How long did each drain phase take? |
-| Force-deleted pods | `node_drainer.force_deleted_pods` (comma-separated), `node_drainer.pods_force_deleted_count` — set on `drain_session` | Which pods were force-deleted and how many? |
 | K8s API call latency (pod eviction) | `node_drainer.k8s.evict_pod.duration_ms` (float) — set per pod eviction call on `drain_session` | How long did each K8s pod eviction API call take? |
 | K8s API call latency (force delete) | `node_drainer.k8s.force_delete_pod.duration_ms` (float) — set per force-delete call on `drain_session` | How long did each K8s force-delete API call take? |
 | Custom drain CR (Slinky) | `node_drainer.execute_custom_drain` child span; `node_drainer.custom_cr.name`, `node_drainer.custom_cr.created` (bool), `node_drainer.custom_cr.status` = "in_progress"/"completed"/"error", `node_drainer.custom_cr.deleted` (bool on cleanup), `node_drainer.k8s.custom_cr.create.duration_ms` (float), `node_drainer.k8s.custom_cr.delete.duration_ms` (float) | Was a custom drain CR (e.g. Slinky) used? What was its status? How long did CR create/delete K8s API calls take? |
@@ -575,7 +583,7 @@ client: &http.Client{
 | What is tracked | Span Attributes | Use case |
 |-----------------|----------------|-------------------|
 | gRPC event reception | `platform_connector.grpc.event_received` (bool), `platform_connector.grpc.events_count` (int), `platform_connector.grpc.duration_ms` (float) | Was a health event received via gRPC? How many? How long did the call take? |
-| MongoDB insert (writes `span_ids.platform_connector` and `trace_id` into `healthevent.metadata`) | DB latency tracked automatically by store client span (`db.insert_many`, `db.duration_ms`) | Was the event written to MongoDB? How long did the insert take? |
+| MongoDB insert (writes `healtheventstatus.span_ids.platform_connector` and `trace_id` into `healthevent.metadata`) | DB latency tracked automatically by store client span (`db.insert_many`, `db.duration_ms`) | Was the event written to MongoDB? How long did the insert take? |
 | Node condition updates | `platform_connector.k8s.node_condition.updated` (bool), `platform_connector.k8s.node_condition.duration_ms` (float) | Were node conditions updated in Kubernetes for this event? How long did the K8s API call take? |
 | Errors | `platform_connector.error.type`, `platform_connector.error.message` | What went wrong in platform-connector and why? |
 
@@ -762,6 +770,23 @@ Integration with NVSentinel's logger (`commons/pkg/logger/logger.go`): wrap the 
   "span_id": "789ghi012..."
 }
 ```
+
+
+## Approach considered for tracing the GPU reset job
+
+The GPU reset runs in a separate Kubernetes Job that executes [`gpu-reset/gpu_reset.sh`](../../gpu-reset/gpu_reset.sh) in bash, not inside the janitor Go process. Every other NVSentinel module creates spans with the OpenTelemetry Go SDK and `context.Context`: child spans inherit their parent automatically, the SDK supplies span IDs and timestamps, and export uses the same OTLP gRPC path as the rest of the stack.
+
+That pattern does not apply to this shell script. The only way to obtain per-phase child spans from bash (target discovery, persistence mode, `nvidia-smi --gpu-reset`, health check, and so on) would be to construct spans manually and send them to an OpenTelemetry Collector—for example by using `curl` to POST OTLP JSON to the collector’s HTTP endpoint.
+
+That manual approach has several drawbacks:
+
+- **Verbose and fragile:** OTLP JSON is deeply nested; building it in bash is error-prone.
+- **Manual IDs and timestamps:** Span IDs and nanosecond start/end times must be generated and formatted correctly.
+- **Nested phases:** Each child span needs the correct `parentSpanId` (often the previous phase’s span ID), which forces a small span stack in the shell.
+- **Many HTTP requests:** Unlike the Go SDK’s batched exporter, a curl-per-phase design issues one POST per phase, so each Job incurs several round trips.
+- **Maintenance:** OTLP JSON shape changes are harder to keep up with than SDK upgrades.
+
+For these reasons, we do not adopt manual curl/OTLP span creation from bash as the standard way to instrument the GPU reset Job.
 
 ## References
 Traces[https://opentelemetry.io/docs/concepts/signals/traces/#consumer]
