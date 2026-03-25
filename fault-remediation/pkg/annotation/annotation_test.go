@@ -18,14 +18,21 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"testing"
-	"time"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestGetRemediationState(t *testing.T) {
@@ -327,3 +334,77 @@ func TestConcurrentUpdateAndRemoveGroupsFromState(t *testing.T) {
 		_ = annotationManager.RemoveGroupsFromState(context.TODO(), nodeName, []string{"existing-group-1", "existing-group-2", "new-group"})
 	}
 }
+
+func TestUpdateRemediationState_RetryOnConflict(t *testing.T) {
+	nodeName := "node"
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        nodeName,
+			Annotations: map[string]string{},
+		},
+	}
+
+	var updateAttempts atomic.Int32
+	conflictErr := apierrors.NewConflict(
+		schema.GroupResource{Group: "", Resource: "nodes"}, nodeName, fmt.Errorf("the object has been modified"))
+
+	interceptorFuncs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			attempt := updateAttempts.Add(1)
+			if attempt <= 2 {
+				return conflictErr
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithObjects(node).
+		WithInterceptorFuncs(interceptorFuncs).
+		Build()
+
+	annotationManager := NodeAnnotationManager{client: fakeClient}
+
+	err := annotationManager.UpdateRemediationState(context.TODO(), nodeName, "test-group", "test-cr", "test-action")
+	assert.NoError(t, err)
+	assert.Equal(t, int32(3), updateAttempts.Load(), "expected 3 update attempts (2 conflicts + 1 success)")
+
+	state, _, err := annotationManager.GetRemediationState(context.TODO(), nodeName)
+	assert.NoError(t, err)
+	assert.Contains(t, state.EquivalenceGroups, "test-group")
+	assert.Equal(t, "test-cr", state.EquivalenceGroups["test-group"].MaintenanceCR)
+}
+
+func TestUpdateRemediationState_PermanentError(t *testing.T) {
+	nodeName := "node"
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        nodeName,
+			Annotations: map[string]string{},
+		},
+	}
+
+	permanentErr := fmt.Errorf("some non-conflict error")
+	interceptorFuncs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			return permanentErr
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithObjects(node).
+		WithInterceptorFuncs(interceptorFuncs).
+		Build()
+
+	annotationManager := NodeAnnotationManager{client: fakeClient}
+
+	err := annotationManager.UpdateRemediationState(context.TODO(), nodeName, "test-group", "test-cr", "test-action")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update node annotation")
+}
+
+// ensure unused imports are consumed
+var (
+	_ runtime.Object
+	_ schema.GroupResource
+)

@@ -20,7 +20,10 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/metrics"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
@@ -44,9 +47,9 @@ func (m *eventQueueManager) SetDataStoreEventProcessor(processor DataStoreEventP
 	m.dataStoreEventProcessor = processor
 }
 
-// EnqueueEventGeneric enqueues an event using the new database-agnostic interface
+// EnqueueEventGeneric enqueues an event using the new database-agnostic interface.
 func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName string, event datastore.Event,
-	database DataStore, healthEventStore datastore.HealthEventStore) error {
+	database DataStore, healthEventStore datastore.HealthEventStore, drainSessionSpan trace.Span) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("context cancelled while enqueueing event for node %s: %w", nodeName, ctx.Err())
 	}
@@ -58,6 +61,15 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 	}
 
 	eventID := utils.ExtractEventID(event)
+	traceID := ExtractTraceIDFromEvent(event)
+	spanIDs := ExtractSpanIDsFromEvent(event)
+
+	// Resolve the parent span ID at enqueue time from the span_ids map.
+	// Node-drainer is downstream of fault-quarantine in the pipeline.
+	parentSpanID := ""
+	if spanIDs != nil {
+		parentSpanID = spanIDs[tracing.ServiceFaultQuarantine]
+	}
 
 	nodeEvent := NodeEvent{
 		NodeName:         nodeName,
@@ -65,9 +77,12 @@ func (m *eventQueueManager) EnqueueEventGeneric(ctx context.Context, nodeName st
 		Event:            &event,
 		Database:         database,
 		HealthEventStore: healthEventStore,
+		TraceID:          traceID,
+		ParentSpanID:     parentSpanID,
+		DrainSessionSpan: drainSessionSpan,
 	}
 
-	slog.Debug("Enqueueing event", "nodeName", nodeName, "eventID", eventID)
+	slog.DebugContext(ctx, "Enqueueing event", "nodeName", nodeName, "eventID", eventID)
 
 	m.queue.Add(nodeEvent)
 	metrics.QueueDepth.Set(float64(m.queue.Len()))
@@ -82,4 +97,117 @@ func (m *eventQueueManager) Shutdown() {
 	m.queue.ShutDown()
 	close(m.shutdown)
 	slog.Info("Workqueue shutdown complete")
+}
+
+// ExtractTraceIDFromEvent returns the trace_id from the health event's metadata
+// (healthevent.metadata.trace_id) in the event document (or fullDocument).
+func ExtractTraceIDFromEvent(event datastore.Event) string {
+	doc := event
+	if fullDoc, ok := event["fullDocument"].(map[string]interface{}); ok {
+		doc = fullDoc
+	}
+	healthevent, ok := doc["healthevent"]
+	if !ok || healthevent == nil {
+		return ""
+	}
+	heMap, ok := healthevent.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	metadata, ok := heMap["metadata"]
+	if !ok || metadata == nil {
+		return ""
+	}
+	switch m := metadata.(type) {
+	case map[string]interface{}:
+		if tid, ok := m["trace_id"].(string); ok {
+			return tid
+		}
+	case map[string]string:
+		return m["trace_id"]
+	}
+	return ""
+}
+
+// ExtractSpanIDsFromEvent returns the span_ids map from the event document (or fullDocument).
+func ExtractSpanIDsFromEvent(event datastore.Event) map[string]string {
+	doc := event
+	if fullDoc, ok := event["fullDocument"].(map[string]interface{}); ok {
+		doc = fullDoc
+	}
+	raw, ok := doc["span_ids"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch m := raw.(type) {
+	case map[string]interface{}:
+		result := make(map[string]string, len(m))
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				result[k] = s
+			}
+		}
+		return result
+	case map[string]string:
+		return m
+	default:
+		return nil
+	}
+}
+
+// DrainSessionMetrics accumulates durations and drain scope across process_event cycles so the drain_session span can show a single total.
+type DrainSessionMetrics struct {
+	// Phase start timestamps — set on first entry, used to compute wall-clock duration when session ends.
+	ImmediateEvictionStartedAt  time.Time
+	AllowCompletionStartedAt    time.Time
+	DeleteAfterTimeoutStartedAt time.Time
+	// Phase end timestamps — set when the phase transitions away.
+	ImmediateEvictionEndedAt  time.Time
+	AllowCompletionEndedAt    time.Time
+	DeleteAfterTimeoutEndedAt time.Time
+
+	PodsForceDeletedCount int
+	ForceDeletedPods      string
+	// Pod lists recorded once on first entry into each phase. Comma-separated namespace/name.
+	ImmediateEvictionPods   string
+	AllowCompletionPods     string
+	DeleteAfterTimeoutPods  string
+	DrainScope              string
+	PartialDrainEntityType  string
+	PartialDrainEntityValue string
+}
+
+type drainSessionMetricsContextKey struct{}
+
+var drainSessionMetricsKey = drainSessionMetricsContextKey{}
+
+// ContextWithDrainSessionMetrics attaches metrics to ctx so the reconciler can add durations without creating per-cycle spans.
+func ContextWithDrainSessionMetrics(ctx context.Context, m *DrainSessionMetrics) context.Context {
+	return context.WithValue(ctx, drainSessionMetricsKey, m)
+}
+
+// DrainSessionMetricsFromContext returns the accumulator from ctx, or nil if not set.
+func DrainSessionMetricsFromContext(ctx context.Context) *DrainSessionMetrics {
+	if m, _ := ctx.Value(drainSessionMetricsKey).(*DrainSessionMetrics); m != nil {
+		return m
+	}
+	return nil
+}
+
+type nodeEventContextKey struct{}
+
+var nodeEventKey = nodeEventContextKey{}
+
+// ContextWithNodeEvent attaches the current NodeEvent pointer to ctx so the reconciler
+// can access phase spans stored on the event without passing them explicitly.
+func ContextWithNodeEvent(ctx context.Context, e *NodeEvent) context.Context {
+	return context.WithValue(ctx, nodeEventKey, e)
+}
+
+// NodeEventFromContext returns the NodeEvent from ctx, or nil if not set.
+func NodeEventFromContext(ctx context.Context) *NodeEvent {
+	if e, _ := ctx.Value(nodeEventKey).(*NodeEvent); e != nil {
+		return e
+	}
+	return nil
 }

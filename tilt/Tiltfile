@@ -67,11 +67,8 @@ helm_resource(
     ],
 )
 
-local_resource(
-    'kai-scheduler',
-    cmd='helm upgrade --install kai-scheduler oci://ghcr.io/nvidia/kai-scheduler/kai-scheduler --version v0.12.10 --create-namespace -n kai-scheduler --wait',
-)
-
+# Use 'grafana-charts' for the repo resource name to avoid conflicting with helm_resource('grafana') below
+helm_repo('grafana-charts', 'https://grafana.github.io/helm-charts')
 helm_repo('sigs-kwok', 'https://kwok.sigs.k8s.io/charts/')
 helm_resource(
     'kwok',
@@ -90,6 +87,14 @@ helm_resource(
 
 namespace_create('gpu-operator')
 namespace_create('nvsentinel')
+
+# Tempo and Grafana are deployed as subcharts of the main nvsentinel Helm chart
+# (controlled by global.tempo.enabled and global.grafana.enabled in values.yaml).
+# Port-forward Grafana for local access.
+k8s_resource(
+    'nvsentinel-grafana',
+    port_forwards=['3000:3000'],
+)
 
 # Detect architecture early for KWOK node creation
 arch = str(local('uname -m')).strip()
@@ -367,23 +372,28 @@ k8s_resource(
 )
 
 k8s_resource(
+    'nvsentinel-otel-collector',
+    resource_deps=['nvsentinel-tempo'],
+)
+
+k8s_resource(
     'platform-connectors',
-    resource_deps=[datastore_resource]
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'fault-quarantine',
-    resource_deps=[datastore_resource]
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'node-drainer',
-    resource_deps=[datastore_resource]
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(
     'fault-remediation',
-    resource_deps=[datastore_resource]
+    resource_deps=[datastore_resource, 'nvsentinel-otel-collector']
 )
 
 k8s_resource(

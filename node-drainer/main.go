@@ -31,6 +31,7 @@ import (
 	"github.com/nvidia/nvsentinel/commons/pkg/flags"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/node-drainer/pkg/initializer"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
@@ -60,11 +61,16 @@ func (d *dataStoreAdapter) FindDocuments(ctx context.Context, filter interface{}
 }
 
 func main() {
-	logger.SetDefaultStructuredLogger("node-drainer", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("node-drainer", version)
 	slog.Info("Starting node-drainer", "version", version, "commit", commit, "date", date)
 
 	if err := auditlogger.InitAuditLogger("node-drainer"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	// Initialize OpenTelemetry tracing
+	if err := tracing.InitTracing("node-drainer"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	if err := run(); err != nil {
@@ -225,19 +231,13 @@ func startEventWatcher(ctx context.Context, components *initializer.Components, 
 
 		// Consume events from the change stream
 		for event := range components.EventWatcher.Events() {
-			// Preprocess and enqueue the event
-			// This sets the initial status to InProgress and enqueues the event for processing
 			if err := components.Reconciler.PreprocessAndEnqueueEvent(ctx, event); err != nil {
-				// Don't send to criticalError - just log and continue processing other events
 				slog.Error("Failed to preprocess and enqueue event", "error", err)
 				continue
 			}
 
-			// Mark the event as processed (save resume token) AFTER successful preprocessing
-			// Extract the resume token from the event to avoid race condition
 			resumeToken := event.GetResumeToken()
 			if err := components.EventWatcher.MarkProcessed(ctx, resumeToken); err != nil {
-				// Don't send to criticalError - just log and continue
 				slog.Error("Error updating resume token", "error", err)
 			}
 		}
@@ -317,7 +317,7 @@ func handleColdStart(ctx context.Context, components *initializer.Components) er
 		// Create adapter to bridge interface differences
 		dbAdapter := &dataStoreAdapter{DatabaseClient: components.DatabaseClient}
 
-		if err := components.QueueManager.EnqueueEventGeneric(ctx, nodeName, event, dbAdapter, healthStore); err != nil {
+		if err := components.QueueManager.EnqueueEventGeneric(ctx, nodeName, event, dbAdapter, healthStore, nil); err != nil {
 			slog.Error("Failed to enqueue cold start event", "error", err, "nodeName", nodeName)
 		} else {
 			slog.Info("Re-queued event from cold start", "nodeName", nodeName)

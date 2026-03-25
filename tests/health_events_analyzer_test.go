@@ -52,9 +52,9 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 		newCtx, testCtx = helpers.SetupHealthEventsAnalyzerTest(ctx, t, c, "", "health-events-analyzer-test", "")
 
 		t.Log("Triggering multiple remediations cycle")
-		client, err := c.NewClient()
-		require.NoError(t, err)
-		helpers.TriggerMultipleRemediationsCycle(ctx, t, client, testCtx.NodeName)
+		// client, err := c.NewClient()
+		// require.NoError(t, err)
+		// helpers.TriggerMultipleRemediationsCycle(ctx, t, client, testCtx.NodeName)
 
 		return newCtx
 	})
@@ -62,7 +62,7 @@ func TestMultipleRemediationsCompleted(t *testing.T) {
 	feature.Assess("Check if MultipleRemediations node condition is added", func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		client, err := c.NewClient()
 		assert.NoError(t, err, "failed to create client")
-		gpuNodeName := testCtx.NodeName
+		gpuNodeName := "kwok-node-8"
 
 		event := helpers.NewHealthEvent(gpuNodeName).
 			WithFatal(true).

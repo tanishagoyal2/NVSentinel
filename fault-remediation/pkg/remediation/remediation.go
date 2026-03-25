@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/annotation"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/common"
@@ -43,6 +44,7 @@ import (
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/crstatus"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/events"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/metrics"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -173,7 +175,7 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 
 	// Skip custom resource creation if dry-run is enabled
 	if len(c.dryRunMode) > 0 {
-		slog.Info("DRY-RUN: Skipping custom resource creation", "node", healthEvent.NodeName)
+		slog.InfoContext(ctx, "DRY-RUN: Skipping custom resource creation", "node", healthEvent.NodeName)
 		return crName, nil
 	}
 
@@ -187,15 +189,22 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 
 	node, err := c.getNodeForOwnerReference(ctx, healthEvent.NodeName)
 	if err != nil {
-		slog.Warn("Failed to get node for owner reference, skipping CR creation",
+		slog.WarnContext(ctx, "Failed to get node for owner reference, skipping CR creation",
 			"node", healthEvent.NodeName,
 			"error", err)
 
 		return "", fmt.Errorf("failed to get node for owner reference: %w", err)
 	}
 
-	templateData := templateDataFromEvent(healthEvent, healthEventID, recommendedActionName,
-		groupConfig.ImpactedEntityScopeValue, maintenanceResource)
+	// Use the remediation_cr_created span ID passed from the reconciler so janitor can link to the span that created the CR.
+	// If not set (e.g. legacy caller), fall back to current span in context.
+	spanID := healthEventData.SpanIDForCR
+	if spanID == "" {
+		spanID = tracing.SpanIDFromSpan(tracing.SpanFromContext(ctx))
+	}
+	traceID := tracing.TraceIDFromMetadata(healthEvent.GetMetadata())
+	templateData := templateDataFromEvent(healthEvent, healthEventID, traceID, spanID,
+		recommendedActionName, groupConfig.ImpactedEntityScopeValue, maintenanceResource)
 
 	actualCRName, err := c.createMaintenanceCR(ctx, selectedTemplate, templateData, actionKey, node, healthEventData)
 	if err != nil {
@@ -211,12 +220,14 @@ func (c *FaultRemediationClient) CreateMaintenanceResource(ctx context.Context, 
 }
 
 // templateDataFromEvent builds TemplateData from health event and maintenance resource.
-func templateDataFromEvent(healthEvent *protos.HealthEvent, healthEventID, recommendedActionName,
+func templateDataFromEvent(healthEvent *protos.HealthEvent, healthEventID, traceID, spanID, recommendedActionName,
 	impactedEntityScopeValue string, maintenanceResource config.MaintenanceResource,
 ) TemplateData {
 	return TemplateData{
 		NodeName:                 healthEvent.NodeName,
 		HealthEventID:            healthEventID,
+		TraceID:                  traceID,
+		SpanID:                   spanID,
 		RecommendedAction:        healthEvent.RecommendedAction,
 		RecommendedActionName:    recommendedActionName,
 		ImpactedEntityScopeValue: impactedEntityScopeValue,
@@ -232,24 +243,24 @@ func templateDataFromEvent(healthEvent *protos.HealthEvent, healthEventID, recom
 func (c *FaultRemediationClient) createMaintenanceCR(ctx context.Context, selectedTemplate *template.Template,
 	templateData TemplateData, actionKey string, node *corev1.Node, healthEventData *events.HealthEventData,
 ) (string, error) {
-	slog.Info("Creating maintenance CR",
+	slog.InfoContext(ctx, "Creating maintenance CR",
 		"node", healthEventData.HealthEvent.NodeName,
 		"template", actionKey,
 		"nodeUID", node.UID)
 
 	maintenance, yamlStr, err := renderMaintenanceFromTemplate(selectedTemplate, templateData)
 	if err != nil {
-		slog.Error("Failed to render maintenance template", "template", actionKey, "error", err)
+		slog.ErrorContext(ctx, "Failed to render maintenance template", "template", actionKey, "error", err)
 		return "", fmt.Errorf("error rendering maintenance template: %w", err)
 	}
 
-	slog.Debug("Generated YAML from template", "template", actionKey, "yaml", yamlStr)
+	slog.DebugContext(ctx, "Generated YAML from template", "template", actionKey, "yaml", yamlStr)
 	setNodeOwnerRef(maintenance, node)
 
 	err = c.client.Create(ctx, maintenance)
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			slog.Info("Maintenance CR already exists for node, treating as success",
+			slog.InfoContext(ctx, "Maintenance CR already exists for node, treating as success",
 				"CR", maintenance.GetName(), "node", healthEventData.HealthEvent.NodeName)
 
 			return maintenance.GetName(), nil
@@ -259,14 +270,14 @@ func (c *FaultRemediationClient) createMaintenanceCR(ctx context.Context, select
 	} else if healthEventData.HealthEventStatus != nil && healthEventData.HealthEventStatus.DrainFinishTimestamp != nil {
 		duration := time.Since(healthEventData.HealthEventStatus.DrainFinishTimestamp.AsTime()).Seconds()
 		if duration > 0 {
-			slog.Info("Fault remediation CR generation duration",
+			slog.InfoContext(ctx, "Fault remediation CR generation duration",
 				"duration", duration,
 				"node", healthEventData.HealthEvent.NodeName)
 			metrics.CRGenerationDuration.Observe(duration)
 		}
 	}
 
-	slog.Info("Created Maintenance CR successfully",
+	slog.InfoContext(ctx, "Created Maintenance CR successfully",
 		"crName", maintenance.GetName(), "node", healthEventData.HealthEvent.NodeName, "template", actionKey)
 
 	return maintenance.GetName(), nil
@@ -284,7 +295,7 @@ func (c *FaultRemediationClient) updateRemediationAnnotationIfNeeded(ctx context
 	err := c.annotationManager.UpdateRemediationState(ctx, nodeName, effectiveEquivalenceGroup,
 		actualCRName, recommendedActionName)
 	if err != nil {
-		slog.Warn("Failed to update node annotation", "node", nodeName, "error", err)
+		slog.WarnContext(ctx, "Failed to update node annotation", "node", nodeName, "error", err)
 		return fmt.Errorf("failed to update node annotation: %w", err)
 	}
 
@@ -370,12 +381,12 @@ func (c *FaultRemediationClient) getNodeForOwnerReference(
 	}, node)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			slog.Debug("Node no longer exists, skipping CR creation", "node", nodeName)
+			slog.DebugContext(ctx, "Node no longer exists, skipping CR creation", "node", nodeName)
 
 			return nil, fmt.Errorf("node not found: %w", err)
 		}
 
-		slog.Error("Failed to get node", "node", nodeName, "error", err)
+		slog.ErrorContext(ctx, "Failed to get node", "node", nodeName, "error", err)
 
 		return nil, fmt.Errorf("failed to get node: %w", err)
 	}
@@ -390,7 +401,7 @@ func (c *FaultRemediationClient) RunLogCollectorJob(
 	eventUID string,
 ) (ctrl.Result, error) {
 	if len(c.dryRunMode) > 0 {
-		slog.Info("DRY-RUN: Skipping log collector job for node", "node", nodeName)
+		slog.InfoContext(ctx, "DRY-RUN: Skipping log collector job for node", "node", nodeName)
 		return ctrl.Result{}, nil
 	}
 
@@ -529,7 +540,7 @@ func (c *FaultRemediationClient) checkLogCollectorComplete(
 		return false, nil
 	}
 
-	slog.Info("Log collector job completed successfully", "job", job.Name)
+	slog.InfoContext(ctx, "Log collector job completed successfully", "job", job.Name)
 	// Use job's actual duration instead of custom tracking
 	// reconciliation can be called multiple times so use annotation to make sure we're not duplicate recording metrics
 	if job.Annotations == nil || job.Annotations[jobMetricsAlreadyCountedAnnotation] != trueStringVal {
@@ -550,6 +561,13 @@ func (c *FaultRemediationClient) checkLogCollectorComplete(
 		if job.Status.StartTime != nil {
 			duration := job.Status.CompletionTime.Sub(job.Status.StartTime.Time).Seconds()
 			metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "success").Observe(duration)
+
+			span := tracing.SpanFromContext(ctx)
+			span.SetAttributes(
+				attribute.String("fault_remediation.log_collector.job_name", job.Name),
+				attribute.String("fault_remediation.log_collector.result", "success"),
+				attribute.Float64("fault_remediation.log_collector.duration_s", duration),
+			)
 		}
 	}
 
@@ -568,7 +586,7 @@ func (c *FaultRemediationClient) checkLogCollectorFailed(
 		return false, nil
 	}
 
-	slog.Info("Log collector job failed", "job", job.Name)
+	slog.InfoContext(ctx, "Log collector job failed", "job", job.Name)
 
 	// reconciliation can be called multiple times so use annotation to make sure we're not duplicate recording metrics
 	if job.Annotations == nil || job.Annotations[jobMetricsAlreadyCountedAnnotation] != trueStringVal {
@@ -612,6 +630,13 @@ func (c *FaultRemediationClient) recordLogCollectorFailureMetrics(
 	metrics.LogCollectorJobs.WithLabelValues(nodeName, "failure").Inc()
 	metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "failure").Observe(duration)
 
+	span := tracing.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("fault_remediation.log_collector.job_name", job.Name),
+		attribute.String("fault_remediation.log_collector.outcome", "failure"),
+		attribute.Float64("fault_remediation.log_collector.duration_s", duration),
+	)
+
 	return nil
 }
 
@@ -626,7 +651,7 @@ func (c *FaultRemediationClient) checkLogCollectorTimedOut(
 		if parsed, err := time.ParseDuration(timeoutEnv); err == nil {
 			timeout = parsed
 		} else {
-			slog.Warn("Invalid LOG_COLLECTOR_TIMEOUT value, using default 10m", "timeout-value", timeoutEnv, "error", err)
+			slog.WarnContext(ctx, "Invalid LOG_COLLECTOR_TIMEOUT value, using default 10m", "timeout-value", timeoutEnv, "error", err)
 		}
 	}
 
@@ -635,7 +660,7 @@ func (c *FaultRemediationClient) checkLogCollectorTimedOut(
 		return false, nil
 	}
 
-	slog.Info("Log collector job past timeout", "job", job.Name, "timeout", timeout)
+	slog.InfoContext(ctx, "Log collector job past timeout", "job", job.Name, "timeout", timeout)
 
 	if job.Annotations == nil || job.Annotations[jobMetricsAlreadyCountedAnnotation] != trueStringVal {
 		updateJob := job.DeepCopy()
@@ -652,6 +677,13 @@ func (c *FaultRemediationClient) checkLogCollectorTimedOut(
 
 		metrics.LogCollectorJobs.WithLabelValues(nodeName, "timeout").Inc()
 		metrics.LogCollectorJobDuration.WithLabelValues(nodeName, "timeout").Observe(timeout.Seconds())
+
+		span := tracing.SpanFromContext(ctx)
+		span.SetAttributes(
+			attribute.String("fault_remediation.log_collector.job_name", job.Name),
+			attribute.String("fault_remediation.log_collector.result", "timeout"),
+			attribute.Float64("fault_remediation.log_collector.duration_s", timeout.Seconds()),
+		)
 	}
 
 	return true, nil

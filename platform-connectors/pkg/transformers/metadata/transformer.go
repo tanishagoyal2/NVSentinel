@@ -50,7 +50,7 @@ func New(ctx context.Context, config *Config, clientset kubernetes.Interface) (*
 		config.CacheTTL,
 	)
 
-	slog.Info("Metadata augmentor initialized",
+	slog.InfoContext(ctx, "Metadata augmentor initialized",
 		"cacheSize", config.CacheSize,
 		"cacheTTL", config.CacheTTL,
 		"allowedLabels", config.AllowedLabels)
@@ -86,7 +86,7 @@ func (a *Augmentor) Transform(ctx context.Context, event *pb.HealthEvent) error 
 		}
 	}
 
-	slog.Info("Metadata augmented",
+	slog.InfoContext(ctx, "Metadata augmented",
 		"node", event.NodeName,
 		"providerID", metadata.ProviderID,
 		"labelsAdded", len(metadata.Labels))

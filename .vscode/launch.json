@@ -1,0 +1,235 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Package",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${fileDirname}"
+        },
+        {
+            "name": "Test Health Events Analyzer reconciler",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-events-analyzer/pkg/reconciler",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test syslog-health-monitor csv parser",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-monitors/syslog-health-monitor/pkg/xid/parser",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test Health Events Analyzer parser",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-events-analyzer/pkg/parser",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test csp-health-monitor trigger engine",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/NVSentinel/health-monitors/csp-health-monitor/pkg/triggerengine",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test csp-health-monitor aws",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-monitors/csp-health-monitor/pkg/csp/aws",
+            "args": [
+                "-test.v"
+            ],
+            "env": {
+                "KUBEBUILDER_ASSETS": "/home/tanishag/.local/share/kubebuilder-envtest/k8s/1.28.3-linux-amd64"
+            },
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test csp-health-monitor gcp",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-monitors/csp-health-monitor/pkg/csp/gcp",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test csp-health-monitor nomalizer",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/health-monitors/csp-health-monitor/pkg/event",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test syslog-health-monitor xid",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/NVSentinel/health-monitors/syslog-health-monitor/pkg/xid",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test syslog-health-monitor sxid",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/NVSentinel/health-monitors/syslog-health-monitor/pkg/sxid",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test syslog-health-monitor gpufallen",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/NVSentinel/health-monitors/syslog-health-monitor/pkg/gpufallen",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test syslog-health-monitor syslog monitor",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/NVSentinel/health-monitors/syslog-health-monitor/pkg/syslog-monitor",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test labeler",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/labeler/pkg/labeler",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test event-exporter transformer",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/event-exporter/pkg/transformer",
+            "args": [
+                "-test.v"
+            ],
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test platform connector kubernetes",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/platform-connectors/pkg/connectors/kubernetes",
+            "args": [
+                "-test.v"
+            ],
+            "env": {
+                "KUBEBUILDER_ASSETS": "/home/tanishag/.local/share/kubebuilder-envtest/k8s/1.28.3-linux-amd64"
+            },
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test fault quarantine reconciler",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/fault-quarantine/pkg/reconciler",
+            "args": [
+                "-test.v"
+            ],
+            "env": {
+                "KUBEBUILDER_ASSETS": "/home/tanishag/.local/share/kubebuilder-envtest/k8s/1.28.3-linux-amd64"
+            },
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        },
+        {
+            "name": "Test fault remediation reconciler",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/fault-remediation/pkg/reconciler",
+            "args": [
+                "-test.v"
+            ],
+            "env": {
+                "KUBEBUILDER_ASSETS": "/home/tanishag/.local/share/kubebuilder-envtest/k8s/1.28.3-linux-amd64"
+            },
+            "dlvFlags": [
+                "--check-go-version=false"
+            ]
+        }
+    ]
+}

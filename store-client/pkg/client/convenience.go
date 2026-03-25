@@ -50,6 +50,29 @@ func UpdateHealthEventNodeQuarantineStatus(ctx context.Context, client DatabaseC
 	return client.UpdateDocumentStatusFields(ctx, eventID, fields)
 }
 
+// UpdateHealthEventNodeQuarantineStatusWithSpanID atomically updates the quarantine status
+// and the service's trace span ID in a single write, so the change stream event seen by
+// downstream services (node-drainer) contains the correct parent span ID.
+// spanIDs is a map of service name → span ID (e.g. {"fault_quarantine": "abc123"}).
+func UpdateHealthEventNodeQuarantineStatusWithSpanID(ctx context.Context, client DatabaseClient,
+	eventID string, status string, spanIDs map[string]string) error {
+	fields := map[string]interface{}{
+		"healtheventstatus.nodequarantined": status,
+	}
+
+	if status == "Quarantined" || status == "AlreadyQuarantined" {
+		fields["healtheventstatus.quarantinefinishtimestamp"] = timestamppb.Now()
+	}
+
+	for svc, sid := range spanIDs {
+		if sid != "" {
+			fields["span_ids."+svc] = sid
+		}
+	}
+
+	return client.UpdateDocumentStatusFields(ctx, eventID, fields)
+}
+
 // UpdateHealthEventPodEvictionStatus updates the pod eviction status
 // Used by node-drainer
 func UpdateHealthEventPodEvictionStatus(ctx context.Context, client DatabaseClient,
@@ -62,6 +85,18 @@ func UpdateHealthEventPodEvictionStatus(ctx context.Context, client DatabaseClie
 func UpdateHealthEventRemediationStatus(ctx context.Context, client DatabaseClient,
 	eventID string, status interface{}) error {
 	return UpdateHealthEventStatus(ctx, client, eventID, "remediation", status)
+}
+
+// UpdateHealthEventSpanID writes a service's span ID into the span_ids map.
+// serviceName identifies the writing service (use tracing.Service* constants).
+//
+// Prefer using the atomic variants (e.g. UpdateHealthEventNodeQuarantineStatusWithSpanID)
+// that bundle span_ids with the triggering status field in a single write.
+func UpdateHealthEventSpanID(ctx context.Context, client DatabaseClient,
+	eventID string, serviceName string, spanID string) error {
+	return client.UpdateDocumentStatusFields(ctx, eventID, map[string]interface{}{
+		"span_ids." + serviceName: spanID,
+	})
 }
 
 // Backward compatibility helpers

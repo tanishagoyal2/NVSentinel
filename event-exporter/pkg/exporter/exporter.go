@@ -20,8 +20,10 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/event-exporter/pkg/config"
@@ -88,9 +90,13 @@ func (e *HealthEventsExporter) Run(ctx context.Context) error {
 }
 
 func (e *HealthEventsExporter) runBackfill(ctx context.Context) error {
+	ctx, span := tracing.StartSpan(ctx, "event_exporter.backfill")
+	defer span.End()
+
 	startTime := time.Now().UTC()
 	backfillStart := startTime.Add(-e.cfg.Exporter.Backfill.GetMaxAge())
 
+	span.SetAttributes(attribute.String("event_exporter.backfill.status", "in_progress"))
 	slog.Info("Starting backfill", "backfillStart", backfillStart, "maxAge", e.cfg.Exporter.Backfill.GetMaxAge())
 
 	metrics.BackfillInProgress.Set(1)
@@ -98,6 +104,12 @@ func (e *HealthEventsExporter) runBackfill(ctx context.Context) error {
 
 	cursor, err := e.queryBackfillEvents(ctx, backfillStart, startTime)
 	if err != nil {
+		span.SetAttributes(
+			attribute.String("event_exporter.backfill.status", "failed"),
+			attribute.String("event_exporter.error.type", "backfill_query_error"),
+			attribute.String("event_exporter.error.message", err.Error()),
+		)
+		tracing.RecordError(span, err)
 		slog.Error("Failed to query backfill events", "error", err)
 		return fmt.Errorf("query backfill events: %w", err)
 	}
@@ -105,9 +117,25 @@ func (e *HealthEventsExporter) runBackfill(ctx context.Context) error {
 
 	count, err := e.processBackfillCursor(ctx, cursor)
 	if err != nil {
+		durationMs := time.Since(startTime).Seconds() * 1000
+		span.SetAttributes(
+			attribute.String("event_exporter.backfill.status", "partial_success"),
+			attribute.Int("event_exporter.backfill.events_processed", count),
+			attribute.Float64("event_exporter.backfill.duration_ms", durationMs),
+			attribute.String("event_exporter.error.type", "backfill_process_error"),
+			attribute.String("event_exporter.error.message", err.Error()),
+		)
+		tracing.RecordError(span, err)
 		slog.Error("Failed to process backfill cursor", "error", err)
 		return fmt.Errorf("process backfill cursor: %w", err)
 	}
+
+	durationMs := time.Since(startTime).Seconds() * 1000
+	span.SetAttributes(
+		attribute.String("event_exporter.backfill.status", "success"),
+		attribute.Int("event_exporter.backfill.events_processed", count),
+		attribute.Float64("event_exporter.backfill.duration_ms", durationMs),
+	)
 
 	metrics.BackfillDuration.Observe(time.Since(startTime).Seconds())
 	slog.Info("Backfill complete", "events", count)
@@ -316,7 +344,7 @@ func (e *HealthEventsExporter) consumeAndDispatch(
 // nil documents) so the token writer advances the resume token. Returns
 // a non-nil error only for fatal publish failures.
 func (e *HealthEventsExporter) processEvent(ctx context.Context, rawEvent client.Event) error {
-	event, err := unmarshalHealthEvent(rawEvent)
+	healthEventWithStatus, err := unmarshalHealthEventWithStatus(rawEvent)
 	if err != nil {
 		slog.Warn("Failed to unmarshal event", "error", err)
 		metrics.TransformErrors.Inc()
@@ -324,24 +352,48 @@ func (e *HealthEventsExporter) processEvent(ctx context.Context, rawEvent client
 		return nil
 	}
 
-	if event == nil {
+	if healthEventWithStatus.HealthEvent == nil {
 		slog.Debug("Skipping nil health event")
 		return nil
 	}
 
-	return e.publishWithRetry(ctx, event)
+	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
+	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID, parentSpanID, "event_exporter.process_event")
+	defer span.End()
+
+	return e.publishWithRetry(ctx, healthEventWithStatus.HealthEvent)
 }
 
 func (e *HealthEventsExporter) publishWithRetry(ctx context.Context, event *pb.HealthEvent) error {
-	cloudEvent, err := e.transformer.Transform(event)
-	if err != nil {
+	// CloudEvents transform span
+	ctx, transformSpan := tracing.StartSpan(ctx, "event_exporter.transform")
+	transformStart := time.Now()
+	cloudEvent, transformErr := e.transformer.Transform(event)
+	transformDurationMs := time.Since(transformStart).Seconds() * 1000
+	if transformErr != nil {
+		transformSpan.SetAttributes(
+			attribute.Bool("event_exporter.transform.success", false),
+			attribute.Float64("event_exporter.transform.duration_ms", transformDurationMs),
+			attribute.String("event_exporter.transform.error", transformErr.Error()),
+			attribute.String("event_exporter.error.type", "transform_error"),
+			attribute.String("event_exporter.error.message", transformErr.Error()),
+		)
+		tracing.RecordError(transformSpan, transformErr)
+		transformSpan.End()
 		metrics.TransformErrors.Inc()
-		slog.Error("Failed to transform event", "error", err)
-
-		return fmt.Errorf("transform event: %w", err)
+		slog.Error("Failed to transform event", "error", transformErr)
+		return fmt.Errorf("transform event: %w", transformErr)
 	}
+	transformSpan.SetAttributes(
+		attribute.Bool("event_exporter.transform.success", true),
+		attribute.Float64("event_exporter.transform.duration_ms", transformDurationMs),
+	)
+	transformSpan.End()
 
-	startTime := time.Now()
+	// Publish to sink span (covers full retry loop)
+	ctx, publishSpan := tracing.StartSpan(ctx, "event_exporter.publish")
+	publishStart := time.Now()
 	attempt := 0
 
 	backoffConfig := wait.Backoff{
@@ -352,7 +404,7 @@ func (e *HealthEventsExporter) publishWithRetry(ctx context.Context, event *pb.H
 		Cap:      e.cfg.Exporter.FailureHandling.GetMaxBackoff(),
 	}
 
-	err = wait.ExponentialBackoffWithContext(ctx, backoffConfig, func(ctx context.Context) (bool, error) {
+	err := wait.ExponentialBackoffWithContext(ctx, backoffConfig, func(ctx context.Context) (bool, error) {
 		if attempt > 0 {
 			slog.Info("Publish failed, retrying", "attempt", attempt)
 		}
@@ -360,39 +412,49 @@ func (e *HealthEventsExporter) publishWithRetry(ctx context.Context, event *pb.H
 		publishErr := e.sink.Publish(ctx, cloudEvent)
 		if publishErr == nil {
 			slog.Debug("Publish succeeded", "attempt", attempt)
-
-			metrics.PublishDuration.Observe(time.Since(startTime).Seconds())
+			metrics.PublishDuration.Observe(time.Since(publishStart).Seconds())
 			metrics.EventsPublished.WithLabelValues(metrics.StatusSuccess).Inc()
-
 			return true, nil
 		}
 
 		attempt++
-
 		slog.Warn("Publish failed, retrying",
 			"attempt", attempt,
 			"maxRetries", e.cfg.Exporter.FailureHandling.MaxRetries,
 			"error", publishErr)
-
 		return false, nil
 	})
+
+	durationMs := time.Since(publishStart).Seconds() * 1000
+	publishSpan.SetAttributes(
+		attribute.Int("event_exporter.publish.retry_count", attempt),
+		attribute.Float64("event_exporter.publish.duration_ms", durationMs),
+	)
 	if err != nil {
+		publishSpan.SetAttributes(
+			attribute.String("event_exporter.publish.status", "failure"),
+			attribute.String("event_exporter.publish.error_type", "max_retries_exceeded"),
+			attribute.String("event_exporter.error.type", "publish_error"),
+			attribute.String("event_exporter.error.message", err.Error()),
+		)
+		tracing.RecordError(publishSpan, err)
+		publishSpan.End()
 		metrics.PublishErrors.WithLabelValues("max_retries_exceeded").Inc()
 		metrics.EventsPublished.WithLabelValues(metrics.StatusFailure).Inc()
 		slog.Error("Publish failed after max retries", "error", err)
-
 		return fmt.Errorf("publish failed after %d retries: %w", e.cfg.Exporter.FailureHandling.MaxRetries, err)
 	}
-
+	publishSpan.SetAttributes(attribute.String("event_exporter.publish.status", "success"))
+	publishSpan.End()
 	return nil
 }
 
-func unmarshalHealthEvent(event client.Event) (*pb.HealthEvent, error) {
+func unmarshalHealthEventWithStatus(event client.Event) (model.HealthEventWithStatus, error) {
 	var healthEventWithStatus model.HealthEventWithStatus
 	if err := event.UnmarshalDocument(&healthEventWithStatus); err != nil {
 		slog.Error("Failed to unmarshal document", "error", err)
-		return nil, fmt.Errorf("unmarshal document: %w", err)
+		return healthEventWithStatus, fmt.Errorf("unmarshal document: %w", err)
 	}
 
-	return healthEventWithStatus.HealthEvent, nil
+	return healthEventWithStatus, nil
 }

@@ -16,7 +16,9 @@ package queue
 
 import (
 	"context"
+	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
@@ -29,6 +31,37 @@ type NodeEvent struct {
 	Event            *datastore.Event           // Database-agnostic event data
 	HealthEventStore datastore.HealthEventStore // New database-agnostic interface
 	Database         DataStore                  // New database-agnostic interface
+
+	// TraceID is the OpenTelemetry trace ID of the health event (from store).
+	TraceID string
+	// ParentSpanID is the resolved span ID of the upstream service, extracted from
+	// the span_ids map at enqueue time using the known pipeline topology.
+	ParentSpanID string
+	// DrainSessionSpan is the parent span for all process_event cycles for this item. Set on first process, ended when processing completes (no requeue).
+	DrainSessionSpan trace.Span
+
+	// Phase start timestamps — set on first entry into each phase, zero if not yet started.
+	ImmediateEvictionStartedAt  time.Time
+	AllowCompletionStartedAt    time.Time
+	DeleteAfterTimeoutStartedAt time.Time
+	// Phase end timestamps — set when the phase transitions away, used to compute accurate wall-clock duration.
+	ImmediateEvictionEndedAt  time.Time
+	AllowCompletionEndedAt    time.Time
+	DeleteAfterTimeoutEndedAt time.Time
+
+	// Pods force-deleted during this session (comma-separated namespace/name).
+	PodsForceDeletedCount int
+	ForceDeletedPods      string
+
+	// Pod lists recorded once on first entry into each phase. Comma-separated namespace/name.
+	ImmediateEvictionPods  string
+	AllowCompletionPods    string
+	DeleteAfterTimeoutPods string
+
+	// Drain scope (set once when action is known); recorded on drain_session span when it ends.
+	DrainScope              string
+	PartialDrainEntityType  string
+	PartialDrainEntityValue string
 
 	// Deprecated fields for backward compatibility
 	EventBSON *map[string]interface{} // DEPRECATED: Use Event instead
@@ -51,9 +84,9 @@ type DataStoreEventProcessor interface {
 // EventProcessor interface has been removed - use DataStoreEventProcessor instead
 
 type EventQueueManager interface {
-	// New database-agnostic method
+	// New database-agnostic method. drainSessionSpan optional: when set, event data is on this trace root (created at first enqueue).
 	EnqueueEventGeneric(ctx context.Context, nodeName string, event datastore.Event, database DataStore,
-		healthEventStore datastore.HealthEventStore) error
+		healthEventStore datastore.HealthEventStore, drainSessionSpan trace.Span) error
 
 	// Deprecated EnqueueEvent method has been removed - use EnqueueEventGeneric instead
 

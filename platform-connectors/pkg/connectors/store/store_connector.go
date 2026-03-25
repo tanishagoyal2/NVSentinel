@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/data-models/pkg/protos"
 	"github.com/nvidia/nvsentinel/platform-connectors/pkg/ringbuffer"
@@ -74,7 +76,7 @@ func InitializeDatabaseStoreConnector(ctx context.Context, ringbuffer *ringbuffe
 		return nil, fmt.Errorf("failed to create database client: %w", err)
 	}
 
-	slog.Info("Successfully initialized database store connector", "maxRetries", maxRetries)
+	slog.InfoContext(ctx, "Successfully initialized database store connector", "maxRetries", maxRetries)
 
 	return new(databaseClient, ringbuffer, nodeName, maxRetries), nil
 }
@@ -88,57 +90,78 @@ func createClientFactory(databaseClientCertMountPath string) (*factory.ClientFac
 }
 
 func (r *DatabaseStoreConnector) FetchAndProcessHealthMetric(ctx context.Context) {
-	// Build an in-memory cache of entity states from existing documents in the database
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("Context canceled, exiting health metric processing loop")
+			slog.InfoContext(ctx, "Context canceled, exiting health metric processing loop")
 			return
 		default:
-			healthEvents, quit := r.ringBuffer.Dequeue()
+			item, quit := r.ringBuffer.Dequeue()
 			if quit {
-				slog.Info("Queue signaled shutdown, exiting processing loop")
+				slog.InfoContext(ctx, "Queue signaled shutdown, exiting processing loop")
 				return
 			}
 
+			healthEvents := item.Events
 			if healthEvents == nil || len(healthEvents.GetEvents()) == 0 {
-				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 				continue
 			}
 
-			err := r.insertHealthEvents(ctx, healthEvents)
-			if err != nil {
-				retryCount := r.ringBuffer.NumRequeues(healthEvents)
-				if retryCount < r.maxRetries {
-					slog.Warn("Error inserting health events, will retry with exponential backoff",
-						"error", err,
-						"retryCount", retryCount,
-						"maxRetries", r.maxRetries,
-						"eventCount", len(healthEvents.GetEvents()))
+			// Continue the trace from the gRPC handler so one trace shows both store and K8s processing.
+			batchCtx, span := tracing.StartSpanWithLinkFromSpanContext(
+				ctx, item.ParentSpanContext, "platform_connector.store.fetch_and_process_health_metric")
+			eventCount := len(healthEvents.GetEvents())
+			span.SetAttributes(
+				attribute.Int("platform_connector.store.batch_event_count", eventCount),
+			)
+			if eventCount > 0 && healthEvents.GetEvents()[0] != nil {
+				span.SetAttributes(attribute.String("platform_connector.store.node_name", healthEvents.GetEvents()[0].GetNodeName()))
+			}
 
-					r.ringBuffer.AddRateLimited(healthEvents)
-				} else {
-					slog.Error("Max retries exceeded, dropping health events permanently",
+			err := r.insertHealthEvents(batchCtx, healthEvents)
+			if err != nil {
+				retryCount := r.ringBuffer.NumRequeues(item)
+				tracing.RecordError(span, err)
+				span.SetAttributes(
+					attribute.String("platform_connector.store.error", err.Error()),
+					attribute.Int("platform_connector.store.retry_count", retryCount),
+					attribute.Int("platform_connector.store.max_retries", r.maxRetries),
+				)
+				if retryCount < r.maxRetries {
+					span.SetAttributes(attribute.String("platform_connector.store.outcome", "retry"))
+					slog.WarnContext(batchCtx, "Error inserting health events, will retry with exponential backoff",
 						"error", err,
 						"retryCount", retryCount,
 						"maxRetries", r.maxRetries,
-						"eventCount", len(healthEvents.GetEvents()),
+						"eventCount", eventCount)
+
+					r.ringBuffer.AddRateLimited(item)
+				} else {
+					span.SetAttributes(attribute.String("platform_connector.store.outcome", "dropped"))
+					slog.ErrorContext(batchCtx, "Max retries exceeded, dropping health events permanently",
+						"error", err,
+						"retryCount", retryCount,
+						"maxRetries", r.maxRetries,
+						"eventCount", eventCount,
 						"firstEventNodeName", healthEvents.GetEvents()[0].GetNodeName(),
 						"firstEventCheckName", healthEvents.GetEvents()[0].GetCheckName())
-					r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+					r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 				}
 			} else {
-				r.ringBuffer.HealthMetricEleProcessingCompleted(healthEvents)
+				span.SetAttributes(attribute.String("platform_connector.store.outcome", "success"))
+				r.ringBuffer.HealthMetricEleProcessingCompleted(item)
 			}
+			span.End()
 		}
 	}
 }
 
-func (r *DatabaseStoreConnector) ShutdownRingBuffer() {
+func (r *DatabaseStoreConnector) ShutdownRingBuffer(ctx context.Context) {
 	if r.ringBuffer != nil {
-		slog.Info("Shutting down database store connector ring buffer with drain")
+		slog.InfoContext(ctx, "Shutting down database store connector ring buffer with drain")
 		r.ringBuffer.ShutDownHealthMetricQueue()
-		slog.Info("Database store connector ring buffer drained successfully")
+		slog.InfoContext(ctx, "Database store connector ring buffer drained successfully")
 	}
 }
 
@@ -153,12 +176,12 @@ func (r *DatabaseStoreConnector) Disconnect(ctx context.Context) error {
 	if err != nil {
 		// Log but don't return error if already disconnected
 		// This can happen in tests where mtest framework also disconnects
-		slog.Warn("Error disconnecting database client (may already be disconnected)", "error", err)
+		slog.WarnContext(ctx, "Error disconnecting database client (may already be disconnected)", "error", err)
 
 		return nil
 	}
 
-	slog.Info("Successfully disconnected database client")
+	slog.InfoContext(ctx, "Successfully disconnected database client")
 
 	return nil
 }
@@ -167,19 +190,34 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 	ctx context.Context,
 	healthEvents *protos.HealthEvents,
 ) error {
-	// Prepare all documents for batch insertion
+	// Create root span for event reception and storage
+	ctx, span := tracing.StartSpan(ctx, "platform_connector.receive_event")
+	defer span.End()
+
+	// Create the db.insert span first so downstream consumers become its children,
+	// not children of the broader receive_event span. This prevents negative self-time
+	// because the db.insert span is the trigger point for the change stream.
+	_, dbSpan := tracing.StartSpan(ctx, "platform_connector.db.insert")
+	defer dbSpan.End()
+
 	healthEventWithStatusList := make([]interface{}, 0, len(healthEvents.GetEvents()))
+	traceID := span.SpanContext().TraceID().String()
 
 	for i, healthEvent := range healthEvents.GetEvents() {
-		// CRITICAL FIX: Clone the HealthEvent to avoid pointer reuse issues with gRPC buffers
-		// Without this clone, the healthEvent pointer may point to reused gRPC buffer memory
-		// that gets overwritten by subsequent requests, causing data corruption in MongoDB.
-		// This manifests as events having wrong isfatal/ishealthy/message values.
 		clonedHealthEvent := proto.Clone(healthEvent).(*protos.HealthEvent)
 
-		slog.Debug("Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
+		if clonedHealthEvent.Metadata == nil {
+			clonedHealthEvent.Metadata = make(map[string]string)
+		}
+
+		clonedHealthEvent.Metadata[tracing.MetadataKeyTraceID] = traceID
+
+		slog.DebugContext(ctx, "Processing health event for insertion", "index", i, "nodeName", clonedHealthEvent.NodeName)
 
 		healthEventWithStatusObj := model.HealthEventWithStatus{
+			SpanIDs: map[string]string{
+				tracing.ServicePlatformConnector: tracing.SpanIDFromSpan(dbSpan),
+			},
 			CreatedAt:   time.Now().UTC(),
 			HealthEvent: clonedHealthEvent,
 			HealthEventStatus: &protos.HealthEventStatus{
@@ -187,21 +225,45 @@ func (r *DatabaseStoreConnector) insertHealthEvents(
 			},
 		}
 		healthEventWithStatusList = append(healthEventWithStatusList, healthEventWithStatusObj)
+
+		if i == 0 {
+			tracing.AddHealthEventAttributes(span, healthEventWithStatusObj.HealthEvent)
+			span.SetAttributes(
+				attribute.Int("platform_connector.grpc.events_count", len(healthEvents.GetEvents())),
+			)
+		}
 	}
 
-	slog.Debug("Inserting health events batch", "documentCount", len(healthEventWithStatusList))
+	slog.DebugContext(ctx, "Inserting health events batch", "documentCount", len(healthEventWithStatusList))
+
+	dbSpan.SetAttributes(
+		attribute.String("platform_connector.db.operation", "insert"),
+		attribute.Int("platform_connector.db.document_count", len(healthEventWithStatusList)),
+	)
 
 	// Insert all documents in a single batch operation
 	// This ensures MongoDB generates INSERT operations (not UPDATE) for change streams
 	// Note: InsertMany is already atomic - either all documents are inserted or none are
+	startTime := time.Now()
 	_, err := r.databaseClient.InsertMany(ctx, healthEventWithStatusList)
+	duration := time.Since(startTime)
+
 	if err != nil {
-		slog.Error("InsertMany failed", "error", err)
+		slog.ErrorContext(ctx, "InsertMany failed", "error", err)
+		tracing.RecordError(dbSpan, err)
+		dbSpan.SetAttributes(
+			attribute.String("platform_connector.error.type", "insert_many_failed"),
+			attribute.String("platform_connector.error.message", err.Error()),
+		)
 
 		return fmt.Errorf("insertMany failed: %w", err)
 	}
 
-	slog.Debug("InsertMany completed successfully")
+	dbSpan.SetAttributes(
+		attribute.Float64("platform_connector.db.duration_ms", float64(duration.Nanoseconds())/1e6),
+	)
+
+	slog.DebugContext(ctx, "InsertMany completed successfully")
 
 	return nil
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/nvidia/nvsentinel/commons/pkg/flags"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/initializer"
 )
 
@@ -41,11 +42,18 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("fault-quarantine", version)
+	// Approach 2 (028): JSON to stderr with trace_id/span_id on slog.*Context when ctx has a span;
+	// cluster tail (e.g. Alloy) forwards to OTLP / Panoptes.
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("fault-quarantine", version)
 	slog.Info("Starting fault-quarantine", "version", version, "commit", commit, "date", date)
 
 	if err := auditlogger.InitAuditLogger("fault-quarantine"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	// Initialize OpenTelemetry tracing
+	if err := tracing.InitTracing("fault-quarantine"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	if err := run(); err != nil {

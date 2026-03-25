@@ -1,0 +1,32 @@
+# Tempo Helm values for NVSentinel tracing (see docs/tracing-setup.md)
+tempo:
+  ingestion:
+    otlp:
+      grpc:
+        enabled: true
+      http:
+        enabled: true
+  # Ingester ring configuration for monolithic mode
+  ingester:
+    lifecycler:
+      ring:
+        kvstore:
+          store: inmemory
+        replication_factor: 1
+      min_ready_duration: 0s
+      final_sleep: 0s
+  retention: 720h  # 30 days
+
+persistence:
+  enabled: true
+  size: 20Gi
+
+service:
+  type: ClusterIP
+  ports:
+    otlp-grpc:
+      port: 4317
+    otlp-http:
+      port: 4318
+    http:
+      port: 3200

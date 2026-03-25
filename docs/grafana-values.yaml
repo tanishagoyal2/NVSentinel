@@ -1,0 +1,22 @@
+grafana:
+  adminUser: admin
+  adminPassword: admin
+  persistence:
+    enabled: false
+  service:
+    type: ClusterIP
+    port: 3000
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo.nvsentinel.svc.cluster.local:3200
+        isDefault: true
+        jsonData:
+          httpMethod: GET
+          nodeGraph:
+            enabled: true

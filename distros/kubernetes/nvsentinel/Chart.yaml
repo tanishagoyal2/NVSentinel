@@ -76,3 +76,14 @@ dependencies:
   - name: slurm-drain-monitor
     version: "0.1.0"
     condition: global.slurmDrainMonitor.enabled
+  - name: otel-collector
+    version: "0.1.0"
+    condition: global.tracing.enabled
+  - name: tempo
+    version: "1.24.4"
+    repository: https://grafana.github.io/helm-charts
+    condition: global.tempo.enabled
+  - name: grafana
+    version: "10.5.15"
+    repository: https://grafana.github.io/helm-charts
+    condition: global.grafana.enabled

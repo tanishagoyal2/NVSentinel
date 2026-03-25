@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -32,10 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/fault-remediation/pkg/initializer"
 )
 
@@ -66,11 +69,20 @@ var (
 )
 
 func main() {
-	logger.SetDefaultStructuredLogger("fault-remediation", version)
+	logger.SetDefaultStructuredLoggerWithTraceCorrelation("fault-remediation", version)
 	slog.Info("Starting fault-remediation", "version", version, "commit", commit, "date", date)
+
+	// Set controller-runtime's log sink so manager and controllers can log (required for shutdown, etc.)
+	logrLogger := logr.FromSlogHandler(slog.Default().Handler())
+	ctrllog.SetLogger(logrLogger)
 
 	if err := auditlogger.InitAuditLogger("fault-remediation"); err != nil {
 		slog.Warn("Failed to initialize audit logger", "error", err)
+	}
+
+	// Initialize OpenTelemetry tracing
+	if err := tracing.InitTracing("fault-remediation"); err != nil {
+		slog.Warn("Failed to initialize tracing", "error", err)
 	}
 
 	if err := run(); err != nil {
@@ -91,11 +103,17 @@ func main() {
 func run() error {
 	parseFlags()
 
+	// Root context is cancelled only when the process receives SIGINT or SIGTERM (e.g. from
+	// Kubernetes pod termination, liveness failure, or manual kill). No other code path cancels it.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	err := setupCtrlRuntimeManagement(ctx)
 	if err != nil {
+		// Log why we're exiting: context cancellation means SIGTERM/SIGINT was received
+		if ctx.Err() != nil {
+			slog.Info("Shutdown complete (signal received)", "reason", ctx.Err())
+		}
 		return err
 	}
 

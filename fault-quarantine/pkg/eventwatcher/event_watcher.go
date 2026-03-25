@@ -21,10 +21,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/metrics"
 	"github.com/nvidia/nvsentinel/store-client/pkg/client"
 	"github.com/nvidia/nvsentinel/store-client/pkg/query"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type EventWatcher struct {
@@ -34,7 +36,7 @@ type EventWatcher struct {
 		ctx context.Context,
 		event *model.HealthEventWithStatus,
 	) *model.Status
-	fetchDocIDsFn                         func(nodeName string) []string
+	fetchDocIDsFn                         func(ctx context.Context, nodeName string) []string
 	unprocessedEventsMetricUpdateInterval time.Duration
 	lastProcessedObjectID                 LastProcessedObjectIDStore
 }
@@ -44,11 +46,17 @@ type LastProcessedObjectIDStore interface {
 	LoadLastProcessedObjectID() (string, bool)
 }
 
+// DocumentIDContextKey is the context key for the store document ID.
+// ProcessEvent uses this to set health_event.id on the span when the event is received from the event watcher.
+type documentIDContextKeyType struct{}
+
+var DocumentIDContextKey = documentIDContextKeyType{}
+
 type EventWatcherInterface interface {
 	Start(ctx context.Context) error
 	SetProcessEventCallback(callback func(ctx context.Context, event *model.HealthEventWithStatus) *model.Status)
-	SetFetchDocIDsFn(fn func(nodeName string) []string)
-	CancelLatestQuarantiningEvents(ctx context.Context, nodeName string) error
+	SetFetchDocIDsFn(fn func(ctx context.Context, nodeName string) []string)
+	CancelLatestQuarantiningEvents(ctx context.Context, nodeName string, reason string) error
 }
 
 func NewEventWatcher(
@@ -70,7 +78,7 @@ func (w *EventWatcher) SetProcessEventCallback(callback func(ctx context.Context
 	w.processEventCallback = callback
 }
 
-func (w *EventWatcher) SetFetchDocIDsFn(fn func(nodeName string) []string) {
+func (w *EventWatcher) SetFetchDocIDsFn(fn func(ctx context.Context, nodeName string) []string) {
 	w.fetchDocIDsFn = fn
 }
 
@@ -123,7 +131,7 @@ func (w *EventWatcher) watchEvents(ctx context.Context) error {
 		metrics.TotalEventsReceived.Inc()
 
 		if processErr := w.processEvent(ctx, event); processErr != nil {
-			slog.Error("Event processing failed, but still marking as processed to proceed ahead", "error", processErr)
+			slog.ErrorContext(ctx, "Event processing failed, but still marking as processed to proceed ahead", "error", processErr)
 		}
 
 		// Extract the resume token from the event to avoid race condition
@@ -131,7 +139,7 @@ func (w *EventWatcher) watchEvents(ctx context.Context) error {
 		resumeToken := event.GetResumeToken()
 		if err := w.changeStreamWatcher.MarkProcessed(ctx, resumeToken); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("mark_processed_error").Inc()
-			slog.Error("Failed to mark event as processed", "error", err)
+			slog.ErrorContext(ctx, "Failed to mark event as processed", "error", err)
 
 			return fmt.Errorf("failed to mark event as processed: %w", err)
 		}
@@ -150,7 +158,7 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 		return fmt.Errorf("failed to unmarshal event: %w", err)
 	}
 
-	slog.Debug("Processing event", "event", healthEventWithStatus)
+	slog.DebugContext(ctx, "Processing event", "event", healthEventWithStatus)
 
 	eventID, err := event.GetDocumentID()
 	if err != nil {
@@ -174,19 +182,32 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 
 	w.lastProcessedObjectID.StoreLastProcessedObjectID(eventID)
 
+	// Pass document ID in context so ProcessEvent can set health_event.id on the span
+	// when we have received the event from the event watcher.
+	ctx = context.WithValue(ctx, DocumentIDContextKey, eventID)
+
+	// Start the trace span here (not inside ProcessEvent) so both the callback
+	// and the subsequent DB status update share the same trace context.
+	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
+	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.SpanIDs, tracing.ServicePlatformConnector)
+	ctx, processSpan := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
+		parentSpanID, "fault_quarantine.process_event")
+	defer processSpan.End()
+
 	startTime := time.Now()
 
 	var sourceDocIDs []string
 
 	if healthEventWithStatus.HealthEvent.GetIsHealthy() && w.fetchDocIDsFn != nil {
-		sourceDocIDs = w.fetchDocIDsFn(healthEventWithStatus.HealthEvent.GetNodeName())
+		sourceDocIDs = w.fetchDocIDsFn(ctx, healthEventWithStatus.HealthEvent.GetNodeName())
 	}
 
 	status := w.processEventCallback(ctx, &healthEventWithStatus)
+
 	if status != nil {
-		if err := w.updateNodeQuarantineStatus(ctx, recordUUID, status); err != nil {
+		if err := w.updateNodeQuarantineStatus(ctx, recordUUID, status, healthEventWithStatus.SpanIDs); err != nil {
 			metrics.ProcessingErrors.WithLabelValues("update_quarantine_status_error").Inc()
-			slog.Error("Failed to update node quarantine status", "error", err)
+			slog.ErrorContext(ctx, "Failed to update node quarantine status", "error", err)
 
 			return fmt.Errorf("failed to update node quarantine status: %w", err)
 		}
@@ -374,8 +395,26 @@ func (w *EventWatcher) updateNodeQuarantineStatus(
 	ctx context.Context,
 	eventID string,
 	nodeQuarantinedStatus *model.Status,
+	spanIDs map[string]string,
 ) error {
-	err := client.UpdateHealthEventNodeQuarantineStatus(ctx, w.databaseClient, eventID, string(*nodeQuarantinedStatus))
+	// Create a span for the DB status update. This span's ID becomes the parent
+	// for downstream consumers (node-drainer) because the status write is the
+	// trigger point for their change stream.
+	_, dbSpan := tracing.StartSpan(ctx, "fault_quarantine.db.update_status")
+	newSpanIDs := map[string]string{
+		tracing.ServiceFaultQuarantine: tracing.SpanIDFromSpan(dbSpan),
+	}
+	// Merge with any existing span IDs
+	for k, v := range spanIDs {
+		if _, exists := newSpanIDs[k]; !exists {
+			newSpanIDs[k] = v
+		}
+	}
+
+	err := client.UpdateHealthEventNodeQuarantineStatusWithSpanID(ctx, w.databaseClient, eventID,
+		string(*nodeQuarantinedStatus), newSpanIDs)
+	dbSpan.End()
+
 	if err != nil {
 		return fmt.Errorf("error updating node quarantine status: %w", err)
 	}
@@ -388,6 +427,7 @@ func (w *EventWatcher) updateNodeQuarantineStatus(
 func (w *EventWatcher) CancelLatestQuarantiningEvents(
 	ctx context.Context,
 	nodeName string,
+	reason string,
 ) error {
 	// Find the latest Quarantined or UnQuarantined event to check current state of node
 	filter := query.New().Build(query.And(
@@ -404,9 +444,11 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		ID          string    `bson:"_id" json:"_id"`
 		CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
 		HealthEvent struct {
-			NodeName           string       `bson:"nodename" json:"nodeName"`
-			GeneratedTimestamp *dbTimestamp `bson:"generatedtimestamp" json:"generatedTimestamp"`
+			NodeName           string            `bson:"nodename" json:"nodeName"`
+			GeneratedTimestamp *dbTimestamp      `bson:"generatedtimestamp" json:"generatedTimestamp"`
+			Metadata           map[string]string `bson:"metadata" json:"metadata"`
 		} `bson:"healthevent" json:"healthEvent"`
+		SpanIDs           map[string]string `bson:"span_ids"`
 		HealthEventStatus struct {
 			NodeQuarantined           string       `bson:"nodequarantined" json:"nodeQuarantined"`
 			QuarantineFinishTimestamp *dbTimestamp `bson:"quarantinefinishtimestamp,omitempty" json:"quarantineFinishTimestamp"`
@@ -452,6 +494,13 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		return nil
 	}
 
+	latestTraceID := tracing.TraceIDFromMetadata(latestEvent.HealthEvent.Metadata)
+	platformConnectorSpanId := tracing.ParentSpanID(latestEvent.SpanIDs, tracing.ServicePlatformConnector)
+	// Use a detached context (no active span) so the new span becomes a true root
+	// within the trace, not a child of whatever span is currently active in ctx.
+	ctx, span := tracing.StartSpanWithLinkFromTraceContext(context.Background(), latestTraceID, platformConnectorSpanId, "fault_quarantine.cancel_latest_quarantining_events")
+	defer span.End()
+
 	// Update all events from the current quarantine session (Quarantined + AlreadyQuarantined)
 	// This includes the first event and all subsequent events that occurred after it
 	updateFilter := query.New().Build(query.And(
@@ -469,6 +518,12 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 
 	updateResult, err := w.databaseClient.UpdateManyDocuments(ctx, updateFilter, update)
 	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetOperationStatus(span, tracing.OperationStatusError, "fault_quarantine")
+		span.SetAttributes(
+			attribute.String("fault_quarantine.error.type", "error_cancelling_quarantining_events"),
+			attribute.String("fault_quarantine.error.message", err.Error()),
+		)
 		return fmt.Errorf("error cancelling quarantining events for node %s: %w", nodeName, err)
 	}
 
@@ -485,6 +540,11 @@ func (w *EventWatcher) CancelLatestQuarantiningEvents(
 		nodeName,
 	)
 
+	tracing.SetOperationStatus(span, tracing.OperationStatusSuccess, "fault_quarantine")
+	span.SetAttributes(
+		attribute.String("fault_quarantine.event.node_quarantined", string(model.Cancelled)),
+		attribute.String("fault_quarantine.event.reason", reason),
+	)
 	return nil
 }
 

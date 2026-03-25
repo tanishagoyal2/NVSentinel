@@ -340,9 +340,9 @@ func setupE2EReconcilerWithOptions(t *testing.T, ctx context.Context, cfg E2ERec
 		}
 	}
 
-	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
+	r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
 
-	r.initializeQuarantineMetrics()
+	r.initializeQuarantineMetrics(context.Background())
 
 	// Create mock watcher
 	mockWatcher := testutils.NewMockChangeStreamWatcher()
@@ -531,8 +531,8 @@ func runReconcilerAndQuarantineNode(
 			}
 		}
 
-		r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
-		r.initializeQuarantineMetrics()
+		r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
+		r.initializeQuarantineMetrics(context.Background())
 
 		mockWatcher := testutils.NewMockChangeStreamWatcher()
 
@@ -620,7 +620,7 @@ func verifyUnquarantineLabels(t *testing.T, node *corev1.Node) {
 
 // MockEventWatcher is a test mock for EventWatcherInterface that can simulate various scenarios
 type MockEventWatcher struct {
-	CancelLatestQuarantiningEventsFn func(ctx context.Context, nodeName string) error
+	CancelLatestQuarantiningEventsFn func(ctx context.Context, nodeName string, reason string) error
 	ProcessEventCallbackFn           func(ctx context.Context, event *model.HealthEventWithStatus) *model.Status
 	StartFn                          func(ctx context.Context) error
 }
@@ -636,11 +636,11 @@ func (m *MockEventWatcher) SetProcessEventCallback(callback func(ctx context.Con
 	m.ProcessEventCallbackFn = callback
 }
 
-func (m *MockEventWatcher) SetFetchDocIDsFn(_ func(nodeName string) []string) {}
+func (m *MockEventWatcher) SetFetchDocIDsFn(_ func(ctx context.Context, nodeName string) []string) {}
 
-func (m *MockEventWatcher) CancelLatestQuarantiningEvents(ctx context.Context, nodeName string) error {
+func (m *MockEventWatcher) CancelLatestQuarantiningEvents(ctx context.Context, nodeName string, reason string) error {
 	if m.CancelLatestQuarantiningEventsFn != nil {
-		return m.CancelLatestQuarantiningEventsFn(ctx, nodeName)
+		return m.CancelLatestQuarantiningEventsFn(ctx, nodeName, reason)
 	}
 	// Default behavior: simulate MongoDB document not found (returns nil as per the real implementation)
 	return nil
@@ -4185,7 +4185,7 @@ func TestE2E_UnhealthyEventNotMatchingRulesNotPropagated(t *testing.T) {
 // 		}
 // 	}
 
-// 	r.precomputeTaintInitKeys(ruleSetEvals, rulesetsConfig)
+// 	r.precomputeTaintInitKeys(context.Background(), ruleSetEvals, rulesetsConfig)
 // 	fqClient.NodeInformer.SetOnManualUncordonCallback(r.handleManualUncordon)
 
 // 	mockWatcher := testutils.NewMockChangeStreamWatcher()
@@ -5742,7 +5742,7 @@ func TestSourceDocIDsFromAnnotation(t *testing.T) {
 				return err == nil
 			}, eventuallyTimeout, statusCheckPollInterval, "informer should observe test node")
 
-			ids := r.sourceDocIDsFromAnnotation(nodeName)
+			ids := r.sourceDocIDsFromAnnotation(ctx, nodeName)
 			assert.ElementsMatch(t, tc.expectedIDs, ids)
 		})
 	}

@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build and deploy
+# Build and deploy. When this Tiltfile is included from tilt/Tiltfile, the build
+# runs with cwd=tilt/, so the module path must be relative to tilt/ (../janitor-provider).
 custom_build(
     'ghcr.io/nvidia/nvsentinel/janitor-provider',
-    '../scripts/ko-tilt-build.sh . $EXPECTED_REF',
-    deps=['./', '../store-client'],
+    '../scripts/ko-tilt-build.sh ../janitor-provider $EXPECTED_REF',
+    deps=['../janitor-provider', '../api', '../commons'],
     skips_local_docker=True
 )

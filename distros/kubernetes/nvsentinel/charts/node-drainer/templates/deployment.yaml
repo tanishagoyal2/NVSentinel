@@ -164,6 +164,16 @@ spec:
               value: {{ $certMountPath }}
             {{- end }}
             {{- end }}
+            {{- if .Values.global.tracing.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.global.tracing.endpoint | default (printf "%s-otel-collector:4317" .Release.Name) | quote }}
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ .Values.global.tracing.insecure | quote }}
+            - name: OTEL_TRACES_ENABLED
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: "node-drainer"
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ if .Values.global.datastore }}{{ .Release.Name }}-datastore-config{{ else }}mongodb-config{{ end }}

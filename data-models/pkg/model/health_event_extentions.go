@@ -38,6 +38,7 @@ const (
 )
 
 type HealthEventWithStatus struct {
+	SpanIDs           map[string]string         `bson:"span_ids,omitempty" json:"span_ids,omitempty"`
 	CreatedAt         time.Time                 `bson:"createdAt"`
 	HealthEvent       *protos.HealthEvent       `bson:"healthevent,omitempty"`
 	HealthEventStatus *protos.HealthEventStatus `bson:"healtheventstatus"`
