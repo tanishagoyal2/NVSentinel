@@ -90,7 +90,7 @@ ff := featureflags.NewRegistry("syslog-health-monitor")
 ff.SetStoreOnlyMode(*processingStrategy) // sets store_only_mode=1 when "STORE_ONLY", else 0
 ```
 
-TOML-backed flags must call `Set` after the config file is parsed so the gauge reflects the effective runtime value. For example, the `node-drainer` reads `[customDrain].enabled` from its TOML config, and the `health-events-analyzer` reads per-rule enable switches from a ConfigMap TOML:
+TOML-backed flags must call `Set` after the config file is parsed so the gauge reflects the effective runtime value. For example, the `node-drainer` reads `[customDrain].enabled` from its TOML config, the `health-events-analyzer` reads per-rule enable switches from a ConfigMap TOML, and `fault-quarantine` reads per-ruleset `enabled` from its ConfigMap TOML:
 
 ```go
 // node-drainer: register custom_drain flag after TOML config is loaded
@@ -116,6 +116,23 @@ ff.Set("rule_xid_threshold", cfg.EnableXidThresholdRule)
 // ... one ff.Set call per enable*Rule key in the TOML
 ```
 
+```go
+// fault-quarantine: register per-ruleset toggles from ConfigMap TOML
+cfg, err := loadTOMLConfig("/etc/config/config.toml")
+if err != nil {
+    log.Fatalf("failed to load config: %v", err)
+}
+
+ff := featureflags.NewRegistry("fault-quarantine")
+ff.Set("dry_run", *dryRun)
+ff.Set("circuit_breaker", *circuitBreakerEnabled)
+for _, rs := range cfg.RuleSets {
+    ff.Set(toSnakeCase(rs.Name), rs.Enabled)
+}
+// e.g. gpu_fatal_error_ruleset=1, 
+// csp_health_monitor_fatal_error_ruleset=1, ...
+```
+
 ---
 
 ## Implementation: per-component feature flag inventory
@@ -131,6 +148,14 @@ ff.Set("rule_xid_threshold", cfg.EnableXidThresholdRule)
 | `fault-remediation` | `dry_run` | CLI `--dry-run` | `WithRegisterer(crmetrics.Registry)` |
 | `fault-remediation` | `log_collector` | CLI `--enable-log-collector` | `WithRegisterer(crmetrics.Registry)` |
 | `fault-remediation` | `leader_election` | CLI `--leader-elect` | `WithRegisterer(crmetrics.Registry)` |
+
+### `fault-quarantine` rule-set toggles
+
+Each `[[rule-sets]]` entry in the fault-quarantine TOML config carries an `enabled` boolean (new field to be added to `config.RuleSet`). When `enabled = false`, the evaluator skips the ruleset entirely — no CEL compilation, no match evaluation, no cordon/taint action.
+
+| Module (`service` label) | Flag | Config source | Notes |
+|--------------------------|------|---------------|-------|
+| `fault-quarantine` | `<rule_name>` (e.g., `gpu_fatal_error_ruleset`) | `ruleSets[].enabled` in Helm values → ConfigMap TOML `[[rule-sets]].enabled` | Dynamic per ruleset; stable `name` from TOML. Default rulesets: GPU fatal error, CSP health monitor fatal error, Syslog fatal error, Kubernetes object monitor fatal error |
 
 ### `store_only_mode` across monitors
 
@@ -212,6 +237,12 @@ Clusters where circuit breaker is disabled:
 
 ```promql
 nvsentinel_feature_flag_enabled{service="fault-quarantine", flag="circuit_breaker"} == 0
+```
+
+Clusters where the GPU fatal error ruleset is disabled in fault-quarantine:
+
+```promql
+nvsentinel_feature_flag_enabled{service="fault-quarantine", flag="gpu_fatal_error_ruleset"} == 0
 ```
 
 Janitor manual mode active (no automated remediation):
