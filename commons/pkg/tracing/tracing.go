@@ -74,6 +74,7 @@ func InitTracing(serviceName string) error {
 	if otlpEndpoint == "" {
 		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT is not configured")
 	}
+
 	otlpInsecure := os.Getenv("OTEL_EXPORTER_OTLP_INSECURE") == "true"
 
 	var exporter sdktrace.SpanExporter
@@ -90,6 +91,7 @@ func InitTracing(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
+
 	exporter = otlpExporter
 
 	tracerProvider = sdktrace.NewTracerProvider(
@@ -123,6 +125,7 @@ func GetTracer() trace.Tracer {
 		// Return a no-op tracer if not initialized
 		return noop.NewTracerProvider().Tracer("noop")
 	}
+
 	return tracer
 }
 
@@ -132,7 +135,9 @@ func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) 
 
 // StartChildSpanIfParentTraceActive starts a child span only when ctx already carries a valid
 // span. If there is no active trace, returns ctx unchanged with traced=false;
-func StartChildSpanIfParentTraceActive(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span, bool) {
+func StartChildSpanIfParentTraceActive(
+	ctx context.Context, name string, opts ...trace.SpanStartOption,
+) (context.Context, trace.Span, bool) {
 	if !trace.SpanFromContext(ctx).SpanContext().IsValid() {
 		return ctx, nil, false
 	}
@@ -146,7 +151,9 @@ func StartChildSpanIfParentTraceActive(ctx context.Context, name string, opts ..
 // When only traceID is provided, the span is placed under the same trace but
 // without a parent-child link (sibling root span). For proper parent-child
 // relationships, use StartSpanFromTraceContext with both traceID and spanID.
-func StartSpanFromTraceID(ctx context.Context, traceID string, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+func StartSpanFromTraceID(
+	ctx context.Context, traceID string, name string, opts ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
 	return StartSpanFromTraceContext(ctx, traceID, "", name, opts...)
 }
 
@@ -160,7 +167,9 @@ func StartSpanFromTraceID(ctx context.Context, traceID string, name string, opts
 // When only traceID is provided (parentSpanID is empty), the span is placed
 // under the same trace with a Span Link back to the trace origin, but without
 // a direct parent-child relationship.
-func StartSpanFromTraceContext(ctx context.Context, traceID, parentSpanID, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+func StartSpanFromTraceContext(
+	ctx context.Context, traceID, parentSpanID, name string, opts ...trace.SpanStartOption,
+) (context.Context, trace.Span) {
 	if traceID == "" {
 		return StartSpan(ctx, name, opts...)
 	}
@@ -185,6 +194,7 @@ func StartSpanFromTraceContext(ctx context.Context, traceID, parentSpanID, name 
 				Remote:     true,
 			})
 			ctx = trace.ContextWithSpanContext(ctx, parentCtx)
+
 			return StartSpan(ctx, name, opts...)
 		}
 	}
@@ -196,6 +206,7 @@ func StartSpanFromTraceContext(ctx context.Context, traceID, parentSpanID, name 
 		Remote:     true,
 	})
 	ctx = trace.ContextWithSpanContext(ctx, remoteCtx)
+
 	return StartSpan(ctx, name, opts...)
 }
 
@@ -215,6 +226,7 @@ func StartSpanWithLinkFromTraceContext(
 	if parentSpanID != "" {
 		tid, traceErr := trace.TraceIDFromHex(traceID)
 		sid, spanErr := trace.SpanIDFromHex(parentSpanID)
+
 		if traceErr == nil && spanErr == nil {
 			opts = append(opts, trace.WithLinks(trace.Link{
 				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
@@ -244,6 +256,7 @@ func StartSpanWithLinkFromSpanContext(
 	}
 
 	opts = append(opts, trace.WithLinks(trace.Link{SpanContext: upstream}))
+
 	return StartSpanFromTraceID(ctx, upstream.TraceID().String(), name, opts...)
 }
 
@@ -254,10 +267,12 @@ func SpanIDFromSpan(span trace.Span) string {
 	if span == nil {
 		return ""
 	}
+
 	sc := span.SpanContext()
 	if !sc.HasSpanID() {
 		return ""
 	}
+
 	return sc.SpanID().String()
 }
 
@@ -265,6 +280,7 @@ func TraceIDFromMetadata(metadata map[string]string) string {
 	if metadata == nil {
 		return ""
 	}
+
 	return metadata[MetadataKeyTraceID]
 }
 
@@ -272,6 +288,7 @@ func ParentSpanID(spanIDs map[string]string, parentService string) string {
 	if spanIDs == nil {
 		return ""
 	}
+
 	return spanIDs[parentService]
 }
 
@@ -293,5 +310,6 @@ func SetOperationStatus(span trace.Span, status string, service string) {
 	if span == nil {
 		return
 	}
+
 	span.SetAttributes(attribute.String(fmt.Sprintf("%s.operation.status", service), status))
 }

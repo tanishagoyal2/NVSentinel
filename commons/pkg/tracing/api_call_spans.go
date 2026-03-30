@@ -42,6 +42,7 @@ func NewConditionalHTTPTracingRoundTripper(next http.RoundTripper) http.RoundTri
 	if next == nil {
 		next = http.DefaultTransport
 	}
+
 	return &conditionalHTTPTracingRT{next: next}
 }
 
@@ -57,6 +58,7 @@ func (t *conditionalHTTPTracingRT) RoundTrip(req *http.Request) (*http.Response,
 
 	method := strings.ToLower(strings.TrimSpace(req.Method))
 	spanName := fmt.Sprintf("http.client.%s", method)
+
 	ctx, span := StartSpan(req.Context(), spanName)
 	defer span.End()
 
@@ -73,12 +75,14 @@ func (t *conditionalHTTPTracingRT) RoundTrip(req *http.Request) (*http.Response,
 			attrs = append(attrs, attribute.String("server.address", req.URL.Host))
 		}
 	}
+
 	if resp != nil {
 		attrs = append(attrs, attribute.Int("http.response.status_code", resp.StatusCode))
 		if resp.StatusCode >= 400 {
 			span.SetStatus(codes.Error, fmt.Sprintf("HTTP %d", resp.StatusCode))
 		}
 	}
+
 	SetSpanAttributes(span, attrs...)
 
 	if err != nil {
