@@ -125,6 +125,12 @@ preflight:
       command: ["/bin/sh", "-c"]
       args: ["echo 'preflight-dcgm-diag: no real GPU, exiting ok'; exit 0"]
 
+  # Tracing configuration for OpenTelemetry
+  tracing:
+    enabled: false
+    insecure: true
+    exportEndpoint: "http://nvsentinel-tempo.nvsentinel.svc.cluster.local:4318"
+
 mongodb-store:
   useBitnami: true
   usePerconaOperator: false

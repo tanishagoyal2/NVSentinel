@@ -27,6 +27,7 @@ import (
 	"net/http"
 
 	"github.com/nvidia/nvsentinel/commons/pkg/envutil"
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 )
 
 // AuditingRoundTripper is an HTTP RoundTripper that automatically captures
@@ -39,9 +40,12 @@ type AuditingRoundTripper struct {
 // NewAuditingRoundTripper creates a new AuditingRoundTripper that wraps the given delegate.
 // Use this to wrap client-go rest.Config.Wrap() or CSP SDK HTTP clients.
 // The request body logging configuration is cached at creation time for performance.
+//
+// The delegate is wrapped with conditional OpenTelemetry HTTP client spans (http.client.*)
+// when req.Context() already carries an active trace; otherwise no span is created.
 func NewAuditingRoundTripper(delegate http.RoundTripper) *AuditingRoundTripper {
 	return &AuditingRoundTripper{
-		delegate:       delegate,
+		delegate:       tracing.NewConditionalHTTPTracingRoundTripper(delegate),
 		logRequestBody: envutil.GetEnvBool(EnvAuditLogRequestBody, false),
 	}
 }

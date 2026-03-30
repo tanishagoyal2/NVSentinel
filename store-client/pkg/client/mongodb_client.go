@@ -26,9 +26,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.opentelemetry.io/otel/attribute"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/nvidia/nvsentinel/commons/pkg/tracing"
 	"github.com/nvidia/nvsentinel/data-models/pkg/model"
 	"github.com/nvidia/nvsentinel/store-client/pkg/config"
 	"github.com/nvidia/nvsentinel/store-client/pkg/datastore"
@@ -432,8 +434,21 @@ func NewMongoDBCollectionClient(ctx context.Context, dbConfig config.DatabaseCon
 func (c *MongoDBClient) UpdateDocumentStatus(
 	ctx context.Context, documentID string, statusPath string, status interface{},
 ) error {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_document_status")
+	if traced {
+		defer span.End()
+	}
+
 	objectID, err := primitive.ObjectIDFromHex(documentID)
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_document_status_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+
+		}
 		return datastore.NewValidationError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("invalid document ID %s", documentID),
@@ -457,7 +472,21 @@ func (c *MongoDBClient) UpdateDocumentStatus(
 	update := bson.M{"$set": updateFields}
 
 	_, err = c.mongoCol.UpdateOne(ctx, filter, update)
+
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.String("db.document_id", documentID),
+			attribute.String("db.status_path", statusPath),
+		)
+	}
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_document_status_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("failed to update document %s status at path %s", documentID, statusPath),
@@ -477,8 +506,20 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 		return nil
 	}
 
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_document_status_fields")
+	if traced {
+		defer span.End()
+	}
+
 	objectID, err := primitive.ObjectIDFromHex(documentID)
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_document_status_fields_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return datastore.NewValidationError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("invalid document ID %s", documentID),
@@ -490,7 +531,20 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 	update := bson.M{"$set": fields}
 
 	_, err = c.mongoCol.UpdateOne(ctx, filter, update)
+
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.String("db.document_id", documentID),
+		)
+	}
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_document_status_fields_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("failed to update document %s fields", documentID),
@@ -601,13 +655,32 @@ func resolveMongoFilter(filter interface{}) interface{} {
 func (c *MongoDBClient) UpdateDocument(
 	ctx context.Context, filter interface{}, update interface{},
 ) (*UpdateResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_document")
+	if traced {
+		defer span.End()
+	}
 	result, err := c.mongoCol.UpdateOne(ctx, filter, update)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_document_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			"failed to update document",
 			err,
 		).WithMetadata("filter", filter).WithMetadata("update", update)
+	}
+
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.Int64("db.matched_count", result.MatchedCount),
+			attribute.Int64("db.modified_count", result.ModifiedCount),
+		)
 	}
 
 	return &UpdateResult{
@@ -620,8 +693,20 @@ func (c *MongoDBClient) UpdateDocument(
 
 // InsertMany inserts multiple documents
 func (c *MongoDBClient) InsertMany(ctx context.Context, documents []interface{}) (*InsertManyResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.insert_many")
+	if traced {
+		defer span.End()
+	}
 	result, err := c.mongoCol.InsertMany(ctx, documents)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "insert_many_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewInsertError(
 			datastore.ProviderMongoDB,
 			"failed to insert documents",
@@ -638,13 +723,32 @@ func (c *MongoDBClient) InsertMany(ctx context.Context, documents []interface{})
 func (c *MongoDBClient) UpdateManyDocuments(
 	ctx context.Context, filter interface{}, update interface{},
 ) (*UpdateResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_many_documents")
+	if traced {
+		defer span.End()
+	}
 	result, err := c.mongoCol.UpdateMany(ctx, filter, update)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "update_many_documents_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			"failed to update documents",
 			err,
 		).WithMetadata("filter", filter).WithMetadata("update", update)
+	}
+
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.Int64("db.matched_count", result.MatchedCount),
+			attribute.Int64("db.modified_count", result.ModifiedCount),
+		)
 	}
 
 	return &UpdateResult{
@@ -659,16 +763,35 @@ func (c *MongoDBClient) UpdateManyDocuments(
 func (c *MongoDBClient) UpsertDocument(
 	ctx context.Context, filter interface{}, document interface{},
 ) (*UpdateResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.upsert_document")
+	if traced {
+		defer span.End()
+	}
 	opts := options.Update().SetUpsert(true)
 	update := bson.M{"$set": document}
 
 	result, err := c.mongoCol.UpdateOne(ctx, filter, update, opts)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "upsert_document_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewInsertError(
 			datastore.ProviderMongoDB,
 			"failed to upsert document",
 			err,
 		).WithMetadata("filter", filter).WithMetadata("document", document)
+	}
+
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.Int64("db.matched_count", result.MatchedCount),
+			attribute.Int64("db.upserted_count", result.UpsertedCount),
+		)
 	}
 
 	return &UpdateResult{
@@ -681,6 +804,10 @@ func (c *MongoDBClient) UpsertDocument(
 
 // FindOne finds a single document
 func (c *MongoDBClient) FindOne(ctx context.Context, filter interface{}, opts *FindOneOptions) (SingleResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.find_one")
+	if traced {
+		defer span.End()
+	}
 	mongoOpts := options.FindOne()
 
 	if opts != nil {
@@ -700,6 +827,10 @@ func (c *MongoDBClient) FindOne(ctx context.Context, filter interface{}, opts *F
 
 // Find finds multiple documents
 func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *FindOptions) (Cursor, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.find")
+	if traced {
+		defer span.End()
+	}
 	mongoOpts := options.Find()
 
 	if opts != nil {
@@ -719,7 +850,15 @@ func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *Find
 	resolvedFilter := resolveMongoFilter(filter)
 
 	cursor, err := c.mongoCol.Find(ctx, resolvedFilter, mongoOpts)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "find_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to execute find query",
@@ -732,6 +871,11 @@ func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *Find
 
 // CountDocuments counts documents matching the filter
 func (c *MongoDBClient) CountDocuments(ctx context.Context, filter interface{}, opts *CountOptions) (int64, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.count_documents")
+	if traced {
+		defer span.End()
+	}
+
 	mongoOpts := options.Count()
 
 	if opts != nil {
@@ -747,7 +891,15 @@ func (c *MongoDBClient) CountDocuments(ctx context.Context, filter interface{}, 
 	resolvedFilter := resolveMongoFilter(filter)
 
 	count, err := c.mongoCol.CountDocuments(ctx, resolvedFilter, mongoOpts)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "count_documents_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return 0, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to count documents",
@@ -755,11 +907,22 @@ func (c *MongoDBClient) CountDocuments(ctx context.Context, filter interface{}, 
 		).WithMetadata("filter", resolvedFilter)
 	}
 
+	if traced {
+		tracing.SetSpanAttributes(span,
+			attribute.Int64("db.count", count),
+		)
+	}
+
 	return count, nil
 }
 
 // Aggregate performs an aggregation query
 func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cursor, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.aggregate")
+	if traced {
+		defer span.End()
+	}
+
 	// Convert datastore.Pipeline to mongo.Pipeline if needed
 	var mongoPipeline interface{}
 
@@ -767,6 +930,13 @@ func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cu
 	case datastore.Pipeline:
 		convertedPipeline, err := ConvertAgnosticPipelineToMongo(p)
 		if err != nil {
+			if traced {
+				tracing.RecordError(span, err)
+				span.SetAttributes(
+					attribute.String("db.error.type", "aggregate_failed"),
+					attribute.String("db.error.message", err.Error()),
+				)
+			}
 			return nil, datastore.NewQueryError(
 				datastore.ProviderMongoDB,
 				"failed to convert pipeline",
@@ -781,7 +951,15 @@ func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cu
 	}
 
 	cursor, err := c.mongoCol.Aggregate(ctx, mongoPipeline)
+
 	if err != nil {
+		if traced {
+			tracing.RecordError(span, err)
+			span.SetAttributes(
+				attribute.String("db.error.type", "aggregate_failed"),
+				attribute.String("db.error.message", err.Error()),
+			)
+		}
 		return nil, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to execute aggregation",

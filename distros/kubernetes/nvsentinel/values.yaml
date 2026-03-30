@@ -117,6 +117,14 @@ global:
       # DCGM hostengine service port
       port: 5555
 
+  # OpenTelemetry tracing configuration
+  tracing:
+    enabled: false # Enable/disable tracing for all components
+    insecure: false # Set to true if the collector endpoint does not use TLS
+    # OTLP gRPC endpoint (host:port) where services send traces.
+    # Point this to your tracing backend's (Tempo, Jaeger, Zipkin, etc.) gRPC ingestion endpoint.
+    endpoint: ""
+
   # Audit logging configuration
   auditLogging:
     enabled: false  # Enable/disable audit logging for all components
@@ -301,3 +309,53 @@ podMonitor:
   # scrapeTimeout: ""  # Scrape timeout (defaults to Prometheus default if not specified)
   # metricsPath: "/metrics"  # Metrics path (defaults to /metrics)
   # labels: {}  # Additional labels for the PodMonitor resource
+
+# Tempo subchart configuration (only deployed when global.tempo.enabled=true)
+tempo:
+  tempo:
+    ingestion:
+      otlp:
+        grpc:
+          enabled: true
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+        min_ready_duration: 0s
+        final_sleep: 0s
+    retention: 720h  # 30 days
+  persistence:
+    enabled: true
+    size: 20Gi
+  service:
+    type: ClusterIP
+    ports:
+      otlp-grpc:
+        port: 4317
+      http:
+        port: 3200
+
+# Grafana subchart configuration (only deployed when global.grafana.enabled=true)
+grafana:
+  adminUser: admin
+  adminPassword: admin
+  persistence:
+    enabled: false
+  service:
+    type: ClusterIP
+    port: 3000
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Tempo
+          type: tempo
+          access: proxy
+          url: http://nvsentinel-tempo.nvsentinel.svc.cluster.local:3200
+          isDefault: true
+          jsonData:
+            httpMethod: GET
+            nodeGraph:
+              enabled: true
