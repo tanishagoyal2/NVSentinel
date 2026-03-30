@@ -659,41 +659,10 @@ func resolveMongoFilter(filter interface{}) interface{} {
 func (c *MongoDBClient) UpdateDocument(
 	ctx context.Context, filter interface{}, update interface{},
 ) (*UpdateResult, error) {
-	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_document")
-	if traced {
-		defer span.End()
-	}
-
-	result, err := c.mongoCol.UpdateOne(ctx, filter, update)
-	if err != nil {
-		if traced {
-			tracing.RecordError(span, err)
-			span.SetAttributes(
-				attribute.String("db.error.type", "update_document_failed"),
-				attribute.String("db.error.message", err.Error()),
-			)
-		}
-
-		return nil, datastore.NewUpdateError(
-			datastore.ProviderMongoDB,
-			"failed to update document",
-			err,
-		).WithMetadata("filter", filter).WithMetadata("update", update)
-	}
-
-	if traced {
-		tracing.SetSpanAttributes(span,
-			attribute.Int64("db.matched_count", result.MatchedCount),
-			attribute.Int64("db.modified_count", result.ModifiedCount),
-		)
-	}
-
-	return &UpdateResult{
-		MatchedCount:  result.MatchedCount,
-		ModifiedCount: result.ModifiedCount,
-		UpsertedCount: result.UpsertedCount,
-		UpsertedID:    result.UpsertedID,
-	}, nil
+	return c.executeUpdate(ctx, "db.update_document", filter, update,
+		func(ctx context.Context) (*mongo.UpdateResult, error) {
+			return c.mongoCol.UpdateOne(ctx, filter, update)
+		})
 }
 
 // InsertMany inserts multiple documents
@@ -729,24 +698,36 @@ func (c *MongoDBClient) InsertMany(ctx context.Context, documents []interface{})
 func (c *MongoDBClient) UpdateManyDocuments(
 	ctx context.Context, filter interface{}, update interface{},
 ) (*UpdateResult, error) {
-	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, "db.update_many_documents")
+	return c.executeUpdate(ctx, "db.update_many_documents", filter, update,
+		func(ctx context.Context) (*mongo.UpdateResult, error) {
+			return c.mongoCol.UpdateMany(ctx, filter, update)
+		})
+}
+
+// executeUpdate is the shared implementation for UpdateDocument and UpdateManyDocuments.
+func (c *MongoDBClient) executeUpdate(
+	ctx context.Context, spanName string,
+	filter interface{}, update interface{},
+	fn func(ctx context.Context) (*mongo.UpdateResult, error),
+) (*UpdateResult, error) {
+	ctx, span, traced := tracing.StartChildSpanIfParentTraceActive(ctx, spanName)
 	if traced {
 		defer span.End()
 	}
 
-	result, err := c.mongoCol.UpdateMany(ctx, filter, update)
+	result, err := fn(ctx)
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
 			span.SetAttributes(
-				attribute.String("db.error.type", "update_many_documents_failed"),
+				attribute.String("db.error.type", "update_document_failed"),
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
 
 		return nil, datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
-			"failed to update documents",
+			"failed to execute update",
 			err,
 		).WithMetadata("filter", filter).WithMetadata("update", update)
 	}
