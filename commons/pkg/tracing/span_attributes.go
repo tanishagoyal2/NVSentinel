@@ -36,6 +36,8 @@ func AddHealthEventStatusAttributes(
 		return
 	}
 
+	span.SetAttributes(attribute.String("health_event.id", eventId))
+
 	var attrs []attribute.KeyValue
 
 	addProtoMessageAttributes(&attrs, "health_event_status", healthEventStatus.ProtoReflect())

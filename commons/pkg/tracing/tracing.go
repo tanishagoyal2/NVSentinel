@@ -117,6 +117,7 @@ func ShutdownTracing(ctx context.Context) error {
 	if tracerProvider != nil {
 		return tracerProvider.Shutdown(ctx)
 	}
+
 	return nil
 }
 

@@ -447,8 +447,8 @@ func (c *MongoDBClient) UpdateDocumentStatus(
 				attribute.String("db.error.type", "update_document_status_failed"),
 				attribute.String("db.error.message", err.Error()),
 			)
-
 		}
+
 		return datastore.NewValidationError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("invalid document ID %s", documentID),
@@ -479,6 +479,7 @@ func (c *MongoDBClient) UpdateDocumentStatus(
 			attribute.String("db.status_path", statusPath),
 		)
 	}
+
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -487,6 +488,7 @@ func (c *MongoDBClient) UpdateDocumentStatus(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("failed to update document %s status at path %s", documentID, statusPath),
@@ -520,6 +522,7 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return datastore.NewValidationError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("invalid document ID %s", documentID),
@@ -529,7 +532,6 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 
 	filter := bson.M{"_id": objectID}
 	update := bson.M{"$set": fields}
-
 	_, err = c.mongoCol.UpdateOne(ctx, filter, update)
 
 	if traced {
@@ -537,6 +539,7 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 			attribute.String("db.document_id", documentID),
 		)
 	}
+
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -545,6 +548,7 @@ func (c *MongoDBClient) UpdateDocumentStatusFields(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			fmt.Sprintf("failed to update document %s fields", documentID),
@@ -659,8 +663,8 @@ func (c *MongoDBClient) UpdateDocument(
 	if traced {
 		defer span.End()
 	}
-	result, err := c.mongoCol.UpdateOne(ctx, filter, update)
 
+	result, err := c.mongoCol.UpdateOne(ctx, filter, update)
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -669,6 +673,7 @@ func (c *MongoDBClient) UpdateDocument(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			"failed to update document",
@@ -697,8 +702,8 @@ func (c *MongoDBClient) InsertMany(ctx context.Context, documents []interface{})
 	if traced {
 		defer span.End()
 	}
-	result, err := c.mongoCol.InsertMany(ctx, documents)
 
+	result, err := c.mongoCol.InsertMany(ctx, documents)
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -707,6 +712,7 @@ func (c *MongoDBClient) InsertMany(ctx context.Context, documents []interface{})
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewInsertError(
 			datastore.ProviderMongoDB,
 			"failed to insert documents",
@@ -727,8 +733,8 @@ func (c *MongoDBClient) UpdateManyDocuments(
 	if traced {
 		defer span.End()
 	}
-	result, err := c.mongoCol.UpdateMany(ctx, filter, update)
 
+	result, err := c.mongoCol.UpdateMany(ctx, filter, update)
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -737,6 +743,7 @@ func (c *MongoDBClient) UpdateManyDocuments(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewUpdateError(
 			datastore.ProviderMongoDB,
 			"failed to update documents",
@@ -767,11 +774,11 @@ func (c *MongoDBClient) UpsertDocument(
 	if traced {
 		defer span.End()
 	}
+
 	opts := options.Update().SetUpsert(true)
 	update := bson.M{"$set": document}
 
 	result, err := c.mongoCol.UpdateOne(ctx, filter, update, opts)
-
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -780,6 +787,7 @@ func (c *MongoDBClient) UpsertDocument(
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewInsertError(
 			datastore.ProviderMongoDB,
 			"failed to upsert document",
@@ -808,6 +816,7 @@ func (c *MongoDBClient) FindOne(ctx context.Context, filter interface{}, opts *F
 	if traced {
 		defer span.End()
 	}
+
 	mongoOpts := options.FindOne()
 
 	if opts != nil {
@@ -831,6 +840,7 @@ func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *Find
 	if traced {
 		defer span.End()
 	}
+
 	mongoOpts := options.Find()
 
 	if opts != nil {
@@ -850,7 +860,6 @@ func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *Find
 	resolvedFilter := resolveMongoFilter(filter)
 
 	cursor, err := c.mongoCol.Find(ctx, resolvedFilter, mongoOpts)
-
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -859,6 +868,7 @@ func (c *MongoDBClient) Find(ctx context.Context, filter interface{}, opts *Find
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to execute find query",
@@ -891,7 +901,6 @@ func (c *MongoDBClient) CountDocuments(ctx context.Context, filter interface{}, 
 	resolvedFilter := resolveMongoFilter(filter)
 
 	count, err := c.mongoCol.CountDocuments(ctx, resolvedFilter, mongoOpts)
-
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -900,6 +909,7 @@ func (c *MongoDBClient) CountDocuments(ctx context.Context, filter interface{}, 
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return 0, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to count documents",
@@ -937,6 +947,7 @@ func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cu
 					attribute.String("db.error.message", err.Error()),
 				)
 			}
+
 			return nil, datastore.NewQueryError(
 				datastore.ProviderMongoDB,
 				"failed to convert pipeline",
@@ -951,7 +962,6 @@ func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cu
 	}
 
 	cursor, err := c.mongoCol.Aggregate(ctx, mongoPipeline)
-
 	if err != nil {
 		if traced {
 			tracing.RecordError(span, err)
@@ -960,6 +970,7 @@ func (c *MongoDBClient) Aggregate(ctx context.Context, pipeline interface{}) (Cu
 				attribute.String("db.error.message", err.Error()),
 			)
 		}
+
 		return nil, datastore.NewQueryError(
 			datastore.ProviderMongoDB,
 			"failed to execute aggregation",
