@@ -220,7 +220,7 @@ The analyzer has per-rule enable switches in Helm values that flow into a Config
 ## Benefits
 
 - **Fleet-wide visibility** of feature toggles from a single Grafana dashboard or PromQL query.
-- **Obervability surface** list down the clusters where circuit breaker is disabled or janitor is running in manual mode etc
+- **Observability surface** list down the clusters where circuit breaker is disabled or janitor is running in manual mode etc.
 - **Low cardinality** — only `service × flag` label pairs; bounded and predictable.
 
 ---
