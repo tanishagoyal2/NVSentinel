@@ -54,18 +54,6 @@ const (
 	OperationStatusSkipped   = "skipped"
 )
 
-// Service name constants for the span_ids map (in healtheventstatus). Each service writes its own key
-// and reads its parent's key to establish parent-child trace relationships.
-const (
-	ServicePlatformConnector    = "platform_connector"
-	ServiceStoreClient          = "store_client"
-	ServiceFaultQuarantine      = "fault_quarantine"
-	ServiceNodeDrainer          = "node_drainer"
-	ServiceFaultRemediation     = "fault_remediation"
-	ServiceHealthEventsAnalyzer = "health_events_analyzer"
-	ServiceEventExporter        = "event_exporter"
-)
-
 // InitTracing initializes OpenTelemetry tracing with OTLP gRPC exporter.
 func InitTracing(serviceName string) error {
 	res, err := resource.New(
