@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package tracing provides OpenTelemetry distributed tracing utilities for all services.
+// It initializes an OTLP gRPC exporter from standard OTel environment variables, offers helpers
+// for starting spans with trace-context propagation across async boundaries (ring buffers,
+// change streams), and includes a conditional HTTP round tripper that instruments outbound
+// API calls only when an active trace is present.
 package tracing
 
 import (
@@ -58,7 +63,7 @@ const (
 	ServiceEventExporter        = "event_exporter"
 )
 
-// InitTracing initializes OpenTelemetry tracing with OTLP exporter.
+// InitTracing initializes OpenTelemetry tracing with OTLP gRPC exporter.
 func InitTracing(serviceName string) error {
 	res, err := resource.New(
 		context.Background(),
@@ -70,29 +75,25 @@ func InitTracing(serviceName string) error {
 		return fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	if otlpEndpoint == "" {
+	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if endpoint == "" {
 		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT is not configured")
 	}
 
-	otlpInsecure := os.Getenv("OTEL_EXPORTER_OTLP_INSECURE") == "true"
+	var opts []otlptracegrpc.Option
 
-	var exporter sdktrace.SpanExporter
-
-	opts := []otlptracegrpc.Option{
-		otlptracegrpc.WithEndpoint(otlpEndpoint),
-	}
-
-	if otlpInsecure {
+	if os.Getenv("OTEL_EXPORTER_OTLP_INSECURE") == "true" {
 		opts = append(opts, otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()))
 	}
 
-	otlpExporter, err := otlptracegrpc.New(context.Background(), opts...)
+	exporter, err := otlptracegrpc.New(context.Background(), opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
-	exporter = otlpExporter
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		slog.Warn("OpenTelemetry export error", "error", err)
+	}))
 
 	tracerProvider = sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
@@ -108,7 +109,7 @@ func InitTracing(serviceName string) error {
 
 	tracer = otel.Tracer(serviceName)
 
-	slog.Info("OpenTelemetry tracing initialized", "endpoint", otlpEndpoint)
+	slog.Info("OpenTelemetry tracing initialized", "endpoint", endpoint)
 
 	return nil
 }
