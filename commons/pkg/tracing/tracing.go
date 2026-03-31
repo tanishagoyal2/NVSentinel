@@ -38,8 +38,9 @@ import (
 )
 
 var (
-	tracerProvider *sdktrace.TracerProvider
-	tracer         trace.Tracer
+	tracerProvider          *sdktrace.TracerProvider
+	childOnlyTracerProvider *sdktrace.TracerProvider
+	tracer                  trace.Tracer
 )
 
 // MetadataKeyTraceID is the key used to store the trace ID in the health event's
@@ -53,6 +54,8 @@ const (
 	OperationStatusSkipped   = "skipped"
 )
 
+// Service name constants for the span_ids map (in healtheventstatus). Each service writes its own key
+// and reads its parent's key to establish parent-child trace relationships.
 const (
 	ServicePlatformConnector    = "platform_connector"
 	ServiceStoreClient          = "store_client"
@@ -100,6 +103,16 @@ func InitTracing(serviceName string) error {
 		sdktrace.WithResource(res),
 	)
 
+	// Separate provider for driver-level DB instrumentation (otelmongo, otelsql).
+	// ParentBased(NeverSample()) only records spans that have a sampled parent,
+	// preventing standalone root traces from background operations like change
+	// stream getMore polling and listCollections.
+	childOnlyTracerProvider = sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
+	)
+
 	otel.SetTracerProvider(tracerProvider)
 
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
@@ -114,7 +127,14 @@ func InitTracing(serviceName string) error {
 	return nil
 }
 
+// ShutdownTracing flushes pending spans and shuts down all tracer providers.
+// Call this during service shutdown to
+// ensure all buffered spans are exported before the process exits.
 func ShutdownTracing(ctx context.Context) error {
+	if childOnlyTracerProvider != nil {
+		_ = childOnlyTracerProvider.Shutdown(ctx)
+	}
+
 	if tracerProvider != nil {
 		return tracerProvider.Shutdown(ctx)
 	}
@@ -122,6 +142,22 @@ func ShutdownTracing(ctx context.Context) error {
 	return nil
 }
 
+// GetChildOnlyTracerProvider returns a TracerProvider that only records spans
+// when a sampled parent span exists in the context. Use this for driver-level
+// database instrumentation (otelmongo, otelsql) to avoid generating standalone
+// root traces from background operations (e.g. change stream polling, health checks).
+// Falls back to the global TracerProvider if tracing has not been initialized.
+func GetChildOnlyTracerProvider() trace.TracerProvider {
+	if childOnlyTracerProvider != nil {
+		return childOnlyTracerProvider
+	}
+
+	return otel.GetTracerProvider()
+}
+
+// GetTracer returns the package-level tracer initialized by InitTracing.
+// If tracing has not been initialized, returns a no-op tracer that silently
+// discards all spans.
 func GetTracer() trace.Tracer {
 	if tracer == nil {
 		// Return a no-op tracer if not initialized
@@ -131,6 +167,8 @@ func GetTracer() trace.Tracer {
 	return tracer
 }
 
+// StartSpan creates a new span with the given name. If ctx carries a parent span,
+// the new span becomes its child. Returns the updated context and the span.
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return GetTracer().Start(ctx, name, opts...)
 }
@@ -278,6 +316,7 @@ func SpanIDFromSpan(span trace.Span) string {
 	return sc.SpanID().String()
 }
 
+// TraceIDFromMetadata extracts the trace ID from a health event's Metadata map.
 func TraceIDFromMetadata(metadata map[string]string) string {
 	if metadata == nil {
 		return ""
@@ -286,6 +325,9 @@ func TraceIDFromMetadata(metadata map[string]string) string {
 	return metadata[MetadataKeyTraceID]
 }
 
+// ParentSpanID looks up the span ID written by parentService in the span_ids
+// map stored in the healthEventStatus. Used to establish parent-child trace
+// relationships across services.
 func ParentSpanID(spanIDs map[string]string, parentService string) string {
 	if spanIDs == nil {
 		return ""
@@ -294,15 +336,18 @@ func ParentSpanID(spanIDs map[string]string, parentService string) string {
 	return spanIDs[parentService]
 }
 
+// SetSpanAttributes attaches one or more key-value attributes to the given span.
 func SetSpanAttributes(span trace.Span, attrs ...attribute.KeyValue) {
 	span.SetAttributes(attrs...)
 }
 
+// RecordError records the error as a span event and sets the span status to Error.
 func RecordError(span trace.Span, err error, opts ...trace.EventOption) {
 	span.RecordError(err, opts...)
 	span.SetStatus(codes.Error, err.Error())
 }
 
+// SpanFromContext returns the active span stored in ctx, or a no-op span if none exists.
 func SpanFromContext(ctx context.Context) trace.Span {
 	return trace.SpanFromContext(ctx)
 }
