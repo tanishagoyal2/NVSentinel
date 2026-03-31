@@ -27,8 +27,10 @@ import (
 	pb "github.com/nvidia/nvsentinel/data-models/pkg/protos"
 )
 
-const maxAttrValueLen = 250
+const timestampFullName protoreflect.FullName = "google.protobuf.Timestamp"
 
+// AddHealthEventStatusAttributes adds all HealthEventStatus fields to a span as attributes
+// using protobuf reflection. The eventId is added separately since it lives on the parent document.
 func AddHealthEventStatusAttributes(
 	span trace.Span, healthEventStatus *pb.HealthEventStatus, eventId string,
 ) {
@@ -45,7 +47,6 @@ func AddHealthEventStatusAttributes(
 }
 
 // AddHealthEventAttributes adds all HealthEvent fields to a span as attributes.
-// Uses protobuf reflection to automatically include any newly added proto fields.
 func AddHealthEventAttributes(span trace.Span, event *pb.HealthEvent) {
 	if span == nil || event == nil {
 		return
@@ -89,11 +90,11 @@ func addScalarAttribute(
 	attrs *[]attribute.KeyValue, key string,
 	fd protoreflect.FieldDescriptor, val protoreflect.Value,
 ) {
-	switch fd.Kind() { //nolint:exhaustive // only scalar kinds handled here
+	switch fd.Kind() {
 	case protoreflect.BoolKind:
 		*attrs = append(*attrs, attribute.Bool(key, val.Bool()))
 	case protoreflect.StringKind:
-		*attrs = append(*attrs, attribute.String(key, truncateString(val.String())))
+		*attrs = append(*attrs, attribute.String(key, val.String()))
 	case protoreflect.EnumKind:
 		enumVal := fd.Enum().Values().ByNumber(val.Enum())
 
@@ -109,32 +110,26 @@ func addScalarAttribute(
 		*attrs = append(*attrs, attribute.Int64(key, val.Int()))
 	case protoreflect.Uint32Kind, protoreflect.Uint64Kind,
 		protoreflect.Fixed32Kind, protoreflect.Fixed64Kind:
-		*attrs = append(*attrs, attribute.Int64(key, int64(val.Uint()))) //nolint:gosec // acceptable for tracing
+		*attrs = append(*attrs, attribute.Int64(key, int64(val.Uint()))) //nolint:gosec
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		*attrs = append(*attrs, attribute.Float64(key, val.Float()))
+	case protoreflect.BytesKind, protoreflect.MessageKind, protoreflect.GroupKind:
 	}
 }
-
-const (
-	timestampFullName protoreflect.FullName = "google.protobuf.Timestamp"
-	boolValueFullName protoreflect.FullName = "google.protobuf.BoolValue"
-)
 
 func addMessageAttribute(
 	attrs *[]attribute.KeyValue, key string, msg protoreflect.Message,
 ) {
-	switch msg.Descriptor().FullName() {
-	case timestampFullName:
+	if msg.Descriptor().FullName() == timestampFullName {
 		seconds := msg.Get(msg.Descriptor().Fields().ByName("seconds")).Int()
 		nanos := msg.Get(msg.Descriptor().Fields().ByName("nanos")).Int()
 		t := time.Unix(seconds, nanos).UTC()
 		*attrs = append(*attrs, attribute.String(key, t.Format(time.RFC3339Nano)))
-	case boolValueFullName:
-		val := msg.Get(msg.Descriptor().Fields().ByName("value")).Bool()
-		*attrs = append(*attrs, attribute.Bool(key, val))
-	default:
-		addProtoMessageAttributes(attrs, key, msg)
+
+		return
 	}
+
+	addProtoMessageAttributes(attrs, key, msg)
 }
 
 func addMapAttributes(
@@ -144,7 +139,7 @@ func addMapAttributes(
 	valDesc := fd.MapValue()
 
 	m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
-		mapKey := prefix + "." + sanitizeAttributeKey(k.String())
+		mapKey := prefix + "." + k.String()
 		addScalarAttribute(attrs, mapKey, valDesc, v)
 
 		return true
@@ -163,8 +158,8 @@ func addListAttributes(
 		if keyFd, valFd, ok := detectKeyValueMessage(fd.Message()); ok {
 			for i := 0; i < list.Len(); i++ {
 				elemMsg := list.Get(i).Message()
-				k := sanitizeAttributeKey(elemMsg.Get(keyFd).String())
-				v := truncateString(elemMsg.Get(valFd).String())
+				k := elemMsg.Get(keyFd).String()
+				v := elemMsg.Get(valFd).String()
 				*attrs = append(*attrs, attribute.String(prefix+"."+k, v))
 			}
 
@@ -199,14 +194,6 @@ func detectKeyValueMessage(
 	return keyField, valField, true
 }
 
-func truncateString(s string) string {
-	if len(s) > maxAttrValueLen {
-		return s[:maxAttrValueLen-3] + "..."
-	}
-
-	return s
-}
-
 func camelToSnakeCase(s string) string {
 	var result strings.Builder
 
@@ -223,46 +210,4 @@ func camelToSnakeCase(s string) string {
 	}
 
 	return result.String()
-}
-
-// sanitizeAttributeKey ensures the key is valid for OpenTelemetry attributes.
-// OTel attribute keys must match [a-zA-Z][a-zA-Z0-9_.-]*; invalid characters
-// are replaced with underscores.
-func sanitizeAttributeKey(key string) string {
-	if key == "" {
-		return "_"
-	}
-
-	var sanitized strings.Builder
-
-	for i, r := range key {
-		sanitized.WriteRune(sanitizeRune(r, i == 0))
-	}
-
-	result := sanitized.String()
-	if result == "" {
-		return "_"
-	}
-
-	return result
-}
-
-func isLetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
-
-func isValidAttrKeyRune(r rune) bool {
-	return isLetter(r) || (r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-'
-}
-
-func sanitizeRune(r rune, isFirst bool) rune {
-	if isFirst && isLetter(r) {
-		return r
-	}
-
-	if !isFirst && isValidAttrKeyRune(r) {
-		return r
-	}
-
-	return '_'
 }
