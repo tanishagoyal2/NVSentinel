@@ -198,7 +198,7 @@ func StartSpanFromTraceID(
 func StartSpanFromTraceContext(
 	ctx context.Context, traceID, parentSpanID, name string, opts ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-	if traceID == "" {
+	if traceID == "" || traceID == "00000000000000000000000000000000" {
 		return StartSpan(ctx, name, opts...)
 	}
 
@@ -247,7 +247,7 @@ func StartSpanWithLinkFromTraceContext(
 	traceID, parentSpanID, name string,
 	opts ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-	if traceID == "" {
+	if traceID == "" || traceID == "00000000000000000000000000000000" {
 		return StartSpan(ctx, name, opts...)
 	}
 
