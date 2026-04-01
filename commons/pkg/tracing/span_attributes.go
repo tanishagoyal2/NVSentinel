@@ -16,9 +16,6 @@ package tracing
 
 import (
 	"fmt"
-	"strings"
-	"time"
-	"unicode"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -44,13 +41,6 @@ func AddHealthEventStatusAttributes(span trace.Span, healthEventStatus *pb.Healt
 
 	attrs = append(attrs, attribute.String("health_event_status.node_quarantined", nodeQuarantined))
 
-	quarantineFinishTs := ""
-	if healthEventStatus.QuarantineFinishTimestamp != nil {
-		quarantineFinishTs = healthEventStatus.QuarantineFinishTimestamp.AsTime().Format(time.RFC3339Nano)
-	}
-
-	attrs = append(attrs, attribute.String("health_event_status.quarantine_finish_timestamp", quarantineFinishTs))
-
 	if healthEventStatus.UserPodsEvictionStatus != nil {
 		attrs = append(attrs,
 			attribute.String("health_event_status.user_pod_eviction.status",
@@ -60,26 +50,12 @@ func AddHealthEventStatusAttributes(span trace.Span, healthEventStatus *pb.Healt
 		)
 	}
 
-	drainFinishTs := ""
-	if healthEventStatus.DrainFinishTimestamp != nil {
-		drainFinishTs = healthEventStatus.DrainFinishTimestamp.AsTime().Format(time.RFC3339Nano)
-	}
-
-	attrs = append(attrs, attribute.String("health_event_status.drain_finish_timestamp", drainFinishTs))
-
 	faultRemediated := false
 	if healthEventStatus.FaultRemediated != nil {
 		faultRemediated = healthEventStatus.FaultRemediated.GetValue()
 	}
 
 	attrs = append(attrs, attribute.Bool("health_event_status.fault_remediated", faultRemediated))
-
-	lastRemediationTs := ""
-	if healthEventStatus.LastRemediationTimestamp != nil {
-		lastRemediationTs = healthEventStatus.LastRemediationTimestamp.AsTime().Format(time.RFC3339Nano)
-	}
-
-	attrs = append(attrs, attribute.String("health_event_status.last_remediation_timestamp", lastRemediationTs))
 
 	span.SetAttributes(attrs...)
 }
@@ -94,16 +70,12 @@ func AddHealthEventAttributes(span trace.Span, event *pb.HealthEvent) {
 	attrs := []attribute.KeyValue{}
 
 	attrs = append(attrs,
-		attribute.Int("health_event.version", int(event.Version)),
 		attribute.String("health_event.agent", event.Agent),
-		attribute.String("health_event.component_class", event.ComponentClass),
 		attribute.String("health_event.check_name", event.CheckName),
 		attribute.Bool("health_event.is_fatal", event.IsFatal),
 		attribute.Bool("health_event.is_healthy", event.IsHealthy),
 		attribute.String("health_event.node_name", event.NodeName),
-		attribute.String("health_event.id", event.Id),
 		attribute.String("health_event.recommended_action", event.RecommendedAction.String()),
-		attribute.String("health_event.processing_strategy", event.ProcessingStrategy.String()),
 	)
 
 	attrs = append(attrs, attribute.String("health_event.message", event.Message))
@@ -123,51 +95,5 @@ func AddHealthEventAttributes(span trace.Span, event *pb.HealthEvent) {
 		}
 	}
 
-	// metadata map: health_event.metadata.serial_number="1655123000632", ...
-	for key, value := range event.Metadata {
-		attrKey := fmt.Sprintf("health_event.metadata.%s", camelToSnakeCase(key))
-
-		attrs = append(attrs, attribute.String(attrKey, value))
-	}
-
-	if event.QuarantineOverrides != nil {
-		attrs = append(attrs,
-			attribute.Bool("health_event.quarantine_overrides.force", event.QuarantineOverrides.Force),
-			attribute.Bool("health_event.quarantine_overrides.skip", event.QuarantineOverrides.Skip),
-		)
-	}
-
-	if event.DrainOverrides != nil {
-		attrs = append(attrs,
-			attribute.Bool("health_event.drain_overrides.force", event.DrainOverrides.Force),
-			attribute.Bool("health_event.drain_overrides.skip", event.DrainOverrides.Skip),
-		)
-	}
-
-	if event.GeneratedTimestamp != nil {
-		attrs = append(attrs,
-			attribute.String("health_event.generated_timestamp",
-				event.GeneratedTimestamp.AsTime().Format(time.RFC3339Nano)),
-		)
-	}
-
 	span.SetAttributes(attrs...)
-}
-
-func camelToSnakeCase(s string) string {
-	var result strings.Builder
-
-	for i, r := range s {
-		if unicode.IsUpper(r) {
-			if i > 0 {
-				result.WriteByte('_')
-			}
-
-			result.WriteRune(unicode.ToLower(r))
-		} else {
-			result.WriteRune(r)
-		}
-	}
-
-	return result.String()
 }

@@ -26,16 +26,22 @@ type TraceContextHandler struct {
 	inner slog.Handler
 }
 
-// NewTraceContextHandler returns a handler that delegates to inner after
-// optionally attaching trace_id and span_id from ctx.
+// NewTraceContextHandler wraps inner with trace-context enrichment. Every log
+// record whose context carries a valid OpenTelemetry span will have "trace_id"
+// and "span_id" string attributes appended before the record reaches inner.
+// If the context has no active span, the record is forwarded unchanged.
 func NewTraceContextHandler(inner slog.Handler) *TraceContextHandler {
 	return &TraceContextHandler{inner: inner}
 }
 
+// Enabled reports whether the inner handler is enabled for the given level.
+// The trace-context decoration does not affect level filtering.
 func (h *TraceContextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.inner.Enabled(ctx, level)
 }
 
+// Handle enriches the record with trace_id and span_id from the active span in
+// ctx (if any) and delegates to the inner handler.
 func (h *TraceContextHandler) Handle(ctx context.Context, r slog.Record) error {
 	span := trace.SpanFromContext(ctx)
 	if span.SpanContext().IsValid() {
@@ -48,17 +54,21 @@ func (h *TraceContextHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.inner.Handle(ctx, r)
 }
 
+// WithAttrs returns a new TraceContextHandler whose inner handler includes the
+// given attributes. Trace-context enrichment is preserved in the returned handler.
 func (h *TraceContextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &TraceContextHandler{inner: h.inner.WithAttrs(attrs)}
 }
 
+// WithGroup returns a new TraceContextHandler whose inner handler opens a new
+// group with the given name. Trace-context enrichment is preserved in the
+// returned handler.
 func (h *TraceContextHandler) WithGroup(name string) slog.Handler {
 	return &TraceContextHandler{inner: h.inner.WithGroup(name)}
 }
 
-// NewStructuredLoggerWithTraceCorrelation is like NewStructuredLogger but wraps
-// the JSON handler with TraceContextHandler so slog.InfoContext(ctx, ...) lines
-// include trace_id and span_id when ctx carries an active span.
+// NewStructuredLoggerWithTraceCorrelation creates a JSON logger on stderr
+// wrapped with TraceContextHandler for automatic log-trace correlation.
 func NewStructuredLoggerWithTraceCorrelation(module, version, level string) *slog.Logger {
 	lev := ParseLogLevel(level)
 	addSource := lev <= slog.LevelDebug
