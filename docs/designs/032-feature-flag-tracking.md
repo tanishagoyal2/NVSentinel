@@ -13,7 +13,7 @@ Today, there is no single fleet-wide view of which features are active on which 
 
 Expose selected runtime toggles as a **Prometheus gauge metric** — `nvsentinel_feature_flag_enabled` — from every NVSentinel component that owns configurable behaviour. A shared library in `commons/pkg/featureflags` provides a consistent registration and reporting pattern across all services.
 
-This lets operators query feature state fleet-wide via Prometheus/Grafana and can quickly check what all features are enabled or not cluster wise.
+This lets operators query feature state fleet-wide via Prometheus/Grafana and quickly check which features are enabled or disabled cluster-wide.
 
 ## Approach
 
@@ -21,7 +21,7 @@ This lets operators query feature state fleet-wide via Prometheus/Grafana and ca
 
 Each component already exposes `/metrics` (typically port `2112`; some sidecars or controller-runtime apps differ). We register one vector gauge:
 
-```
+```promql
 nvsentinel_feature_flag_enabled{service="<component>", flag="<snake_case>"} 0|1
 ```
 
@@ -220,7 +220,7 @@ The analyzer has per-rule enable switches in Helm values that flow into a Config
 ## Benefits
 
 - **Fleet-wide visibility** of feature toggles from a single Grafana dashboard or PromQL query.
-- **Observability surface** list down the clusters where circuit breaker is disabled or janitor is running in manual mode etc.
+- **Observability surface** to identify clusters where the circuit breaker is disabled or janitor is running in manual mode.
 - **Low cardinality** — only `service × flag` label pairs; bounded and predictable.
 
 ---
