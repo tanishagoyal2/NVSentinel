@@ -27,8 +27,10 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/nvidia/nvsentinel/commons/pkg/auditlogger"
+
 	"github.com/nvidia/nvsentinel/commons/pkg/flags"
 	"github.com/nvidia/nvsentinel/commons/pkg/logger"
+	metrics "github.com/nvidia/nvsentinel/commons/pkg/metrics"
 	"github.com/nvidia/nvsentinel/commons/pkg/server"
 	"github.com/nvidia/nvsentinel/fault-quarantine/pkg/initializer"
 )
@@ -67,6 +69,10 @@ func run() error {
 	metricsPort, databaseClientCertMountPath, kubeconfigPath, dryRun, circuitBreakerEnabled,
 		tomlConfigPath := parseFlags()
 
+	ff := metrics.NewRegistry("fault-quarantine")
+	ff.Set("dry_run", *dryRun)
+	ff.Set("circuit_breaker", *circuitBreakerEnabled)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -92,6 +98,10 @@ func run() error {
 	components, err := initializer.InitializeAll(ctx, params)
 	if err != nil {
 		return fmt.Errorf("initialization failed: %w", err)
+	}
+
+	for _, rs := range components.TomlConfig.RuleSets {
+		ff.Set(metrics.ToSnakeCase(rs.Name), rs.Enabled)
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
