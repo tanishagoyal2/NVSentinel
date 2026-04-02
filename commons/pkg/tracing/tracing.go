@@ -48,6 +48,10 @@ var (
 // downstream event consumers are linked to same trace.
 const MetadataKeyTraceID = "trace_id"
 
+// defaultTraceID is the hex representation of the zero-value OpenTelemetry trace ID,
+// which is present when the context doesn't carry trace info.
+var defaultTraceID = trace.TraceID{}.String()
+
 const (
 	OperationStatusThrottled = "throttled"
 	OperationStatusCancelled = "cancelled"
@@ -198,7 +202,7 @@ func StartSpanFromTraceID(
 func StartSpanFromTraceContext(
 	ctx context.Context, traceID, parentSpanID, name string, opts ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-	if traceID == "" || traceID == "00000000000000000000000000000000" {
+	if traceID == "" || traceID == defaultTraceID {
 		return StartSpan(ctx, name, opts...)
 	}
 
@@ -247,7 +251,7 @@ func StartSpanWithLinkFromTraceContext(
 	traceID, parentSpanID, name string,
 	opts ...trace.SpanStartOption,
 ) (context.Context, trace.Span) {
-	if traceID == "" || traceID == "00000000000000000000000000000000" {
+	if traceID == "" || traceID == defaultTraceID {
 		return StartSpan(ctx, name, opts...)
 	}
 
