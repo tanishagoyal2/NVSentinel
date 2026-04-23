@@ -180,19 +180,11 @@ func (w *EventWatcher) processEvent(ctx context.Context, event client.Event) err
 	traceID := tracing.TraceIDFromMetadata(healthEventWithStatus.HealthEvent.GetMetadata())
 	parentSpanID := tracing.ParentSpanID(healthEventWithStatus.HealthEventStatus.SpanIds, tracing.ServicePlatformConnector)
 
-	// Short-lived span that marks the exact moment fault-quarantine received the
-	// event. It ends immediately so it appears in the trace backend before
-	// processing finishes, making it easy to see ingestion-to-processing latency.
 	ctx, receivedSpan := tracing.StartSpanWithLinkFromTraceContext(ctx, traceID,
 		parentSpanID, "fault_quarantine.event_received")
+
 	tracing.AddHealthEventStatusAttributes(receivedSpan, healthEventWithStatus.HealthEventStatus, eventID)
-
-	receivedSpan.End()
-
-	// Processing span wraps the callback and subsequent DB status update so they
-	// share the same trace context.
-	ctx, processSpan := tracing.StartSpan(ctx, "fault_quarantine.process_event")
-	defer processSpan.End()
+	defer receivedSpan.End()
 
 	startTime := time.Now()
 
