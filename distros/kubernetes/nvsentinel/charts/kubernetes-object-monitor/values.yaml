@@ -60,8 +60,10 @@ policies:
       #   force: true  # Force immediate pod eviction regardless of namespace drain mode.
       #   skip: true   # Skip pod eviction and mark the event as already drained.
 
+  # Detects when NPD reports that XFS forcibly shut down a filesystem after a
+  # serious filesystem or storage error.
   - name: NPDXfsShutdown
-    enabled: true
+    enabled: false
     resource:
       group: ""
       version: v1
@@ -80,8 +82,10 @@ policies:
       errorCode:
         - NPD_XFS_SHUTDOWN
 
+  # Detects an NPD-reported fatal UEFI CPER indicating an uncorrectable
+  # platform hardware failure, such as a CPU, memory, or PCIe failure.
   - name: NPDCperHardwareErrorFatal
-    enabled: true
+    enabled: false
     resource:
       group: ""
       version: v1
@@ -100,8 +104,10 @@ policies:
       errorCode:
         - NPD_CPER_HARDWARE_ERROR_FATAL
 
+  # Detects when NPD reports that a filesystem was remounted read-only,
+  # preventing writes.
   - name: NPDReadonlyFilesystem
-    enabled: true
+    enabled: false
     resource:
       group: ""
       version: v1
