@@ -60,6 +60,66 @@ policies:
       #   force: true  # Force immediate pod eviction regardless of namespace drain mode.
       #   skip: true   # Skip pod eviction and mark the event as already drained.
 
+  - name: NPDXfsShutdown
+    enabled: true
+    resource:
+      group: ""
+      version: v1
+      kind: Node
+    predicate:
+      expression: |
+        resource.status.conditions.exists(c,
+          c.type == "XfsShutdown" &&
+          c.status == "True" &&
+          c.reason == "XfsHasShutdown")
+    healthEvent:
+      componentClass: Node
+      isFatal: true
+      message: "NPD reported an XFS filesystem shutdown"
+      recommendedAction: REPLACE_VM
+      errorCode:
+        - NPD_XFS_SHUTDOWN
+
+  - name: NPDCperHardwareErrorFatal
+    enabled: true
+    resource:
+      group: ""
+      version: v1
+      kind: Node
+    predicate:
+      expression: |
+        resource.status.conditions.exists(c,
+          c.type == "CperHardwareErrorFatal" &&
+          c.status == "True" &&
+          c.reason == "CperHardwareErrorFatal")
+    healthEvent:
+      componentClass: Node
+      isFatal: true
+      message: "NPD reported a fatal CPER hardware error"
+      recommendedAction: REPLACE_VM
+      errorCode:
+        - NPD_CPER_HARDWARE_ERROR_FATAL
+
+  - name: NPDReadonlyFilesystem
+    enabled: true
+    resource:
+      group: ""
+      version: v1
+      kind: Node
+    predicate:
+      expression: |
+        resource.status.conditions.exists(c,
+          c.type == "ReadonlyFilesystem" &&
+          c.status == "True" &&
+          c.reason == "FilesystemIsReadOnly")
+    healthEvent:
+      componentClass: Node
+      isFatal: true
+      message: "NPD reported a read-only filesystem"
+      recommendedAction: REPLACE_VM
+      errorCode:
+        - NPD_READONLY_FILESYSTEM
+
   # Example: Monitor a custom resource (e.g., a GPU Job)
   # Uncomment and modify to monitor your own custom resources
   #
