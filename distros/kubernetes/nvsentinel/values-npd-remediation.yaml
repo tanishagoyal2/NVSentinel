@@ -35,7 +35,7 @@
 # Helm replaces lists rather than merging their entries. Applying this overlay
 # replaces any previously configured KOM policy list, including custom
 # policies. Before each install or upgrade, add every policy that must be
-# retained to the list below. The default node-not-ready policy is repeated
+# retained to the list below. The default ReplaceNotReadyNode policy is repeated
 # here so applying this overlay preserves it.
 # --------------------------------------------------------------------------
 
@@ -45,7 +45,7 @@ global:
 
 kubernetes-object-monitor:
   policies:
-    - name: node-not-ready
+    - name: ReplaceNotReadyNode
       enabled: true
       resource:
         group: ""
@@ -53,14 +53,19 @@ kubernetes-object-monitor:
         kind: Node
       predicate:
         expression: |
-          resource.status.conditions.filter(c, c.type == "Ready" && c.status == "False").size() > 0
+          resource.status.conditions.exists(c,
+            c.type == "Ready"
+            && c.status != "True"
+            && timestamp(c.lastTransitionTime) + duration("7200s") < now)
       healthEvent:
         componentClass: Node
         isFatal: true
-        message: "Node is not ready"
-        recommendedAction: CONTACT_SUPPORT
+        message: "Node has been in NotReady state for an extended period and needs to be replaced"
+        recommendedAction: REPLACE_VM
         errorCode:
-          - NODE_NOT_READY
+          - NODE_NOT_READY_TIMEOUT
+        drainOverrides:
+          skip: true
 
     # Detects when NPD reports that XFS forcibly shut down a filesystem after a
     # serious filesystem or storage error.

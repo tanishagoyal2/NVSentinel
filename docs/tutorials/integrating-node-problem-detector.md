@@ -17,6 +17,9 @@ By the end you will have:
 > **Who is this for?** Cluster administrators who run NVSentinel and want to
 > consume permanent Node Conditions produced by NPD.
 
+> **Just want the AI to do it?** Jump to
+> [Appendix: One-shot AI prompt](#appendix-one-shot-ai-prompt).
+
 > **Safety:** The opt-in NPD policies recommend `REPLACE_VM`. Validate them
 > only in a non-production cluster or while downstream quarantine and
 > remediation components are disabled. Inject test messages only on a
@@ -71,12 +74,13 @@ For the design rationale and limitations, see
 
 ---
 
-## 2. Check for an existing NPD DaemonSet
+## 2. Install NPD if not already present
 
-This tutorial covers NPD deployed as a Kubernetes DaemonSet. Some managed
-Kubernetes providers run NPD as a host service instead; follow the provider's
-documentation for those installations. Do not install a second copy because
-multiple NPD instances can compete to own the same Node Conditions.
+The following instructions cover deploying NPD as a Kubernetes DaemonSet. If
+your cloud provider already runs NPD as a DaemonSet or host service, use the
+provider's documentation for installation and upgrade instructions. Do not
+deploy a second copy because multiple NPD instances can compete to own the same
+Node Conditions.
 
 Check for a Kubernetes installation:
 
@@ -87,17 +91,11 @@ kubectl get daemonsets,pods --all-namespaces | grep node-problem-detector
 # <namespace>   pod/<pod-name>                    1/1         Running     ...
 ```
 
-If NPD is already installed, verify that it loads the upstream
-`kernel-monitor.json` and `readonly-monitor.json` definitions, then skip to
-[Configure NVSentinel](#4-configure-nvsentinel-and-kom-policies). Provider-supplied
-configurations can differ from upstream defaults, so confirm that they define
-all three condition and reason pairs listed above.
+If NPD is already installed, do not install another instance. Provider-supplied
+configurations can differ from upstream defaults, so confirm that the existing
+installation defines all three condition and reason pairs listed above.
 
----
-
-## 3. Install NPD
-
-Follow the upstream
+If NPD is not installed, follow the upstream
 [NPD installation guide](https://github.com/kubernetes/node-problem-detector#installation)
 for the installation method appropriate to your cluster. NVSentinel does not
 install, configure, or manage NPD.
@@ -108,9 +106,9 @@ Before continuing, confirm that the NPD installation:
 - loads the upstream `kernel-monitor.json` and `readonly-monitor.json`
   definitions;
 
-For a DaemonSet installation, use the namespace and DaemonSet name selected
-during installation. Derive its pod selector, check that its desired and ready
-counts match, and list the nodes running its pods:
+For a DaemonSet installation, use the namespace and DaemonSet name shown by
+the check above or selected during installation. Derive its pod selector, check
+that its desired and ready counts match, and list the nodes running its pods:
 
 ```bash
 NPD_NAMESPACE="<npd-namespace>"
@@ -137,7 +135,7 @@ kubectl get pods --namespace "$NPD_NAMESPACE" \
 ```
 ---
 
-## 4. Configure NVSentinel and KOM policies
+## 3. Configure NVSentinel and KOM policies
 
 NPD policies are intentionally excluded from the default KOM values because
 NVSentinel does not install NPD or control how an operator handles its
@@ -146,7 +144,7 @@ conditions. The repository provides an explicit
 for clusters where NVSentinel should own these conditions.
 
 Download or copy `values-npd-remediation.yaml` and use it as the values file.
-It enables KOM, retains the default `node-not-ready` policy, and adds the three
+It enables KOM, retains the default `ReplaceNotReadyNode` policy, and adds the three
 supported NPD policies.
 
 ### Configure a custom NPD Node Condition
@@ -159,15 +157,15 @@ existing `kubernetes-object-monitor.policies` list in your copy of
 For example, suppose a custom NPD monitor publishes:
 
 ```yaml
-type: ReadOnlyRootFileSystem
+type: FileSystemErr
 status: "True"
-reason: RootFileSystemIsReadOnly
+reason: FileSystemError
 ```
 
 Add this policy to the existing list:
 
 ```yaml
-- name: NPDReadOnlyRootFileSystem
+- name: NPDFileSystemErr
   enabled: true
   resource:
     group: ""
@@ -176,16 +174,16 @@ Add this policy to the existing list:
   predicate:
     expression: |
       resource.status.conditions.exists(c,
-        c.type == "ReadOnlyRootFileSystem" &&
+        c.type == "FileSystemErr" &&
         c.status == "True" &&
-        c.reason == "RootFileSystemIsReadOnly")
+        c.reason == "FileSystemError")
   healthEvent:
     componentClass: Node
     isFatal: true
-    message: "NPD reported that the root filesystem is read-only"
+    message: "A NPD monitor reported the filesystem error"
     recommendedAction: CONTACT_SUPPORT
     errorCode:
-      - NPD_READ_ONLY_ROOT_FILESYSTEM
+      - NPD_FILESYSTEM_ERR
 ```
 
 For custom condition policies:
@@ -201,28 +199,18 @@ for more CEL expression examples.
 
 ### Install or upgrade NVSentinel
 
-For a new NVSentinel installation:
+Use one command for both installation and upgrade. For an existing release,
+`--reuse-values` preserves its current user-supplied values before applying the
+NPD overlay. For a new release, Helm has no previous values to reuse and
+installs from the chart defaults plus the overlay.
 
 ```bash
 NVSENTINEL_VERSION="<release-containing-the-NPD-policies>"
 
-helm install nvsentinel oci://ghcr.io/nvidia/nvsentinel \
+helm upgrade --install nvsentinel oci://ghcr.io/nvidia/nvsentinel \
   --version "$NVSENTINEL_VERSION" \
   --namespace nvsentinel \
   --create-namespace \
-  --values values-npd-remediation.yaml \
-  --wait
-```
-
-For an existing NVSentinel installation, preserve its current user-supplied
-values and add this overlay:
-
-```bash
-NVSENTINEL_VERSION="<release-containing-the-NPD-policies>"
-
-helm upgrade nvsentinel oci://ghcr.io/nvidia/nvsentinel \
-  --version "$NVSENTINEL_VERSION" \
-  --namespace nvsentinel \
   --reuse-values \
   --values values-npd-remediation.yaml \
   --wait
@@ -240,76 +228,12 @@ kubectl rollout status deployment/kubernetes-object-monitor \
 
 ---
 
-## 5. Validate the integration
+## 4. Validate the integration
 
-There are two useful levels of validation:
-
-1. Patch a Node Condition to validate KOM independently of NPD.
-2. Inject a synthetic kernel message to validate NPD and KOM end to end.
-
-Both methods publish a synthetic fatal HealthEvent. Before continuing, confirm
-that this is a non-production cluster or that downstream quarantine, drain, and
-remediation components are disabled.
-
-### Validate KOM with a patched condition
-
-Choose a disposable node and patch one source condition:
-
-```bash
-NODE="<node-name>"
-NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-kubectl patch node "$NODE" --subresource=status --type=strategic \
-  -p "{\"status\":{\"conditions\":[{
-    \"type\":\"XfsShutdown\",
-    \"status\":\"True\",
-    \"reason\":\"XfsHasShutdown\",
-    \"message\":\"Synthetic XFS shutdown for KOM validation\",
-    \"lastHeartbeatTime\":\"$NOW\",
-    \"lastTransitionTime\":\"$NOW\"
-  }]}}"
-# Expected:
-# node/<node-name> patched
-```
-
-Confirm the source condition:
-
-```bash
-kubectl get node "$NODE" \
-  -o jsonpath='{range .status.conditions[?(@.type=="XfsShutdown")]}{.type}={.status}{" reason="}{.reason}{"\n"}{end}'
-# Expected:
-# XfsShutdown=True reason=XfsHasShutdown
-```
-
-Confirm KOM matched and published the policy:
-
-```bash
-kubectl logs deployment/kubernetes-object-monitor \
-  --namespace nvsentinel \
-  --since=5m |
-  grep NPDXfsShutdown
-# Expected: a "Publishing health event" entry containing NPDXfsShutdown
-```
-
-Set the synthetic condition to `False` after the test:
-
-```bash
-NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-kubectl patch node "$NODE" --subresource=status --type=strategic \
-  -p "{\"status\":{\"conditions\":[{
-    \"type\":\"XfsShutdown\",
-    \"status\":\"False\",
-    \"reason\":\"XfsHasNotShutDown\",
-    \"message\":\"Synthetic XFS shutdown test cleared\",
-    \"lastHeartbeatTime\":\"$NOW\",
-    \"lastTransitionTime\":\"$NOW\"
-  }]}}"
-# Expected:
-# node/<node-name> patched
-```
-
-### Validate NPD and KOM end to end
+Validate NPD and KOM end to end by injecting a synthetic kernel message. This
+publishes a synthetic fatal HealthEvent, so confirm that this is a
+non-production cluster or that downstream quarantine, drain, and remediation
+components are disabled.
 
 The upstream NPD
 [Try It Out guide](https://github.com/kubernetes/node-problem-detector#try-it-out)
@@ -317,7 +241,13 @@ documents injecting synthetic messages into the kernel message stream when
 testing rules. This does not damage the filesystem or hardware, but it creates
 real NPD conditions. Run only one test at a time.
 
-SSH to the disposable node selected above and inject one of these messages:
+Choose a disposable node:
+
+```bash
+NODE="<node-name>"
+```
+
+SSH to `$NODE` and inject one of these messages:
 
 ```bash
 # XfsShutdown
@@ -338,29 +268,37 @@ From your workstation, inspect the resulting source conditions:
 ```bash
 kubectl get node "$NODE" \
   -o jsonpath='{range .status.conditions[*]}{.type}={.status}{" reason="}{.reason}{"\n"}{end}' |
-  grep -E 'XfsShutdown|CperHardwareErrorFatal|ReadonlyFilesystem'
+  grep -E '^(XfsShutdown|CperHardwareErrorFatal|ReadonlyFilesystem)='
 # Expected for the messages that were injected:
 # XfsShutdown=True reason=XfsHasShutdown
 # CperHardwareErrorFatal=True reason=CperHardwareErrorFatal
 # ReadonlyFilesystem=True reason=FilesystemIsReadOnly
 ```
 
-Confirm that KOM published each matched policy:
+Confirm that KOM published each matched policy and platform-connector applied
+the resulting NVSentinel Node Condition:
 
 ```bash
-kubectl logs deployment/kubernetes-object-monitor \
-  --namespace nvsentinel \
-  --since=10m |
-  grep -E 'NPDXfsShutdown|NPDCperHardwareErrorFatal|NPDReadonlyFilesystem'
-# Expected: one "Publishing health event" entry for each injected condition
+kubectl get node "$NODE" \
+  -o jsonpath='{range .status.conditions[*]}{.type}={.status}{" reason="}{.reason}{"\n"}{end}' |
+  grep -E '^(NPDXfsShutdown|NPDCperHardwareErrorFatal|NPDReadonlyFilesystem)='
+# Expected for the messages that were injected:
+# NPDXfsShutdown=True reason=NPDXfsShutdownIsNotHealthy
+# NPDCperHardwareErrorFatal=True reason=NPDCperHardwareErrorFatalIsNotHealthy
+# NPDReadonlyFilesystem=True reason=NPDReadonlyFilesystemIsNotHealthy
 ```
+
+> **Note:** If the downstream remediation components are enabled, each matched
+> fatal policy should also cause the affected node to be cordoned. Because
+> these policies recommend `REPLACE_VM`, fault-remediation should create a
+> `TerminateNode` remediation custom resource for the node.
 
 `SystemLogMonitor` permanent conditions are latched. Injected messages remain
 eligible during the default five-minute lookback, so wait at least five minutes
 after the final injection before restarting NPD. Do not restart the DaemonSet:
 that restarts NPD on every eligible node and resets all process-owned
 conditions. Delete only the NPD pod scheduled on the tested node, then wait for
-its replacement. Reuse `NPD_NAMESPACE` and `NPD_SELECTOR` from step 3:
+its replacement. Reuse `NPD_NAMESPACE` and `NPD_SELECTOR` from step 2:
 
 ```bash
 NPD_POD=$(kubectl get pods \
@@ -423,9 +361,83 @@ This is expected for permanent conditions produced by `SystemLogMonitor`.
 Validate remediation, allow the monitor lookback window to expire, and then
 restart NPD. Never use an NPD restart alone as proof that the host recovered.
 
-## References
+---
 
-- [ADR-053: Integrate Default NPD Node Conditions](../designs/053-npd-checks-integration.md)
-- [Kubernetes Object Monitor configuration](../configuration/kubernetes-object-monitor.md)
-- [Opt-in NPD remediation values](../../distros/kubernetes/nvsentinel/values-npd-remediation.yaml)
-- [Node Problem Detector](https://github.com/kubernetes/node-problem-detector)
+## Appendix: One-shot AI prompt
+
+Paste this prompt into an AI coding agent with access to your NVSentinel
+checkout. Replace the bracketed values before running it.
+
+```text
+Help me integrate Kubernetes node-problem-detector (NPD) with NVSentinel in this cluster:
+
+- Kubernetes context: [context]
+- Existing NPD installation: [provider-managed, DaemonSet, or not installed]
+- NPD namespace: [namespace, if known]
+- NPD DaemonSet: [name, if known]
+- NVSentinel version: [version]
+- Validation node: [node]
+- Downstream remediation enabled: [yes or no]
+
+Follow these requirements:
+
+1. Inspect before changing anything.
+   - Check whether NPD already runs as a DaemonSet.
+   - If the provider manages NPD as a DaemonSet or host service, do not install
+     another copy. Tell me to use the provider's install and upgrade procedure.
+   - If NPD is absent, install it by following the upstream installation guide:
+     https://github.com/kubernetes/node-problem-detector#installation
+   - For a DaemonSet, use its actual namespace, name, and
+     .spec.selector.matchLabels. Confirm desired and ready counts match and
+     that one ready pod runs on every eligible node.
+
+2. Verify the healthy NPD baseline before fault injection:
+   - XfsShutdown=False, reason XfsHasNotShutDown
+   - CperHardwareErrorFatal=False, reason CperHardwareHasNoFatalError
+   - ReadonlyFilesystem=False, reason FilesystemIsNotReadOnly
+   Confirm that the NPD installation loads upstream kernel-monitor.json and
+   readonly-monitor.json definitions and can read the host kernel log. Verify
+   the corresponding True status and problem reason only after injecting its
+   synthetic matching message in step 5.
+
+3. Configure NVSentinel.
+   - Start from
+     distros/kubernetes/nvsentinel/values-npd-remediation.yaml.
+   - Preserve every existing KOM policy that the cluster needs. Helm replaces
+     the complete policies list, so merge existing custom policies into this
+     file before installation or upgrade.
+   - Use one `helm upgrade --install` command with --reuse-values and the NPD
+     values file.
+   - Wait for deployment/kubernetes-object-monitor to roll out.
+
+4. Optionally add a custom NPD Node Condition policy when I provide a condition
+   type, problem reason, policy name, fatality, action, message, and error code.
+   The CEL predicate must match the exact condition type, status "True", and
+   reason. Add it to the existing policies list rather than creating a second
+   list.
+
+5. Validate end to end only after confirming the node is disposable and either
+   the cluster is non-production or downstream remediation is disabled.
+   - Follow the upstream NPD synthetic-kernel-message testing method.
+   - Inject only one matching /dev/kmsg message at a time on the selected node.
+   - Confirm the matching problem condition:
+     XfsShutdown=True with reason XfsHasShutdown,
+     CperHardwareErrorFatal=True with reason CperHardwareErrorFatal, or
+     ReadonlyFilesystem=True with reason FilesystemIsReadOnly.
+   - Confirm the matching NVSentinel Node Condition is True:
+     NPDXfsShutdown, NPDCperHardwareErrorFatal, or NPDReadonlyFilesystem.
+   - If remediation is intentionally enabled, also confirm that the node is
+     cordoned and a TerminateNode resource is created for REPLACE_VM.
+
+6. Clean up safely.
+   - Wait for NPD's five-minute startup lookback to expire.
+   - Never restart the entire NPD DaemonSet.
+   - Select only the NPD pod scheduled on the validation node, delete it, and
+     wait for its replacement.
+   - Explain that restarting NPD resets process-owned permanent conditions and
+     does not prove that a real fault recovered.
+
+Show each command before executing it. Do not run Helm, kubectl mutation, SSH,
+or kernel-message injection commands until I confirm the Kubernetes context,
+target node, and remediation safety.
+```
