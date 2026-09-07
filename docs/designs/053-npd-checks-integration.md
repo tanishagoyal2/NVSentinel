@@ -60,7 +60,7 @@ Reporting happens after detection: the monitor creates an internal status, the
 NPD core forwards it, and the Kubernetes exporter writes the Event or Node
 Condition. From the definition and behaviour, we can map permanent as fatal events and temporary as non-fatal events.
 
-*Note:*Permanent Node Conditions set by `SystemLogMonitor` do not clear automatically
+**Note:** Permanent Node Conditions set by `SystemLogMonitor` do not clear automatically
 when the underlying problem is resolved. These rules detect failure by matching
 a log entry, but they have no recovery probe that can confirm recovery and set
 the condition to `False`. The condition therefore remains `True` for the
@@ -116,12 +116,16 @@ flowchart LR
 
 ### KOM policies
 
-Add the following policies to the
-[KOM Helm values](../../distros/kubernetes/nvsentinel/charts/kubernetes-object-monitor/values.yaml):
+Provide the following policies through the opt-in
+[NPD remediation values](../../distros/kubernetes/nvsentinel/values-npd-remediation.yaml):
 
 - `NPDXfsShutdown`
 - `NPDCperHardwareErrorFatal`
 - `NPDReadonlyFilesystem`
+
+They are intentionally excluded from the default KOM values. NVSentinel does
+not install or configure NPD, and an operator might already have different
+ownership or remediation rules for NPD conditions.
 
 Each policy:
 
@@ -245,4 +249,5 @@ The read-only filesystem policy is:
 
 - [Node Problem Detector](https://github.com/kubernetes/node-problem-detector)
 - [Kubernetes Object Monitor configuration](../configuration/kubernetes-object-monitor.md)
+- [Opt-in NPD remediation values](../../distros/kubernetes/nvsentinel/values-npd-remediation.yaml)
 - [ADR-011: Kubernetes Object Monitor](011-kubernetes-object-monitor.md)
