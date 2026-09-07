@@ -35,6 +35,8 @@ cacheSyncTimeout: 10m # Duration limiting startup cache synchronization.
 # Nodes always get write permissions (patch/update) for annotations.
 # All other resources get read-only permissions (get/list/watch).
 policies:
+  # Detects when a node's Ready condition remains False or Unknown for more
+  # than two hours and emits a fatal replacement event.
   - name: ReplaceNotReadyNode
     enabled: true
     resource:
