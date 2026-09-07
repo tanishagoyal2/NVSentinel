@@ -32,8 +32,11 @@
 # For validation without node changes, add processingStrategy: STORE_ONLY to
 # each NPD policy's healthEvent block before installing this overlay.
 #
-# Helm replaces lists rather than merging their entries. This file repeats the
-# default node-not-ready policy so applying the overlay preserves it.
+# Helm replaces lists rather than merging their entries. Applying this overlay
+# replaces any previously configured KOM policy list, including custom
+# policies. Before each install or upgrade, add every policy that must be
+# retained to the list below. The default node-not-ready policy is repeated
+# here so applying this overlay preserves it.
 # --------------------------------------------------------------------------
 
 global:

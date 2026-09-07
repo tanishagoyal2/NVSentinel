@@ -24,7 +24,7 @@ By the end you will have:
 
 ## Prerequisites
 
-- Kubernetes 1.25 or later.x
+- Kubernetes 1.25 or later
 - Helm 3 and `kubectl`.
 - Cluster-admin access to install a privileged DaemonSet and patch Node status.
 - Shell or SSH access to at least one disposable Linux node for end-to-end
@@ -83,8 +83,8 @@ Check for a Kubernetes installation:
 ```bash
 kubectl get daemonsets,pods --all-namespaces | grep node-problem-detector
 # Expected when NPD is installed:
-# kube-system   daemonset.apps/node-problem-detector   <desired>   <current>   <ready>   ...
-# kube-system   pod/node-problem-detector-<id>         1/1         Running     ...
+# <namespace>   daemonset.apps/<daemonset-name>   <desired>   <current>   <ready>   ...
+# <namespace>   pod/<pod-name>                    1/1         Running     ...
 ```
 
 If NPD is already installed, verify that it loads the upstream
@@ -108,19 +108,28 @@ Before continuing, confirm that the NPD installation:
 - loads the upstream `kernel-monitor.json` and `readonly-monitor.json`
   definitions;
 
-For a DaemonSet installation, check that its desired and ready counts match,
-then list the nodes that run its pods:
+For a DaemonSet installation, use the namespace and DaemonSet name selected
+during installation. Derive its pod selector, check that its desired and ready
+counts match, and list the nodes running its pods:
 
 ```bash
-NPD_NAMESPACE=kube-system
-NPD_DAEMONSET=node-problem-detector
+NPD_NAMESPACE="<npd-namespace>"
+NPD_DAEMONSET="<npd-daemonset-name>"
+
+NPD_SELECTOR=$(kubectl get daemonset "$NPD_DAEMONSET" \
+  --namespace "$NPD_NAMESPACE" \
+  -o go-template='{{range $key, $value := .spec.selector.matchLabels}}{{printf "%s=%s," $key $value}}{{end}}')
+NPD_SELECTOR=${NPD_SELECTOR%,}
 
 kubectl get daemonset "$NPD_DAEMONSET" \
   --namespace "$NPD_NAMESPACE" \
   -o custom-columns=DESIRED:.status.desiredNumberScheduled,READY:.status.numberReady
+# Expected:
+# DESIRED   READY
+# <eligible-node-count>   <same-count>
 
 kubectl get pods --namespace "$NPD_NAMESPACE" \
-  -l app=node-problem-detector \
+  --selector "$NPD_SELECTOR" \
   -o 'custom-columns=NAME:.metadata.name,NODE:.spec.nodeName,READY:.status.containerStatuses[0].ready'
 # Expected: one row per eligible node, with READY=true
 # NAME                         NODE          READY
@@ -348,23 +357,35 @@ kubectl logs deployment/kubernetes-object-monitor \
 
 `SystemLogMonitor` permanent conditions are latched. Injected messages remain
 eligible during the default five-minute lookback, so wait at least five minutes
-after the final injection before restarting NPD:
+after the final injection before restarting NPD. Do not restart the DaemonSet:
+that restarts NPD on every eligible node and resets all process-owned
+conditions. Delete only the NPD pod scheduled on the tested node, then wait for
+its replacement. Reuse `NPD_NAMESPACE` and `NPD_SELECTOR` from step 3:
 
 ```bash
-kubectl rollout restart daemonset/node-problem-detector \
-  --namespace kube-system
-# Expected:
-# daemonset.apps/node-problem-detector restarted
+NPD_POD=$(kubectl get pods \
+  --namespace "$NPD_NAMESPACE" \
+  --selector "$NPD_SELECTOR" \
+  --field-selector "spec.nodeName=$NODE" \
+  -o jsonpath='{.items[0].metadata.name}')
 
-kubectl rollout status daemonset/node-problem-detector \
-  --namespace kube-system \
-  --timeout=5m
+kubectl delete pod "$NPD_POD" --namespace "$NPD_NAMESPACE"
 # Expected:
-# daemon set "node-problem-detector" successfully rolled out
+# pod "<old-npd-pod>" deleted
+
+kubectl wait --for=create pod \
+  --namespace "$NPD_NAMESPACE" \
+  --selector "$NPD_SELECTOR" \
+  --field-selector "spec.nodeName=$NODE" \
+  --timeout=2m
+# Expected:
+# pod/<new-npd-pod> created
 ```
 
 A `False` condition after restart only shows that the NPD process reset its
-state; it does not prove recovery from a real failure.
+state; it does not prove recovery from a real failure. Restarting NPD can also
+cause KOM to observe a healthy transition and cancel active break-fix
+processing, so limit this procedure to the test node after validation.
 
 ---
 
@@ -379,7 +400,7 @@ state; it does not prove recovery from a real failure.
   matches the expected capitalization.
 
 ```bash
-kubectl logs daemonset/node-problem-detector --namespace kube-system
+kubectl logs "daemonset/$NPD_DAEMONSET" --namespace "$NPD_NAMESPACE"
 # Expected when healthy: NPD starts without monitor configuration or
 # /dev/kmsg access errors.
 ```
