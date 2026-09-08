@@ -241,7 +241,8 @@ The read-only filesystem policy is:
 - Restart NPD only after remediation has completed and recovery has been
   independently validated.
 - Do not interpret a post-restart `False` condition as proof that the original
-  fault is resolved.
+  fault is resolved. Restarting NPD clears its previously published Node
+  Conditions, but the underlying host issue may still be present.
 - Check the NPD startup lookback window and relevant host logs before clearing
   or cancelling remediation.
 
